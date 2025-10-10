@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { MercadoPagoConfig, Payment, MerchantOrder } from "mercadopago";
+import { Prisma } from "@prisma/client";
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -258,7 +259,7 @@ async function persistStatus(
   data: any,
   approvedStrong: boolean
 ) {
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const baseUpdate = {
       paymentId: String(data?.id ?? ""),
       paymentStatus: String(data?.status ?? "pending") as any,
