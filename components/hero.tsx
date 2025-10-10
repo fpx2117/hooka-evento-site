@@ -1,9 +1,9 @@
-"use client"
+"use client";
 
-import { Button } from "@/components/ui/button"
-import { Waves, Sparkles } from "lucide-react"
-import { useState, useEffect } from "react"
-import { TicketSalesModal } from "./ticket-sales-modal"
+import { Button } from "@/components/ui/button";
+import { Waves, Sparkles } from "lucide-react";
+import { useState, useEffect } from "react";
+import { TicketSalesModal } from "./ticket-sales-modal";
 
 export function Hero() {
   const [timeLeft, setTimeLeft] = useState({
@@ -11,31 +11,33 @@ export function Hero() {
     hours: 0,
     minutes: 0,
     seconds: 0,
-  })
-  const [showTicketModal, setShowTicketModal] = useState(false)
+  });
+  const [showTicketModal, setShowTicketModal] = useState(false);
 
   useEffect(() => {
-    const targetDate = new Date("2025-11-02T22:00:00").getTime()
+    const targetDate = new Date("2025-11-02T22:00:00").getTime();
 
     const updateCountdown = () => {
-      const now = new Date().getTime()
-      const difference = targetDate - now
+      const now = new Date().getTime();
+      const difference = targetDate - now;
 
       if (difference > 0) {
         setTimeLeft({
           days: Math.floor(difference / (1000 * 60 * 60 * 24)),
-          hours: Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
+          hours: Math.floor(
+            (difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+          ),
           minutes: Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60)),
           seconds: Math.floor((difference % (1000 * 60)) / 1000),
-        })
+        });
       }
-    }
+    };
 
-    updateCountdown()
-    const interval = setInterval(updateCountdown, 1000)
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
 
-    return () => clearInterval(interval)
-  }, [])
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
@@ -53,7 +55,11 @@ export function Hero() {
         <div className="absolute bottom-1/4 left-1/3 w-14 h-14 md:w-18 md:h-18 rounded-full bg-accent/15 blur-lg animate-float-slower" />
 
         <div className="absolute bottom-0 left-0 right-0 -mb-1">
-          <svg viewBox="0 0 1440 200" className="w-full h-40 md:h-56" preserveAspectRatio="none">
+          <svg
+            viewBox="0 0 1440 200"
+            className="w-full h-40 md:h-56"
+            preserveAspectRatio="none"
+          >
             <path
               d="M0,100 Q360,50 720,100 T1440,100 L1440,200 L0,200 Z"
               fill="oklch(0.65 0.2 210 / 0.5)"
@@ -81,19 +87,23 @@ export function Hero() {
           {/* Badge */}
           <div className="inline-flex items-center gap-2 px-4 py-2 md:px-6 md:py-3 rounded-full bg-background/80 backdrop-blur-sm border-2 border-primary/50 animate-pulse-glow">
             <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-            <span className="text-xs md:text-sm font-semibold tracking-wider text-foreground">TEMPORADA 2025</span>
+            <span className="text-xs md:text-sm font-semibold tracking-wider text-foreground">
+              TEMPORADA 2025
+            </span>
             <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-secondary" />
           </div>
 
           {/* Main Title - Improved responsive sizing */}
           <h1 className="text-5xl sm:text-6xl md:text-8xl lg:text-9xl font-display tracking-tight leading-none">
-            <span className="block neon-glow text-primary-foreground">¡VIVE EL</span>
+            <span className="block neon-glow text-primary-foreground">
+              ¡VIVE EL
+            </span>
             <span className="block text-gradient mt-2">VERANO!</span>
           </h1>
 
           {/* Subtitle - Improved responsive sizing */}
           <p className="text-xl sm:text-2xl md:text-4xl font-display text-primary-foreground/90 tracking-wide">
-            Pool Party Tropical
+            Hooka Party
           </p>
 
           <div className="flex items-center justify-center gap-3 sm:gap-4 md:gap-6 pt-4">
@@ -101,33 +111,48 @@ export function Hero() {
               <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.days.toString().padStart(2, "0")}
               </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">DÍAS</div>
+              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
+                DÍAS
+              </div>
             </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">:</div>
+            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
+              :
+            </div>
             <div className="text-center">
               <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.hours.toString().padStart(2, "0")}
               </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">HORAS</div>
+              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
+                HORAS
+              </div>
             </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">:</div>
+            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
+              :
+            </div>
             <div className="text-center">
               <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.minutes.toString().padStart(2, "0")}
               </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">MIN</div>
+              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
+                MIN
+              </div>
             </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">:</div>
+            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
+              :
+            </div>
             <div className="text-center">
               <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.seconds.toString().padStart(2, "0")}
               </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">SEG</div>
+              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
+                SEG
+              </div>
             </div>
           </div>
 
           <p className="text-base sm:text-lg md:text-xl text-primary-foreground/80 max-w-2xl mx-auto leading-relaxed px-4">
-            La mejor fiesta bajo las estrellas. Música, diversión y energía tropical todas las noches.
+            La mejor fiesta bajo las estrellas. Música, diversión y energía
+            tropical todas las noches.
           </p>
 
           <div className="flex items-center justify-center pt-6 md:pt-8 px-4">
@@ -143,7 +168,10 @@ export function Hero() {
         </div>
       </div>
 
-      <TicketSalesModal open={showTicketModal} onOpenChange={setShowTicketModal} />
+      <TicketSalesModal
+        open={showTicketModal}
+        onOpenChange={setShowTicketModal}
+      />
     </section>
-  )
+  );
 }

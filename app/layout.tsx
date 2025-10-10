@@ -22,17 +22,17 @@ const bebasNeue = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "Tropical Pool Party - ¡Vive el Verano!",
+  title: "Hooka Party - ¡Vive el Verano!",
   description:
     "El mejor boliche tropical con pool party, música, fiesta y verano. Fiesta de la espuma, Neon Party, Cumbia Night, RKT Session y más.",
   generator: "v0.app",
-  metadataBase: new URL("https://tropicalpoolparty.com"), // ajustá dominio
+  metadataBase: new URL("https://hooka.com.ar"), // ajustá dominio
   openGraph: {
-    title: "Tropical Pool Party - ¡Vive el Verano!",
+    title: "Hooka Party - ¡Vive el Verano!",
     description:
       "¡Vení a disfrutar de la mejor fiesta tropical del verano! Música, piscina, espuma, luces y diversión sin fin.",
-    url: "https://tropicalpoolparty.com",
-    siteName: "Tropical Pool Party",
+    url: "https://hooka.com.ar",
+    siteName: "Hooka Party",
     locale: "es_ES",
     type: "website",
   },

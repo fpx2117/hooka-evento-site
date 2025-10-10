@@ -94,7 +94,7 @@ export function TicketSalesModal({
         items: [
           {
             title: `Entrada General - ${customerInfo.gender === "hombre" ? "Hombre" : "Mujer"}`,
-            description: "Pool Party Tropical - Entrada General",
+            description: "Hooka Party - Entrada General",
             quantity: 1,
             unit_price: ticketPrice,
           },

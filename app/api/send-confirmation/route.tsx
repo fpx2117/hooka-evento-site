@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
         <body>
           <div class="container">
             <div class="header">
-              <h1>🌴 Tropical Pool Party 🌴</h1>
+              <h1>🌴 Hooka Party 🌴</h1>
               <p>¡Tu entrada está confirmada!</p>
             </div>
             <div class="content">
@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
               </p>
             </div>
             <div class="footer">
-              <p>Tropical Pool Party - Domingos a principios de mes</p>
+              <p>Hooka Pool Party</p>
               <p>La ubicación se confirmará 24hs antes del evento</p>
             </div>
           </div>
