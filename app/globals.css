@@ -1,0 +1,327 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Tropical vibrant palette */
+  --background: oklch(0.98 0.01 280);
+  --foreground: oklch(0.15 0.02 280);
+
+  /* Primary: Turquoise/Cyan tropical */
+  --primary: oklch(0.65 0.18 200);
+  --primary-foreground: oklch(0.98 0.01 200);
+
+  /* Secondary: Coral/Pink vibrant */
+  --secondary: oklch(0.7 0.2 35);
+  --secondary-foreground: oklch(0.98 0.01 35);
+
+  /* Accent: Neon Fuschia */
+  --accent: oklch(0.65 0.27 330);
+  --accent-foreground: oklch(0.98 0.01 330);
+
+  /* Muted: Soft yellow/cream */
+  --muted: oklch(0.95 0.03 95);
+  --muted-foreground: oklch(0.45 0.05 280);
+
+  --card: oklch(0.99 0.01 280);
+  --card-foreground: oklch(0.15 0.02 280);
+
+  --popover: oklch(0.99 0.01 280);
+  --popover-foreground: oklch(0.15 0.02 280);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.98 0.01 27);
+
+  --border: oklch(0.88 0.03 280);
+  --input: oklch(0.88 0.03 280);
+  --ring: oklch(0.65 0.18 200);
+
+  /* Tropical chart colors - vibrant palette */
+  --chart-1: oklch(0.85 0.17 95); /* Amarillo brillante */
+  --chart-2: oklch(0.75 0.14 220); /* Celeste */
+  --chart-3: oklch(0.6 0.22 290); /* Violeta */
+  --chart-4: oklch(0.65 0.27 330); /* Fucsia */
+  --chart-5: oklch(0.7 0.2 35); /* Coral */
+
+  --radius: 0.75rem;
+
+  --sidebar: oklch(0.98 0.01 280);
+  --sidebar-foreground: oklch(0.15 0.02 280);
+  --sidebar-primary: oklch(0.65 0.18 200);
+  --sidebar-primary-foreground: oklch(0.98 0.01 200);
+  --sidebar-accent: oklch(0.95 0.03 95);
+  --sidebar-accent-foreground: oklch(0.15 0.02 280);
+  --sidebar-border: oklch(0.88 0.03 280);
+  --sidebar-ring: oklch(0.65 0.18 200);
+}
+
+.dark {
+  --background: oklch(0.15 0.02 280);
+  --foreground: oklch(0.98 0.01 280);
+  --primary: oklch(0.7 0.2 200);
+  --primary-foreground: oklch(0.15 0.02 200);
+  --secondary: oklch(0.75 0.22 35);
+  --secondary-foreground: oklch(0.15 0.02 35);
+  --accent: oklch(0.7 0.28 330);
+  --accent-foreground: oklch(0.15 0.02 330);
+  --muted: oklch(0.25 0.03 280);
+  --muted-foreground: oklch(0.7 0.05 280);
+  --card: oklch(0.18 0.02 280);
+  --card-foreground: oklch(0.98 0.01 280);
+  --popover: oklch(0.18 0.02 280);
+  --popover-foreground: oklch(0.98 0.01 280);
+  --border: oklch(0.3 0.03 280);
+  --input: oklch(0.3 0.03 280);
+  --ring: oklch(0.7 0.2 200);
+
+  --chart-1: oklch(0.85 0.17 95);
+  --chart-2: oklch(0.75 0.14 220);
+  --chart-3: oklch(0.6 0.22 290);
+  --chart-4: oklch(0.65 0.27 330);
+  --chart-5: oklch(0.7 0.2 35);
+
+  --sidebar: oklch(0.18 0.02 280);
+  --sidebar-foreground: oklch(0.98 0.01 280);
+  --sidebar-primary: oklch(0.7 0.2 200);
+  --sidebar-primary-foreground: oklch(0.98 0.01 200);
+  --sidebar-accent: oklch(0.25 0.03 280);
+  --sidebar-accent-foreground: oklch(0.98 0.01 280);
+  --sidebar-border: oklch(0.3 0.03 280);
+  --sidebar-ring: oklch(0.7 0.2 200);
+}
+
+@theme inline {
+  --font-sans: var(--font-poppins);
+  --font-display: var(--font-bebas-neue);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Adding custom tropical animations and effects */
+@layer utilities {
+  /* Gradient text effect */
+  .text-gradient {
+    background: linear-gradient(
+      135deg,
+      oklch(0.65 0.18 200),
+      oklch(0.7 0.2 35),
+      oklch(0.65 0.27 330),
+      oklch(0.85 0.17 95)
+    );
+    background-size: 300% 300%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-shift 8s ease infinite;
+  }
+
+  /* Neon glow effect */
+  .neon-glow {
+    text-shadow: 0 0 10px oklch(0.65 0.18 200 / 0.8), 0 0 20px oklch(0.65 0.18 200 / 0.6), 0 0 30px
+      oklch(0.65 0.18 200 / 0.4), 0 0 40px oklch(0.7 0.2 35 / 0.3);
+  }
+
+  /* Tropical gradient background */
+  .gradient-tropical {
+    background: linear-gradient(
+      135deg,
+      oklch(0.65 0.18 200),
+      oklch(0.75 0.14 220),
+      oklch(0.7 0.2 35),
+      oklch(0.65 0.27 330),
+      oklch(0.85 0.17 95)
+    );
+    background-size: 400% 400%;
+    animation: gradient-shift 15s ease infinite;
+  }
+
+  /* Floating animation */
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  /* Pulse glow animation */
+  .animate-pulse-glow {
+    animation: pulse-glow 3s ease-in-out infinite;
+  }
+
+  /* Scroll-left animation for brand carousel */
+  .animate-scroll-left {
+    animation: scroll-left 30s linear infinite;
+  }
+
+  /* Gradient shift keyframes */
+  @keyframes gradient-shift {
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+
+  /* Float keyframes */
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0px);
+    }
+    50% {
+      /* Reduced translateY from -20px to -8px to prevent logo from going off-screen */
+      transform: translateY(-8px);
+    }
+  }
+
+  /* New float variations */
+  @keyframes float-slow {
+    0%,
+    100% {
+      transform: translateY(0px) translateX(0px);
+    }
+    50% {
+      transform: translateY(-20px) translateX(10px);
+    }
+  }
+
+  @keyframes float-slower {
+    0%,
+    100% {
+      transform: translateY(0px) translateX(0px);
+    }
+    50% {
+      transform: translateY(-30px) translateX(-15px);
+    }
+  }
+
+  /* Pulse glow keyframes */
+  @keyframes pulse-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 20px oklch(0.65 0.18 200 / 0.4), 0 0 40px oklch(0.7 0.2 35 / 0.2);
+    }
+    50% {
+      box-shadow: 0 0 30px oklch(0.65 0.18 200 / 0.6), 0 0 60px oklch(0.7 0.2 35 / 0.4);
+    }
+  }
+
+  /* Slow pulse animation */
+  @keyframes pulse-slow {
+    0%,
+    100% {
+      opacity: 0.6;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.8;
+      transform: scale(1.05);
+    }
+  }
+
+  /* Wave animation for water effect */
+  @keyframes wave {
+    0%,
+    100% {
+      transform: translateX(0) translateY(0);
+    }
+    25% {
+      transform: translateX(-25px) translateY(-5px);
+    }
+    50% {
+      transform: translateX(0) translateY(0);
+    }
+    75% {
+      transform: translateX(25px) translateY(5px);
+    }
+  }
+
+  /* Scroll-left keyframes for brand carousel */
+  @keyframes scroll-left {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+
+  /* Additional animations for hero background */
+  /* Slow float animation */
+  .animate-float-slow {
+    animation: float-slow 8s ease-in-out infinite;
+  }
+
+  /* Slower float animation */
+  .animate-float-slower {
+    animation: float-slower 12s ease-in-out infinite;
+  }
+
+  /* Slow pulse animation */
+  .animate-pulse-slow {
+    animation: pulse-slow 4s ease-in-out infinite;
+  }
+
+  /* Animated gradient background */
+  .animate-gradient {
+    animation: gradient-shift 20s ease infinite;
+  }
+
+  /* Wave animation */
+  .animate-wave {
+    animation: wave 8s ease-in-out infinite;
+  }
+
+  /* Slow wave animation */
+  .animate-wave-slow {
+    animation: wave 12s ease-in-out infinite;
+  }
+
+  /* Gradient radial utility */
+  .bg-gradient-radial {
+    background: radial-gradient(circle, var(--tw-gradient-stops));
+  }
+}

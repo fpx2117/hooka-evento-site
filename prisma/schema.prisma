@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/* =========================
+   Enums
+========================= */
+enum PaymentStatus {
+  pending
+  approved
+  rejected
+  in_process
+  failed_preference   // cuando falla la creación de la preferencia
+  cancelled           // opcional: por si cancelan
+  refunded            // opcional: reembolso
+  charged_back        // opcional: contracargo
+}
+
+enum PaymentMethod {
+  mercadopago
+  transferencia
+  efectivo
+}
+
+enum Gender {
+  hombre
+  mujer
+}
+
+/* =========================
+   Admin
+========================= */
+model Admin {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String   // hashed
+  name      String
+  createdAt DateTime @default(now())
+
+  @@index([username])
+}
+
+/* =========================
+   Ticket
+========================= */
+model Ticket {
+  id              String         @id @default(cuid())
+  ticketType      String         // "general", "vip" (si querés, podés pasarlo a enum)
+  quantity        Int            @default(1)
+  totalPrice      Float
+  customerName    String
+  customerEmail   String
+  customerPhone   String
+  customerDni     String
+  gender          Gender?
+  paymentId       String?        @unique
+  paymentStatus   PaymentStatus  @default(pending)
+  paymentMethod   PaymentMethod  @default(mercadopago)
+  qrCode          String?        @unique
+  validationCode  String?        @unique
+  validated       Boolean        @default(false)
+  validatedAt     DateTime?
+  purchaseDate    DateTime       @default(now())
+  eventDate       DateTime?
+
+  @@index([customerEmail])
+  @@index([paymentId])
+  @@index([customerDni])
+  @@index([qrCode])
+  @@index([validationCode])
+  @@index([paymentStatus, purchaseDate]) // para listados en admin
+}
+
+/* =========================
+   TableReservation
+========================= */
+model TableReservation {
+  id              String         @id @default(cuid())
+  packageType     String         // "standard", "premium", "deluxe"
+  location        String         // "piscina", "dj", "general"
+  capacity        Int
+  guests          Int
+  totalPrice      Float
+  customerName    String
+  customerEmail   String
+  customerPhone   String
+  customerDni     String
+  reservationDate DateTime
+  paymentId       String?        @unique
+  paymentStatus   PaymentStatus  @default(pending)
+  paymentMethod   PaymentMethod  @default(mercadopago)
+  qrCode          String?        @unique
+  validationCode  String?        @unique
+  validated       Boolean        @default(false)
+  validatedAt     DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([customerEmail])
+  @@index([paymentId])
+  @@index([reservationDate])
+  @@index([customerDni])
+  @@index([qrCode])
+  @@index([validationCode])
+  @@index([paymentStatus, reservationDate])
+}
