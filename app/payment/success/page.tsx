@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CheckCircle, Home, Download } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 /* =========================
@@ -37,9 +37,6 @@ type ConfirmResp = ConfirmOk | ConfirmErr;
 
 const isConfirmOk = (x: ConfirmResp): x is ConfirmOk => x.ok === true;
 
-/* =========================
-   Página de éxito
-========================= */
 export default function PaymentSuccessPage() {
   const searchParams = useSearchParams();
 
@@ -47,81 +44,126 @@ export default function PaymentSuccessPage() {
   const [validationCode, setValidationCode] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
-  // Estado de confirmación del pago
+  // Estado de confirmación del pago (solo para UI)
   const [approved, setApproved] = useState<boolean | null>(null);
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
 
-  // Para fallback si no vino por confirm
   const [type, setType] = useState<"ticket" | "vip-table" | null>(null);
   const [recordId, setRecordId] = useState<string | null>(null);
+
+  const emailSentRef = useRef(false);
+
+  // Genera imagen de QR desde un texto
+  const renderQr = async (text: string) => {
+    const img = await QRCode.toDataURL(text, { width: 300, margin: 2 });
+    setQrCodeImg(img);
+  };
+
+  const sendEmailOnce = async (t: "ticket" | "vip-table", id: string) => {
+    if (emailSentRef.current) return; // evita duplicados
+    try {
+      const r = await fetch("/api/send-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ type: t, recordId: id }),
+      });
+      if (r.ok) {
+        emailSentRef.current = true;
+      } else {
+        // opcional: log de error para depurar
+        const err = await r.json().catch(() => ({}));
+        console.warn("[success] send-confirmation no OK:", err);
+      }
+    } catch (e) {
+      // no bloquea UX
+      console.warn("[success] send-confirmation error:", e);
+    }
+  };
 
   useEffect(() => {
     const run = async () => {
       try {
-        // 1) Extraemos identificadores devueltos por Mercado Pago
+        // 1) IDs devueltos por Mercado Pago
         const paymentId =
           searchParams.get("payment_id") ||
           searchParams.get("collection_id") ||
-          ""; // MP puede usar ambos
+          "";
         const merchantOrderId = searchParams.get("merchant_order_id") || "";
-        const externalRef = searchParams.get("external_reference"); // ej: "ticket:cmgk..."
+        const externalRef = searchParams.get("external_reference");
 
-        // Si vino external_reference, lo usamos de pista
+        // Variables locales (evitan carreras con setState)
+        let localType: "ticket" | "vip-table" | null = null;
+        let localRecordId: string | null = null;
+        let localApproved: boolean | null = null;
+
         if (externalRef?.includes(":")) {
           const [t, id] = externalRef.split(":");
           if ((t === "ticket" || t === "vip-table") && id) {
-            setType(t);
-            setRecordId(id);
+            localType = t;
+            localRecordId = id;
           }
         }
 
-        // 2) Confirmamos con backend (reconciliación fuerte)
-        // Intentamos primero por payment_id; si no hay, intentamos por merchant_order_id
-        const confirmOnce = async (): Promise<ConfirmResp> => {
-          const url = paymentId
-            ? `/api/payments/confirm?payment_id=${encodeURIComponent(paymentId)}`
-            : merchantOrderId
-              ? `/api/payments/confirm?merchant_order_id=${encodeURIComponent(
-                  merchantOrderId
-                )}`
-              : "";
-
-          if (!url) {
-            setConfirmed(false);
-            setApproved(null);
-            return { ok: false, error: "Sin identificadores para confirmar" };
+        // 2) Confirmación fuerte con backend (si hay paymentId/merchantOrderId)
+        const buildConfirmUrl = (): string | "" => {
+          if (paymentId) {
+            return `/api/payments/confirm?payment_id=${encodeURIComponent(
+              paymentId
+            )}`;
           }
-
-          const r = await fetch(url, { cache: "no-store" });
-          const data: ConfirmResp = await r.json();
-
-          if (isConfirmOk(data)) {
-            setConfirmed(true);
-            if (data.type) setType(data.type);
-            if (data.recordId) setRecordId(data.recordId);
-
-            // Prioridad a approvedStrong; si no viene, usamos status
-            if (typeof data.approvedStrong === "boolean") {
-              setApproved(data.approvedStrong);
-            } else {
-              setApproved(data.status === "approved");
-            }
-          } else {
-            setConfirmed(false);
-            setApproved(null);
+          if (merchantOrderId) {
+            return `/api/payments/confirm?merchant_order_id=${encodeURIComponent(
+              merchantOrderId
+            )}`;
           }
-
-          return data;
+          return "";
         };
 
-        await confirmOnce();
+        const confirmUrl = buildConfirmUrl();
+        if (confirmUrl) {
+          try {
+            const r = await fetch(confirmUrl, { cache: "no-store" });
+            const data: ConfirmResp = await r.json();
 
-        // 3) Con type + recordId obtenemos QR y validationCode para renderizar
-        if (type && recordId) {
+            if (isConfirmOk(data)) {
+              setConfirmed(true);
+
+              if (data.type) localType = data.type;
+              if (data.recordId) localRecordId = data.recordId;
+
+              // derive aprobado local
+              localApproved =
+                typeof data.approvedStrong === "boolean"
+                  ? data.approvedStrong
+                  : data.status === "approved";
+
+              // reflejar en UI
+              setApproved(localApproved);
+              if (localType) setType(localType);
+              if (localRecordId) setRecordId(localRecordId);
+            } else {
+              setConfirmed(false);
+              setApproved(null);
+            }
+          } catch {
+            // si falla confirmación, seguimos con external_reference si lo tenemos
+            setConfirmed(false);
+            setApproved(null);
+          }
+        } else {
+          setConfirmed(false);
+          setApproved(null);
+        }
+
+        // 3) Cargar códigos públicos si tenemos identificadores
+        if (localType && localRecordId) {
+          const requireApproved =
+            localApproved === true ? "&requireApproved=1" : "";
           const r = await fetch(
             `/api/tickets/public?type=${encodeURIComponent(
-              type
-            )}&id=${encodeURIComponent(recordId)}`,
+              localType
+            )}&id=${encodeURIComponent(localRecordId)}${requireApproved}`,
             { cache: "no-store" }
           );
           const info: PublicTicketResp = await r.json();
@@ -129,13 +171,18 @@ export default function PaymentSuccessPage() {
           if (info.ok) {
             if (info.validationCode) setValidationCode(info.validationCode);
 
+            // Si el endpoint ya trae un string para QR lo usamos;
+            // si no, generamos QR desde el validationCode como fallback.
             if (info.qrCode) {
-              // Generamos PNG del QR
-              const img = await QRCode.toDataURL(info.qrCode, {
-                width: 300,
-                margin: 2,
-              });
-              setQrCodeImg(img);
+              await renderQr(info.qrCode);
+            } else if (info.validationCode) {
+              await renderQr(info.validationCode);
+            }
+
+            const approvedNow =
+              localApproved === true || info.paymentStatus === "approved";
+            if (approvedNow && info.recordId && info.type) {
+              await sendEmailOnce(info.type, info.recordId);
             }
           }
         }

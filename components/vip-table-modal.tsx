@@ -1,378 +1,423 @@
-"use client"
+"use client";
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Sparkles, Users, CreditCard, Calendar, MapPin, Award as IdCard } from "lucide-react"
-import { useState } from "react"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Sparkles,
+  CreditCard,
+  Award as IdCard,
+  Mail,
+  Phone,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+
+/* =========================
+   Tipos mínimos de la API de config
+========================= */
+type TicketsConfig = {
+  tickets?: {
+    vip?: {
+      price?: number; // precio por mesa
+      remaining?: number; // personas restantes (opcional en algunas APIs)
+      remainingTables?: number; // mesas disponibles
+      unitSize?: number; // personas por mesa
+    };
+  };
+};
 
 interface VIPTableModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** endpoint opcional para la config (por defecto usa /api/admin/tickets/config con fallback a /api/tickets/config) */
+  configEndpoint?: string;
 }
 
-const tablePackages = [
-  {
-    id: "standard",
-    name: "Mesa VIP Standard",
-    capacity: "Hasta 6 personas",
-    price: 35000,
-    includes: ["Botella de Fernet", "Botella de Vodka", "Gaseosas ilimitadas", "Zona VIP exclusiva"],
-    color: "from-primary to-secondary",
-  },
-  {
-    id: "premium",
-    name: "Mesa VIP Premium",
-    capacity: "Hasta 8 personas",
-    price: 55000,
-    includes: [
-      "2 Botellas de Fernet",
-      "Botella de Vodka Premium",
-      "Botella de Champagne",
-      "Gaseosas y jugos ilimitados",
-      "Zona VIP exclusiva",
-      "Servicio de mesero dedicado",
-    ],
-    color: "from-secondary to-accent",
-    popular: true,
-  },
-  {
-    id: "deluxe",
-    name: "Mesa VIP Deluxe",
-    capacity: "Hasta 10 personas",
-    price: 80000,
-    includes: [
-      "3 Botellas de Fernet",
-      "2 Botellas de Vodka Premium",
-      "2 Botellas de Champagne",
-      "Gaseosas, jugos y energizantes ilimitados",
-      "Zona VIP exclusiva primera fila",
-      "Servicio de mesero dedicado",
-      "Entrada prioritaria",
-      "Decoración especial de mesa",
-    ],
-    color: "from-accent to-chart-3",
-  },
-]
+/* =========================
+   Utils
+========================= */
+function formatMoney(n: number) {
+  return n.toLocaleString("es-AR");
+}
+function cleanDigits(s: string) {
+  return (s || "").replace(/\D+/g, "");
+}
 
-const locationOptions = [
-  {
-    id: "piscina",
-    name: "Cerca de la Piscina",
-    description: "Vista directa a la piscina, ambiente más relajado",
-    icon: "🏊",
-  },
-  {
-    id: "dj",
-    name: "Cerca del DJ",
-    description: "En el corazón de la fiesta, máxima energía",
-    icon: "🎧",
-  },
-]
+export function VIPTableModal({
+  open,
+  onOpenChange,
+  configEndpoint = "/api/admin/tickets/config",
+}: VIPTableModalProps) {
+  // ======= State de config VIP desde BD =======
+  const [vipPrice, setVipPrice] = useState<number | null>(null);
+  const [remainingTables, setRemainingTables] = useState<number | null>(null);
+  const [unitSize, setUnitSize] = useState<number | null>(null);
+  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgError, setCfgError] = useState<string | null>(null);
 
-export function VIPTableModal({ open, onOpenChange }: VIPTableModalProps) {
-  const [selectedPackage, setSelectedPackage] = useState<string>("")
-  const [selectedDate, setSelectedDate] = useState<string>("")
-  const [selectedLocation, setSelectedLocation] = useState<string>("")
-  const [customerInfo, setCustomerInfo] = useState({
+  // ======= Datos del cliente =======
+  const [customer, setCustomer] = useState({
     name: "",
+    dni: "",
     email: "",
     phone: "",
-    dni: "",
-    guests: "",
-  })
-  const [isProcessing, setIsProcessing] = useState(false)
+  });
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const selectedTable = tablePackages.find((pkg) => pkg.id === selectedPackage)
+  // ======= Traer precios/stock desde la API =======
+  useEffect(() => {
+    let cancelled = false;
 
+    async function loadConfig() {
+      setCfgLoading(true);
+      setCfgError(null);
+
+      // intentamos el endpoint recibido y luego un fallback
+      const tryEndpoints = [configEndpoint, "/api/tickets/config"];
+
+      for (const ep of tryEndpoints) {
+        try {
+          const r = await fetch(ep, { cache: "no-store" });
+          if (!r.ok) continue;
+          const data: TicketsConfig = await r.json();
+          if (cancelled) return;
+
+          const v = data?.tickets?.vip ?? {};
+          const price = typeof v.price === "number" ? v.price : null;
+          const tables =
+            typeof v.remainingTables === "number" ? v.remainingTables : null;
+          const unit = typeof v.unitSize === "number" ? v.unitSize : null;
+
+          setVipPrice(price);
+          setRemainingTables(tables);
+          setUnitSize(unit);
+          setCfgLoading(false);
+          return;
+        } catch {
+          /* probar siguiente endpoint */
+        }
+      }
+
+      if (!cancelled) {
+        setCfgError("No se pudo cargar la configuración de Mesas VIP.");
+        setCfgLoading(false);
+      }
+    }
+
+    if (open) {
+      loadConfig();
+      // limpiar formulario al abrir
+      setCustomer({ name: "", dni: "", email: "", phone: "" });
+      setErrors({});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [open, configEndpoint]);
+
+  // ======= Total (siempre 1 mesa) =======
+  const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
+
+  // ======= Validaciones =======
+  function validate() {
+    const e: Record<string, string> = {};
+
+    if (!vipPrice || vipPrice <= 0)
+      e.price = "Precio no disponible. Intentá nuevamente.";
+    if (!remainingTables || remainingTables < 1)
+      e.stock = "No hay mesas disponibles.";
+
+    if (!customer.name.trim()) e.name = "Ingresá tu nombre completo";
+
+    const dniDigits = cleanDigits(customer.dni);
+    if (!dniDigits) e.dni = "Ingresá tu DNI";
+    else if (dniDigits.length < 7 || dniDigits.length > 9)
+      e.dni = "DNI inválido";
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email))
+      e.email = "Ingresá un email válido";
+
+    const phoneDigits = cleanDigits(customer.phone);
+    if (!phoneDigits) e.phone = "Ingresá tu celular";
+    else if (phoneDigits.length < 8) e.phone = "Celular inválido";
+
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  // ======= Ir a checkout (1 mesa) =======
   const handleCheckout = async () => {
-    if (!selectedPackage) {
-      alert("Por favor seleccioná un paquete de mesa VIP")
-      return
-    }
+    if (isProcessing) return;
+    if (!validate()) return;
 
-    if (!selectedDate) {
-      alert("Por favor seleccioná una fecha")
-      return
-    }
-
-    if (!selectedLocation) {
-      alert("Por favor seleccioná la ubicación de tu mesa")
-      return
-    }
-
-    if (!customerInfo.name || !customerInfo.email || !customerInfo.phone || !customerInfo.dni || !customerInfo.guests) {
-      alert("Por favor completá todos tus datos")
-      return
-    }
-
-    setIsProcessing(true)
-
+    setIsProcessing(true);
     try {
-      const table = tablePackages.find((pkg) => pkg.id === selectedPackage)
-      if (!table) throw new Error("Paquete no encontrado")
+      const body = {
+        items: [
+          {
+            title: "Mesa VIP",
+            description:
+              unitSize && Number.isFinite(unitSize)
+                ? `1 mesa = ${unitSize} personas`
+                : "Reserva de Mesa VIP",
+            quantity: 1,
+            unit_price: vipPrice, // ✅ precio desde BD
+          },
+        ],
+        payer: {
+          name: customer.name.trim(),
+          email: customer.email.trim(),
+          phone: cleanDigits(customer.phone),
+          dni: cleanDigits(customer.dni),
+          additionalInfo: {
+            type: "vip-table",
+            tables: 1, // siempre 1 mesa por compra
+            unitSize: unitSize ?? undefined,
+          },
+        },
+        type: "vip-table" as const,
+      };
 
-      const response = await fetch("/api/create-payment", {
+      const res = await fetch("/api/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: [
-            {
-              title: `${table.name} - ${selectedDate}`,
-              description: `${table.capacity} - ${table.includes.join(", ")}`,
-              quantity: 1,
-              unit_price: table.price,
-            },
-          ],
-          payer: {
-            ...customerInfo,
-            additionalInfo: {
-              date: selectedDate,
-              guests: customerInfo.guests,
-              location: selectedLocation,
-              packageType: selectedPackage,
-            },
-          },
-          type: "vip-table",
-        }),
-      })
+        body: JSON.stringify(body),
+      });
 
-      const data = await response.json()
-
-      if (data.init_point) {
-        window.location.href = data.init_point
-      } else {
-        throw new Error("No se pudo crear la preferencia de pago")
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("create-payment error:", err);
+        alert("No pudimos iniciar el pago. Probá nuevamente.");
+        setIsProcessing(false);
+        return;
       }
+
+      const data = await res.json();
+      const url =
+        process.env.NODE_ENV === "production"
+          ? data?.init_point
+          : data?.sandbox_init_point || data?.init_point;
+
+      if (!url) {
+        console.error("Respuesta sin init_point/sandbox_init_point:", data);
+        alert("No pudimos obtener la URL de pago. Probá nuevamente.");
+        setIsProcessing(false);
+        return;
+      }
+
+      window.location.assign(url);
     } catch (error) {
-      console.error("Error al procesar la reserva:", error)
-      alert("Hubo un error al procesar tu reserva. Por favor intentá nuevamente.")
-      setIsProcessing(false)
+      console.error("Error al procesar la reserva:", error);
+      alert("Hubo un error al procesar tu reserva. Intentá nuevamente.");
+      setIsProcessing(false);
     }
-  }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-3xl font-display flex items-center gap-3">
-            <Sparkles className="w-8 h-8 text-accent" />
+            <Sparkles className="w-8 h-8 text-primary" />
             Reservar Mesa VIP
           </DialogTitle>
-          <DialogDescription>Elegí tu paquete VIP y asegurá la mejor experiencia para tu grupo</DialogDescription>
+          <DialogDescription>
+            Completá tus datos para reservar tu mesa VIP
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
-          {/* Package Selection */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-lg">Seleccioná tu paquete</h3>
-            <RadioGroup value={selectedPackage} onValueChange={setSelectedPackage}>
-              {tablePackages.map((pkg) => (
-                <div key={pkg.id} className="relative">
-                  {pkg.popular && (
-                    <div className="absolute -top-3 left-4 z-10">
-                      <span className="bg-accent text-white text-xs font-bold px-3 py-1 rounded-full">MÁS ELEGIDO</span>
-                    </div>
-                  )}
-                  <label
-                    htmlFor={pkg.id}
-                    className={`block border-2 rounded-xl p-6 cursor-pointer transition-all hover:border-primary ${
-                      selectedPackage === pkg.id ? "border-primary bg-primary/5" : "border-border"
-                    }`}
-                  >
-                    <div className="flex items-start gap-4">
-                      <RadioGroupItem value={pkg.id} id={pkg.id} className="mt-1" />
-                      <div className="flex-1 space-y-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <div
-                              className={`inline-block px-3 py-1 rounded-full bg-gradient-to-r ${pkg.color} text-white text-xs font-bold mb-2`}
-                            >
-                              {pkg.name}
-                            </div>
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Users className="w-4 h-4" />
-                              {pkg.capacity}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-3xl font-bold">${pkg.price.toLocaleString()}</p>
-                            <p className="text-xs text-muted-foreground">por mesa</p>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold">Incluye:</p>
-                          <ul className="text-sm text-muted-foreground space-y-1">
-                            {pkg.includes.map((item, idx) => (
-                              <li key={idx} className="flex items-start gap-2">
-                                <span className="text-primary mt-0.5">✓</span>
-                                {item}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-                  </label>
+          {/* Price/Stock Display (desde BD) — mismo patrón visual que entradas */}
+          <div className="bg-gradient-to-r from-primary/10 via-secondary/10 to-accent/10 rounded-xl p-6 space-y-3">
+            <h3 className="font-display text-xl font-bold text-center">
+              Mesa VIP
+            </h3>
+
+            {cfgLoading ? (
+              <p className="text-center text-sm text-muted-foreground">
+                Cargando configuración…
+              </p>
+            ) : cfgError ? (
+              <p className="text-center text-sm text-red-600">{cfgError}</p>
+            ) : (
+              <div
+                className={`grid gap-4 ${
+                  unitSize !== null
+                    ? "grid-cols-1 sm:grid-cols-3"
+                    : "grid-cols-1 sm:grid-cols-2"
+                }`}
+              >
+                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-primary/30">
+                  <p className="text-sm text-muted-foreground mb-1">
+                    Precio por mesa
+                  </p>
+
+                  {/* centrado real */}
+                  <div className="flex items-baseline justify-center gap-1">
+                    <span className="text-lg font-bold text-primary">$</span>
+                    <span className="text-2xl font-bold text-primary tabular-nums tracking-tight leading-none">
+                      {formatMoney(vipPrice ?? 0)}
+                    </span>
+                  </div>
                 </div>
-              ))}
-            </RadioGroup>
+
+                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-secondary/30">
+                  <p className="text-sm text-muted-foreground mb-1">
+                    Mesas disponibles
+                  </p>
+                  <p className="text-2xl font-bold text-secondary">
+                    {remainingTables ?? 0}
+                  </p>
+                </div>
+
+                {unitSize !== null && (
+                  <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-accent/30">
+                    <p className="text-sm text-muted-foreground mb-1">
+                      Equivalencia
+                    </p>
+                    <p className="text-2xl font-bold text-accent">{unitSize}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      pers./mesa
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {typeof remainingTables === "number" && (
+              <p className="text-center text-xs text-muted-foreground">
+                La compra reserva <b>1 mesa</b> por transacción.
+              </p>
+            )}
           </div>
 
-          {selectedPackage && (
-            <div className="space-y-4 pt-4 border-t">
-              <h3 className="font-semibold text-lg flex items-center gap-2">
-                <MapPin className="w-5 h-5" />
-                Ubicación de tu mesa
-              </h3>
-              <RadioGroup value={selectedLocation} onValueChange={setSelectedLocation}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  {locationOptions.map((location) => (
-                    <label
-                      key={location.id}
-                      htmlFor={`location-${location.id}`}
-                      className={`block border-2 rounded-xl p-4 cursor-pointer transition-all hover:border-primary ${
-                        selectedLocation === location.id ? "border-primary bg-primary/5" : "border-border"
-                      }`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <RadioGroupItem value={location.id} id={`location-${location.id}`} className="mt-1" />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-2xl">{location.icon}</span>
-                            <span className="font-semibold">{location.name}</span>
-                          </div>
-                          <p className="text-sm text-muted-foreground">{location.description}</p>
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </RadioGroup>
-            </div>
-          )}
+          {/* Datos del cliente — igual layout que entradas, sin género */}
+          <div className="space-y-4">
+            <h3 className="font-semibold text-lg">Tus datos</h3>
 
-          {/* Date Selection */}
-          {selectedPackage && selectedLocation && (
-            <div className="space-y-4 pt-4 border-t">
-              <h3 className="font-semibold text-lg flex items-center gap-2">
-                <Calendar className="w-5 h-5" />
-                Seleccioná la fecha
-              </h3>
+            <div className="space-y-2">
+              <Label htmlFor="vip-name" className="flex items-center gap-2">
+                Nombre completo
+              </Label>
               <Input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                min={new Date().toISOString().split("T")[0]}
-                className="text-lg"
+                id="vip-name"
+                placeholder="Juan Pérez"
+                value={customer.name}
+                onChange={(e) =>
+                  setCustomer({ ...customer, name: e.target.value })
+                }
+                className="h-12"
               />
-              <p className="text-sm text-muted-foreground">
-                Las mesas VIP están disponibles de miércoles a sábado. Te contactaremos para confirmar disponibilidad.
-              </p>
+              {errors.name && (
+                <p className="text-sm text-red-600">{errors.name}</p>
+              )}
             </div>
-          )}
 
-          {/* Customer Information */}
-          {selectedPackage && selectedLocation && selectedDate && (
-            <div className="space-y-4 pt-4 border-t">
-              <h3 className="font-semibold text-lg">Tus datos</h3>
-              <div className="grid gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="vip-name">Nombre completo</Label>
-                  <Input
-                    id="vip-name"
-                    placeholder="Juan Pérez"
-                    value={customerInfo.name}
-                    onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="vip-dni" className="flex items-center gap-2">
-                    <IdCard className="w-4 h-4" />
-                    DNI
-                  </Label>
-                  <Input
-                    id="vip-dni"
-                    placeholder="12345678"
-                    value={customerInfo.dni}
-                    onChange={(e) => setCustomerInfo({ ...customerInfo, dni: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="vip-email">Email</Label>
-                  <Input
-                    id="vip-email"
-                    type="email"
-                    placeholder="juan@ejemplo.com"
-                    value={customerInfo.email}
-                    onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="vip-phone">Teléfono</Label>
-                  <Input
-                    id="vip-phone"
-                    type="tel"
-                    placeholder="+54 11 1234-5678"
-                    value={customerInfo.phone}
-                    onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="guests">Cantidad de invitados</Label>
-                  <Input
-                    id="guests"
-                    type="number"
-                    min="1"
-                    max={selectedTable ? Number.parseInt(selectedTable.capacity.match(/\d+/)?.[0] || "10") : 10}
-                    placeholder="6"
-                    value={customerInfo.guests}
-                    onChange={(e) => setCustomerInfo({ ...customerInfo, guests: e.target.value })}
-                  />
-                </div>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="vip-dni" className="flex items-center gap-2">
+                <IdCard className="w-4 h-4" />
+                DNI
+              </Label>
+              <Input
+                id="vip-dni"
+                placeholder="12345678"
+                value={customer.dni}
+                onChange={(e) =>
+                  setCustomer({ ...customer, dni: e.target.value })
+                }
+                className="h-12"
+                inputMode="numeric"
+              />
+              {errors.dni && (
+                <p className="text-sm text-red-600">{errors.dni}</p>
+              )}
             </div>
-          )}
 
-          {/* Total */}
-          {selectedPackage && selectedLocation && selectedDate && selectedTable && (
-            <div className="bg-gradient-to-r from-accent/10 to-chart-3/10 rounded-xl p-6 space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold">Paquete:</span>
-                  <span className="font-bold">{selectedTable.name}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold">Ubicación:</span>
-                  <span className="font-bold">{locationOptions.find((l) => l.id === selectedLocation)?.name}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold">Fecha:</span>
-                  <span className="font-bold">{new Date(selectedDate + "T00:00:00").toLocaleDateString("es-AR")}</span>
-                </div>
-              </div>
-              <div className="flex justify-between items-center text-2xl pt-4 border-t">
-                <span className="font-bold">Total a pagar:</span>
-                <span className="font-bold text-accent">${selectedTable.price.toLocaleString()}</span>
-              </div>
-              <Button
-                size="lg"
-                onClick={handleCheckout}
-                disabled={isProcessing}
-                className="w-full text-lg py-6 rounded-full bg-gradient-to-r from-accent via-chart-3 to-primary hover:scale-105 transition-transform"
-              >
-                <CreditCard className="w-5 h-5 mr-2" />
-                {isProcessing ? "Procesando..." : "Reservar con Mercado Pago"}
-              </Button>
-              <p className="text-xs text-center text-muted-foreground">
-                Serás redirigido a Mercado Pago para completar tu reserva de forma segura
-              </p>
+            <div className="space-y-2">
+              <Label htmlFor="vip-email" className="flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                Correo electrónico
+              </Label>
+              <Input
+                id="vip-email"
+                type="email"
+                placeholder="juan@ejemplo.com"
+                value={customer.email}
+                onChange={(e) =>
+                  setCustomer({ ...customer, email: e.target.value })
+                }
+                className="h-12"
+              />
+              {errors.email && (
+                <p className="text-sm text-red-600">{errors.email}</p>
+              )}
             </div>
-          )}
+
+            <div className="space-y-2">
+              <Label htmlFor="vip-phone" className="flex items-center gap-2">
+                <Phone className="w-4 h-4" />
+                Número de celular
+              </Label>
+              <Input
+                id="vip-phone"
+                type="tel"
+                placeholder="+54 11 1234-5678"
+                value={customer.phone}
+                onChange={(e) =>
+                  setCustomer({ ...customer, phone: e.target.value })
+                }
+                className="h-12"
+                inputMode="tel"
+              />
+              {errors.phone && (
+                <p className="text-sm text-red-600">{errors.phone}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Summary + Pay — misma sección que entradas */}
+          <div className="bg-gradient-to-r from-primary/10 to-secondary/10 rounded-xl p-6 space-y-4 border-2 border-primary/20">
+            <div className="flex justify-between items-center text-2xl">
+              <span className="font-bold">Total a pagar:</span>
+              <span className="font-bold text-primary">
+                ${formatMoney(total)}
+              </span>
+            </div>
+            <Button
+              size="lg"
+              onClick={handleCheckout}
+              disabled={
+                isProcessing ||
+                cfgLoading ||
+                !!cfgError ||
+                !vipPrice ||
+                !remainingTables
+              }
+              className="w-full text-lg py-6 rounded-full bg-gradient-to-r from-primary via-secondary to-accent hover:scale-105 transition-transform disabled:opacity-60"
+            >
+              <CreditCard className="w-5 h-5 mr-2" />
+              {isProcessing ? "Procesando..." : "Reservar con Mercado Pago"}
+            </Button>
+            <p className="text-xs text-center text-muted-foreground">
+              Serás redirigido a Mercado Pago para completar tu reserva de forma
+              segura
+            </p>
+            {(errors.price || errors.stock) && (
+              <p className="text-sm text-red-600 text-center">
+                {errors.price || errors.stock}
+              </p>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

@@ -2,6 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { jwtVerify } from "jose";
+import {
+  Prisma,
+  PaymentMethod as PM,
+  PaymentStatus as PS,
+} from "@prisma/client";
 
 /* =========================
    Auth
@@ -22,7 +27,7 @@ async function verifyAuth(request: NextRequest) {
 }
 
 /* =========================
-   Helpers de validación
+   Helpers
 ========================= */
 function normString(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
@@ -33,7 +38,6 @@ function normString(v: unknown): string | undefined {
 function normEmail(v: unknown): string | undefined {
   const s = normString(v);
   if (!s) return undefined;
-  // validación simple
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return undefined;
   return s.toLowerCase();
 }
@@ -59,20 +63,51 @@ function generateQr(): string {
   return `TICKET-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/** 6 dígitos incluyendo ceros a la izquierda */
+/** 6 dígitos */
 function generateValidationCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-type PaymentStatus = "pending" | "approved" | "rejected";
+/* =========================
+   Enum mappers
+========================= */
+function toPaymentMethod(v?: string): PM | undefined {
+  switch ((v || "").toLowerCase()) {
+    case "mercadopago":
+      return PM.mercadopago;
+    case "transferencia":
+      return PM.transferencia;
+    case "efectivo":
+      return PM.efectivo;
+    default:
+      return undefined;
+  }
+}
+function toPaymentStatus(v?: string): PS | undefined {
+  switch ((v || "").toLowerCase()) {
+    case "pending":
+      return PS.pending;
+    case "approved":
+      return PS.approved;
+    case "rejected":
+      return PS.rejected;
+    case "in_process":
+      return PS.in_process;
+    case "failed_preference":
+      return PS.failed_preference;
+    case "cancelled":
+      return PS.cancelled;
+    case "refunded":
+      return PS.refunded;
+    case "charged_back":
+      return PS.charged_back;
+    default:
+      return undefined;
+  }
+}
 
 /* =========================
    GET /api/admin/tickets
-   - Filtros: ?status=approved|pending|rejected
-              ?q=texto (busca en nombre/email/dni)
-   - Orden:   ?orderBy=purchaseDate|totalPrice
-              ?order=asc|desc
-   - Paginación: ?page=1&pageSize=50
 ========================= */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -82,7 +117,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
 
-    const status = searchParams.get("status") as PaymentStatus | null;
+    const status = searchParams.get("status");
     const q = normString(searchParams.get("q"));
 
     const orderByField =
@@ -100,10 +135,9 @@ export async function GET(request: NextRequest) {
 
     const where: any = {};
     if (status && ["pending", "approved", "rejected"].includes(status)) {
-      where.paymentStatus = status;
+      where.paymentStatus = status as PS;
     }
     if (q) {
-      // búsqueda básica por nombre/email/dni
       where.OR = [
         { customerName: { contains: q, mode: "insensitive" } },
         { customerEmail: { contains: q, mode: "insensitive" } },
@@ -142,7 +176,6 @@ export async function GET(request: NextRequest) {
 
 /* =========================
    POST /api/admin/tickets
-   Crea ticket; genera qrCode + validationCode únicos
 ========================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -150,24 +183,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await request.json().catch(() => ({}) as any);
+    const body = (await request.json().catch(() => ({}))) as any;
 
-    const ticketType = normString(body.ticketType) || "general";
+    // 🚫 Sin eventCode: usamos SIEMPRE el evento activo
+    const event = await prisma.event.findFirst({
+      where: { isActive: true },
+      select: { id: true, date: true },
+    });
+    if (!event) {
+      return NextResponse.json(
+        { error: "No hay evento activo" },
+        { status: 400 }
+      );
+    }
+
+    const ticketType = (normString(body.ticketType) || "general").toLowerCase(); // "general" | "vip"
+    const rawGender = normString(body.gender);
+    // Solo para general; VIP no tiene género
+    const gender: "hombre" | "mujer" | undefined =
+      ticketType === "general"
+        ? rawGender === "mujer"
+          ? "mujer"
+          : rawGender === "hombre"
+            ? "hombre"
+            : undefined
+        : undefined;
+
+    const quantity = Math.max(1, normNumber(body.quantity) ?? 1);
+
     const customerName = normString(body.customerName);
     const customerEmail = normEmail(body.customerEmail);
     const customerPhone = normString(body.customerPhone);
     const customerDni = extractCustomerDni(body);
-    const gender = normString(body.gender) ?? null; // "hombre" | "mujer" | null
-    const paymentMethod = normString(body.paymentMethod) || "mercadopago";
-    const totalPrice = normNumber(body.totalPrice);
-    const quantity = normNumber(body.quantity) ?? 1;
-    const eventDate = body.eventDate ? new Date(body.eventDate) : null;
 
-    // Por defecto, creamos en approved si no especifican (tu flujo trabaja así)
-    const paymentStatus: PaymentStatus =
-      (body.paymentStatus as PaymentStatus) || "approved";
+    const paymentMethodEnum =
+      toPaymentMethod(normString(body.paymentMethod)) ?? PM.mercadopago;
+    const paymentStatusEnum =
+      toPaymentStatus(normString(body.paymentStatus)) ?? PS.approved;
 
-    // Validaciones mínimas
     if (!customerName) {
       return NextResponse.json(
         { error: "customerName requerido" },
@@ -192,14 +245,41 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    if (totalPrice === undefined) {
-      return NextResponse.json(
-        { error: "totalPrice debe ser numérico" },
-        { status: 400 }
-      );
+
+    // Precio desde BD
+    const cfg = await prisma.ticketConfig.findFirst({
+      where: {
+        eventId: event.id,
+        ticketType,
+        // Prisma: omitimos gender para VIP; seteamos gender para general
+        ...(ticketType === "general"
+          ? { gender: gender as any }
+          : { gender: null }),
+      },
+      select: { id: true, price: true },
+    });
+
+    let totalPriceDecimal: Prisma.Decimal;
+    let ticketConfigId: string | undefined;
+
+    if (cfg) {
+      const unit = new Prisma.Decimal(cfg.price);
+      totalPriceDecimal = unit.mul(quantity);
+      ticketConfigId = cfg.id;
+    } else {
+      const totalPrice = normNumber(body.totalPrice);
+      if (totalPrice === undefined) {
+        return NextResponse.json(
+          {
+            error:
+              "No existe configuración de precio en BD para el tipo/género y no se envió totalPrice",
+          },
+          { status: 400 }
+        );
+      }
+      totalPriceDecimal = new Prisma.Decimal(totalPrice);
     }
 
-    // Reintentos por colisión unique (qrCode / validationCode)
     let attempts = 0;
     while (attempts < 3) {
       const qrCode = generateQr();
@@ -208,19 +288,24 @@ export async function POST(request: NextRequest) {
       try {
         const ticket = await prisma.ticket.create({
           data: {
+            eventId: event.id,
+            eventDate: event.date,
             ticketType,
+            // Solo setear gender cuando corresponde (general); VIP: omitido (queda NULL)
+            ...(ticketType === "general" && gender
+              ? { gender: gender as any }
+              : {}),
             quantity,
-            totalPrice,
+            totalPrice: totalPriceDecimal,
             customerName,
             customerEmail,
             customerPhone,
             customerDni,
-            gender,
-            paymentMethod,
-            paymentStatus,
+            paymentMethod: paymentMethodEnum,
+            paymentStatus: paymentStatusEnum,
             qrCode,
             validationCode,
-            eventDate,
+            ...(ticketConfigId ? { ticketConfigId } : {}),
           },
         });
         return NextResponse.json({ ok: true, ticket });
@@ -248,7 +333,6 @@ export async function POST(request: NextRequest) {
 
 /* =========================
    PUT /api/admin/tickets
-   Actualiza por id (reemplazo controlado)
 ========================= */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -256,7 +340,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await request.json().catch(() => ({}) as any);
+    const body = (await request.json().catch(() => ({}))) as any;
     const id = normString(body.id);
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
@@ -265,6 +349,18 @@ export async function PUT(request: NextRequest) {
 
     const ticketType = normString(body.ticketType);
     if (ticketType) dataToUpdate.ticketType = ticketType;
+
+    if (body.gender !== undefined) {
+      // Solo permitir gender cuando el tipo final sea general
+      const nextType = (ticketType || "").toLowerCase();
+      if (nextType === "general") {
+        const g = normString(body.gender);
+        if (g === "hombre" || g === "mujer") dataToUpdate.gender = g;
+        else dataToUpdate.gender = null;
+      } else {
+        dataToUpdate.gender = null;
+      }
+    }
 
     const customerName = normString(body.customerName);
     if (customerName) dataToUpdate.customerName = customerName;
@@ -278,19 +374,18 @@ export async function PUT(request: NextRequest) {
     const customerDni = extractCustomerDni(body);
     if (customerDni) dataToUpdate.customerDni = customerDni;
 
-    if (body.gender !== undefined) {
-      dataToUpdate.gender = normString(body.gender) ?? null;
-    }
-
-    const paymentMethod = normString(body.paymentMethod);
-    if (paymentMethod) dataToUpdate.paymentMethod = paymentMethod;
+    const pm = toPaymentMethod(normString(body.paymentMethod));
+    if (pm) dataToUpdate.paymentMethod = pm;
 
     const totalPrice = normNumber(body.totalPrice);
-    if (totalPrice !== undefined) dataToUpdate.totalPrice = totalPrice;
+    if (totalPrice !== undefined) {
+      dataToUpdate.totalPrice = new Prisma.Decimal(totalPrice);
+    }
 
     const quantity = normNumber(body.quantity);
     if (quantity !== undefined) dataToUpdate.quantity = quantity;
 
+    // Ya no reasignamos por "eventCode". Solo permitimos ajustar eventDate si querés.
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }
@@ -312,8 +407,6 @@ export async function PUT(request: NextRequest) {
 
 /* =========================
    PATCH /api/admin/tickets
-   - Update parcial por id.
-   - Si paymentStatus pasa a "approved" y faltan códigos, los genera.
 ========================= */
 export async function PATCH(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -321,7 +414,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await request.json().catch(() => ({}) as any);
+    const body = (await request.json().catch(() => ({}))) as any;
     const id = normString(body.id);
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
@@ -332,10 +425,22 @@ export async function PATCH(request: NextRequest) {
 
     const dataToUpdate: any = {};
 
-    // campos editables
     if (body.ticketType !== undefined)
       dataToUpdate.ticketType =
         normString(body.ticketType) ?? current.ticketType;
+
+    if (body.gender !== undefined) {
+      const nextType = (
+        dataToUpdate.ticketType || current.ticketType
+      ).toLowerCase();
+      if (nextType === "general") {
+        const g = normString(body.gender);
+        dataToUpdate.gender = g === "hombre" || g === "mujer" ? g : null;
+      } else {
+        dataToUpdate.gender = null;
+      }
+    }
+
     if (body.customerName !== undefined)
       dataToUpdate.customerName =
         normString(body.customerName) ?? current.customerName;
@@ -356,38 +461,33 @@ export async function PATCH(request: NextRequest) {
       dataToUpdate.customerDni = customerDni ?? current.customerDni;
     }
 
-    if (body.gender !== undefined) {
-      dataToUpdate.gender = normString(body.gender) ?? null;
-    }
-    if (body.paymentMethod !== undefined) {
-      dataToUpdate.paymentMethod =
-        normString(body.paymentMethod) ?? current.paymentMethod;
-    }
+    const pm = toPaymentMethod(normString(body.paymentMethod));
+    if (pm) dataToUpdate.paymentMethod = pm;
+
     if (body.totalPrice !== undefined) {
       const tp = normNumber(body.totalPrice);
-      if (tp !== undefined) dataToUpdate.totalPrice = tp;
+      if (tp !== undefined) dataToUpdate.totalPrice = new Prisma.Decimal(tp);
     }
     if (body.quantity !== undefined) {
       const qty = normNumber(body.quantity);
       if (qty !== undefined) dataToUpdate.quantity = qty;
     }
+
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }
 
-    // cambio de estado de pago
-    let nextStatus: PaymentStatus = current.paymentStatus as PaymentStatus;
+    // paymentStatus (enum)
+    let nextStatus = current.paymentStatus as PS;
     if (body.paymentStatus !== undefined) {
-      const ps = String(body.paymentStatus) as PaymentStatus;
-      if (["pending", "approved", "rejected"].includes(ps)) {
-        nextStatus = ps;
-      }
+      const ps = toPaymentStatus(normString(body.paymentStatus));
+      if (ps) nextStatus = ps;
     }
     dataToUpdate.paymentStatus = nextStatus;
 
-    // Si queda en approved y faltan códigos, generamos
     const needsCodes =
-      nextStatus === "approved" && (!current.qrCode || !current.validationCode);
+      nextStatus === PS.approved &&
+      (!current.qrCode || !current.validationCode);
 
     if (needsCodes) {
       let attempts = 0;

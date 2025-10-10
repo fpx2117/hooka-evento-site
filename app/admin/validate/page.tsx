@@ -272,22 +272,6 @@ export default function ValidatePage() {
                     </p>
                   </div>
                 </div>
-
-                {ticketData.eventDate && (
-                  <div className="flex items-start gap-3">
-                    <Calendar className="w-5 h-5 text-primary mt-0.5" />
-                    <div className="flex-1">
-                      <p className="text-sm text-muted-foreground">
-                        Fecha del Evento
-                      </p>
-                      <p className="font-semibold text-lg">
-                        {new Date(ticketData.eventDate).toLocaleDateString(
-                          "es-AR"
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                )}
               </div>
 
               <Button onClick={resetValidation} className="w-full mt-6">

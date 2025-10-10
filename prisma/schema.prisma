@@ -13,10 +13,10 @@ enum PaymentStatus {
   approved
   rejected
   in_process
-  failed_preference // cuando falla la creación de la preferencia
-  cancelled // opcional: por si cancelan
-  refunded // opcional: reembolso
-  charged_back // opcional: contracargo
+  failed_preference
+  cancelled
+  refunded
+  charged_back
 }
 
 enum PaymentMethod {
@@ -30,73 +30,174 @@ enum Gender {
   mujer
 }
 
+// Ubicaciones administrables para mesas VIP
+enum TableLocation {
+  piscina
+  dj
+  general
+}
+
 // ========================= Admin =========================
 model Admin {
   id        String   @id @default(cuid())
   username  String   @unique
-  password  String // hashed
+  password  String
   name      String
   createdAt DateTime @default(now())
 
   @@index([username])
 }
 
-// ========================= Ticket =========================
+// ========================= Evento =========================
+model Event {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  date      DateTime
+  isActive  Boolean  @default(true)
+
+  ticketConfig TicketConfig[]
+  vipConfigs   VipTableConfig[]
+
+  tickets      Ticket[]
+  tableRes     TableReservation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ========================= Tickets =========================
+// ticketType: "general" | "vip"
+// VIP no tiene género (gender = null)
 model Ticket {
   id             String        @id @default(cuid())
-  ticketType     String // "general", "vip"
+  eventId        String
+  event          Event         @relation(fields: [eventId], references: [id])
+
+  ticketType     String
+  gender         Gender?
   quantity       Int           @default(1)
-  totalPrice     Float
+
+  // Dinero como Decimal
+  totalPrice     Decimal       @db.Decimal(10, 2)
+
   customerName   String
   customerEmail  String
   customerPhone  String
   customerDni    String
-  gender         Gender?
+
   paymentId      String?       @unique
   paymentStatus  PaymentStatus @default(pending)
   paymentMethod  PaymentMethod @default(mercadopago)
+
   qrCode         String?       @unique
   validationCode String?       @unique
   validated      Boolean       @default(false)
   validatedAt    DateTime?
   purchaseDate   DateTime      @default(now())
   eventDate      DateTime?
+  expiresAt      DateTime?
 
+  // Para trazar contra qué config descontó stock/precio
+  ticketConfigId String?
+  ticketConfig   TicketConfig? @relation(fields: [ticketConfigId], references: [id])
+
+  @@index([eventId])
   @@index([customerEmail])
   @@index([paymentId])
   @@index([customerDni])
-  @@index([qrCode])
-  @@index([validationCode])
   @@index([paymentStatus, purchaseDate])
+  @@index([ticketType, gender])
 }
 
-// ========================= TableReservation =========================
+// ========================= Reservas de Mesa VIP =========================
+// "tables" = cantidad de mesas en la operación
+// Para stock total de personas VIP: tables * capacityPerTable (de VipTableConfig)
 model TableReservation {
-  id              String        @id @default(cuid())
-  packageType     String // "standard", "premium", "deluxe"
-  location        String // "piscina", "dj", "general"
-  capacity        Int
-  guests          Int
-  totalPrice      Float
-  customerName    String
-  customerEmail   String
-  customerPhone   String
-  customerDni     String
-  reservationDate DateTime
-  paymentId       String?       @unique
-  paymentStatus   PaymentStatus @default(pending)
-  paymentMethod   PaymentMethod @default(mercadopago)
-  qrCode          String?       @unique
-  validationCode  String?       @unique
-  validated       Boolean       @default(false)
-  validatedAt     DateTime?
-  createdAt       DateTime      @default(now())
+  id                String        @id @default(cuid())
+  eventId           String
+  event             Event         @relation(fields: [eventId], references: [id])
 
+  packageType       String
+  location          TableLocation
+
+  tables            Int           @default(1)
+  capacity          Int
+  guests            Int
+
+  totalPrice        Decimal       @db.Decimal(10, 2)
+
+  customerName      String
+  customerEmail     String
+  customerPhone     String
+  customerDni       String
+  reservationDate   DateTime
+
+  paymentId         String?       @unique
+  paymentStatus     PaymentStatus @default(pending)
+  paymentMethod     PaymentMethod @default(mercadopago)
+
+  qrCode            String?       @unique
+  validationCode    String?       @unique
+  validated         Boolean       @default(false)
+  validatedAt       DateTime?
+  createdAt         DateTime      @default(now())
+  expiresAt         DateTime?
+
+  vipTableConfigId  String?
+  vipTableConfig    VipTableConfig? @relation(fields: [vipTableConfigId], references: [id])
+
+  @@index([eventId])
   @@index([customerEmail])
   @@index([paymentId])
   @@index([reservationDate])
   @@index([customerDni])
-  @@index([qrCode])
-  @@index([validationCode])
   @@index([paymentStatus, reservationDate])
+  @@index([location, reservationDate])
+}
+
+// ========================= Configuración de ENTRADAS =========================
+// Filas típicas por evento:
+// - (ticketType="general", gender="hombre")
+// - (ticketType="general", gender="mujer")
+// - (ticketType="vip",     gender=null)  -> VIP expresado en PERSONAS totales
+// - (ticketType="total",   gender=null)  -> cupo TOTAL (personas) del evento
+model TicketConfig {
+  id         String   @id @default(cuid())
+  event      Event    @relation(fields: [eventId], references: [id])
+  eventId    String
+
+  ticketType String
+  gender     Gender?
+
+  price      Decimal  @db.Decimal(10, 2)
+  stockLimit Int      @default(0)
+  soldCount  Int      @default(0)
+
+  // Lado inverso de Ticket.ticketConfig
+  tickets    Ticket[]
+
+  @@unique([eventId, ticketType, gender], name: "eventId_ticketType_gender")
+  @@index([eventId, ticketType, gender])
+}
+
+// ========================= Configuración de MESAS VIP por ubicación =========================
+// stockLimit = cantidad de MESAS permitidas en esa ubicación
+// capacityPerTable por defecto 10 (1 mesa = 10 personas)
+model VipTableConfig {
+  id               String        @id @default(cuid())
+  eventId          String
+  event            Event         @relation(fields: [eventId], references: [id])
+
+  location         TableLocation
+  price            Decimal       @db.Decimal(10, 2)
+
+  stockLimit       Int
+  soldCount        Int           @default(0)
+  capacityPerTable Int           @default(10)
+
+  tableRes         TableReservation[]
+
+  @@unique([eventId, location])
+  @@index([eventId, location])
 }

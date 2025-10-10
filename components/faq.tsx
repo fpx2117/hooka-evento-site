@@ -1,8 +1,8 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { ChevronDown } from "lucide-react"
-import { Card, CardContent } from "@/components/ui/card"
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 
 const faqs = [
   {
@@ -11,28 +11,14 @@ const faqs = [
       "Las fiestas se realizan los domingos a principios de cada mes. La ubicación se confirma una vez realizada la compra de la entrada.",
   },
   {
-    question: "¿Cómo funciona la reserva de mesas VIP?",
-    answer:
-      "Puedes reservar tu mesa VIP eligiendo entre nuestros paquetes Standard, Premium o Deluxe. Cada paquete incluye diferentes capacidades y beneficios. También puedes elegir la ubicación de tu mesa: cerca de la piscina o cerca del DJ.",
-  },
-  {
-    question: "¿Qué incluye la entrada?",
-    answer:
-      "La entrada incluye acceso a todas las áreas de la fiesta, música en vivo con los mejores DJs, y acceso a la piscina. Las bebidas se adquieren por separado o están incluidas en los paquetes VIP.",
-  },
-  {
     question: "¿Cómo recibo mi entrada?",
     answer:
       "Una vez confirmado el pago, recibirás un email con tu código QR único. Este código debe ser presentado en la entrada de la fiesta para acceder.",
   },
   {
-    question: "¿Puedo cancelar o modificar mi reserva?",
-    answer:
-      "Las cancelaciones deben realizarse con al menos 48 horas de anticipación para obtener un reembolso completo. Las modificaciones están sujetas a disponibilidad.",
-  },
-  {
     question: "¿Hay límite de edad?",
-    answer: "El evento es exclusivo para mayores de 18 años. Se solicitará documento de identidad en la entrada.",
+    answer:
+      "El evento es exclusivo para mayores de 18 años. Se solicitará documento de identidad en la entrada.",
   },
   {
     question: "¿Qué métodos de pago aceptan?",
@@ -44,16 +30,18 @@ const faqs = [
     answer:
       "La ubicación exacta se revela una vez confirmada la compra, ya que las fiestas rotan de lugar constantemente para ofrecerte experiencias únicas en diferentes espacios.",
   },
-]
+];
 
 export function FAQ() {
-  const [openIndex, setOpenIndex] = useState<number | null>(null)
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   return (
     <section className="py-24 bg-gradient-to-b from-muted/30 to-background">
       <div className="container mx-auto px-4">
         <div className="text-center mb-16 space-y-4">
-          <h2 className="text-5xl md:text-7xl font-display text-gradient tracking-tight">PREGUNTAS FRECUENTES</h2>
+          <h2 className="text-5xl md:text-7xl font-display text-gradient tracking-tight">
+            PREGUNTAS FRECUENTES
+          </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
             Todo lo que necesitas saber sobre nuestras fiestas
           </p>
@@ -80,7 +68,9 @@ export function FAQ() {
                     openIndex === index ? "max-h-96" : "max-h-0"
                   }`}
                 >
-                  <div className="px-6 pb-6 text-muted-foreground leading-relaxed">{faq.answer}</div>
+                  <div className="px-6 pb-6 text-muted-foreground leading-relaxed">
+                    {faq.answer}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -88,5 +78,5 @@ export function FAQ() {
         </div>
       </div>
     </section>
-  )
+  );
 }

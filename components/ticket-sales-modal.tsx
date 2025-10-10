@@ -19,24 +19,43 @@ import {
   Phone,
   Award as IdCard,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+/* =========================
+   Tipos mínimos de la API de config
+========================= */
+type TicketsConfig = {
+  tickets: {
+    general: {
+      hombre?: {
+        price: number;
+        remaining: number;
+        limit: number;
+        sold: number;
+      };
+      mujer?: { price: number; remaining: number; limit: number; sold: number };
+    };
+  };
+  totals?: {
+    remainingPersons?: number; // opcional, si tu API lo expone
+  };
+};
 
 interface TicketSalesModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+
+  configEndpoint?: string;
 }
 
-const PRICES = {
-  hombre: 100,
-  mujer: 11000,
-} as const;
+type GenderKey = "hombre" | "mujer";
 
-type GenderKey = keyof typeof PRICES;
-
+/* =========================
+   Utils
+========================= */
 function formatMoney(n: number) {
   return n.toLocaleString("es-AR");
 }
-
 function cleanDigits(s: string) {
   return (s || "").replace(/\D+/g, "");
 }
@@ -44,7 +63,16 @@ function cleanDigits(s: string) {
 export function TicketSalesModal({
   open,
   onOpenChange,
+  configEndpoint = "/api/admin/tickets/config",
 }: TicketSalesModalProps) {
+  // ======= State de precios desde BD =======
+  const [priceH, setPriceH] = useState<number | null>(null);
+  const [priceM, setPriceM] = useState<number | null>(null);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgError, setCfgError] = useState<string | null>(null);
+
+  // ======= Datos del cliente =======
   const [customerInfo, setCustomerInfo] = useState({
     name: "",
     email: "",
@@ -55,18 +83,74 @@ export function TicketSalesModal({
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<{ [k: string]: string }>({});
 
-  const ticketPrice = useMemo(() => {
-    return customerInfo.gender ? PRICES[customerInfo.gender] : 0;
-  }, [customerInfo.gender]);
+  // ======= Traer precios desde la API =======
+  useEffect(() => {
+    let cancelled = false;
 
+    async function loadConfig() {
+      setCfgLoading(true);
+      setCfgError(null);
+
+      // Intento #2 (fallback silencioso): /api/admin/tickets/config por si sólo existe ese
+      const tryEndpoints = [configEndpoint, "/api/admin/tickets/config"];
+
+      for (const ep of tryEndpoints) {
+        try {
+          const r = await fetch(ep, { cache: "no-store" });
+          if (!r.ok) continue;
+          const data: TicketsConfig = await r.json();
+
+          if (cancelled) return;
+
+          setPriceH(data?.tickets?.general?.hombre?.price ?? 0);
+          setPriceM(data?.tickets?.general?.mujer?.price ?? 0);
+
+          // Si tu API expone un total de restantes, lo mostramos (no bloquea pago)
+          const rem =
+            data?.totals?.remainingPersons ??
+            data?.tickets?.general?.hombre?.remaining ??
+            data?.tickets?.general?.mujer?.remaining ??
+            null;
+          setRemaining(
+            typeof rem === "number" && Number.isFinite(rem) ? rem : null
+          );
+
+          setCfgLoading(false);
+          return;
+        } catch {
+          /* sigue al siguiente endpoint */
+        }
+      }
+
+      if (!cancelled) {
+        setCfgError("No se pudo cargar la configuración de precios.");
+        setCfgLoading(false);
+      }
+    }
+
+    if (open) loadConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, configEndpoint]);
+
+  // ======= Precio actual según género elegido =======
+  const ticketPrice = useMemo(() => {
+    if (!customerInfo.gender) return 0;
+    return customerInfo.gender === "hombre" ? priceH || 0 : priceM || 0;
+  }, [customerInfo.gender, priceH, priceM]);
+
+  // ======= Validaciones =======
   const validate = () => {
     const e: { [k: string]: string } = {};
 
     if (!customerInfo.name.trim()) e.name = "Ingresá tu nombre completo";
     if (!customerInfo.gender) e.gender = "Seleccioná tu género";
+
     // email simple
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerInfo.email))
       e.email = "Ingresá un email válido";
+
     // DNI: solo dígitos, 7-9 aprox (flexible)
     const dniDigits = cleanDigits(customerInfo.dni);
     if (!dniDigits) e.dni = "Ingresá tu DNI";
@@ -78,12 +162,13 @@ export function TicketSalesModal({
     if (!phoneDigits) e.phone = "Ingresá tu celular";
     else if (phoneDigits.length < 8) e.phone = "Celular inválido";
 
-    if (!ticketPrice) e.price = "Seleccioná una opción para continuar";
+    if (!ticketPrice) e.price = "Precio no disponible, intentá nuevamente.";
 
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
+  // ======= Ir a checkout =======
   const handleCheckout = async () => {
     if (isProcessing) return;
     if (!validate()) return;
@@ -94,9 +179,9 @@ export function TicketSalesModal({
         items: [
           {
             title: `Entrada General - ${customerInfo.gender === "hombre" ? "Hombre" : "Mujer"}`,
-            description: "Hooka Party - Entrada General",
+            description: "Entrada General",
             quantity: 1,
-            unit_price: ticketPrice,
+            unit_price: ticketPrice, // ✅ precio desde BD
           },
         ],
         payer: {
@@ -108,7 +193,6 @@ export function TicketSalesModal({
             ticketType: "general",
             gender: customerInfo.gender,
             quantity: 1,
-            eventDate: "2025-11-02", // <-- si lo necesitás dinámico, pásalo como prop
           },
         },
         type: "ticket" as const,
@@ -129,7 +213,6 @@ export function TicketSalesModal({
       }
 
       const data = await res.json();
-      // Preferimos sandbox en dev; si no viene, fallback a init_point
       const url =
         process.env.NODE_ENV === "production"
           ? data?.init_point
@@ -142,7 +225,6 @@ export function TicketSalesModal({
         return;
       }
 
-      // Navegación top-level (evitar popup/iframe)
       window.location.assign(url);
     } catch (error) {
       console.error("Error al procesar el pago:", error);
@@ -165,25 +247,40 @@ export function TicketSalesModal({
         </DialogHeader>
 
         <div className="space-y-6 py-4">
-          {/* Price Display */}
+          {/* Price Display (desde BD) */}
           <div className="bg-gradient-to-r from-primary/10 via-secondary/10 to-accent/10 rounded-xl p-6 space-y-3">
             <h3 className="font-display text-xl font-bold text-center">
               Entrada General
             </h3>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-primary/30">
-                <p className="text-sm text-muted-foreground mb-1">Hombres</p>
-                <p className="text-2xl font-bold text-primary">
-                  ${formatMoney(PRICES.hombre)}
-                </p>
+
+            {cfgLoading ? (
+              <p className="text-center text-sm text-muted-foreground">
+                Cargando precios…
+              </p>
+            ) : cfgError ? (
+              <p className="text-center text-sm text-red-600">{cfgError}</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-primary/30">
+                  <p className="text-sm text-muted-foreground mb-1">Hombres</p>
+                  <p className="text-2xl font-bold text-primary">
+                    ${formatMoney(priceH ?? 0)}
+                  </p>
+                </div>
+                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-secondary/30">
+                  <p className="text-sm text-muted-foreground mb-1">Mujeres</p>
+                  <p className="text-2xl font-bold text-secondary">
+                    ${formatMoney(priceM ?? 0)}
+                  </p>
+                </div>
               </div>
-              <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-secondary/30">
-                <p className="text-sm text-muted-foreground mb-1">Mujeres</p>
-                <p className="text-2xl font-bold text-secondary">
-                  ${formatMoney(PRICES.mujer)}
-                </p>
-              </div>
-            </div>
+            )}
+
+            {typeof remaining === "number" && (
+              <p className="text-center text-xs text-muted-foreground">
+                Disponibles: <b>{remaining}</b>
+              </p>
+            )}
           </div>
 
           {/* Customer Information Form */}
@@ -277,7 +374,7 @@ export function TicketSalesModal({
                     <span className="text-2xl mb-2">👨</span>
                     <span className="font-semibold">Hombre</span>
                     <span className="text-sm text-muted-foreground">
-                      ${formatMoney(PRICES.hombre)}
+                      ${formatMoney(priceH ?? 0)}
                     </span>
                   </Label>
                 </div>
@@ -294,7 +391,7 @@ export function TicketSalesModal({
                     <span className="text-2xl mb-2">👩</span>
                     <span className="font-semibold">Mujer</span>
                     <span className="text-sm text-muted-foreground">
-                      ${formatMoney(PRICES.mujer)}
+                      ${formatMoney(priceM ?? 0)}
                     </span>
                   </Label>
                 </div>
@@ -337,7 +434,14 @@ export function TicketSalesModal({
             <Button
               size="lg"
               onClick={handleCheckout}
-              disabled={isProcessing}
+              disabled={
+                isProcessing ||
+                cfgLoading ||
+                !!cfgError ||
+                !customerInfo.gender ||
+                (customerInfo.gender === "hombre" && !priceH) ||
+                (customerInfo.gender === "mujer" && !priceM)
+              }
               className="w-full text-lg py-6 rounded-full bg-gradient-to-r from-primary via-secondary to-accent hover:scale-105 transition-transform disabled:opacity-60"
             >
               <CreditCard className="w-5 h-5 mr-2" />

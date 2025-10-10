@@ -2,6 +2,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+// ✅ Si querés evitar "any", definimos tipos mínimos para los updates idempotentes
+type TicketCodesUpdate = Partial<{
+  qrCode: string;
+  validationCode: string;
+}>;
+type TableCodesUpdate = Partial<{
+  qrCode: string;
+  validationCode: string;
+}>;
+
 /**
  * GET /api/tickets/public?type=ticket|vip-table&id=XXXX[&requireApproved=1]
  * Devuelve qrCode y validationCode (y algunos metadatos mínimos) para la pantalla de "success".
@@ -65,7 +75,10 @@ export async function GET(req: NextRequest) {
           paymentStatus: true,
           qrCode: true,
           validationCode: true,
-          totalPrice: true,
+          totalPrice: true, // Decimal en BD -> casteamos abajo
+          // opcionalmente podrías exponer:
+          // ticketType: true,
+          // gender: true,
         },
       });
       if (!rec) return json({ ok: false, error: "Not found" }, 404);
@@ -74,7 +87,7 @@ export async function GET(req: NextRequest) {
         return json({ ok: false, error: "Pago no aprobado aún" }, 409);
       }
 
-      // Si está approved y faltan códigos: los generamos (idempotente, con reintentos por unicidad)
+      // Auto-heal: generar códigos si falta alguno y el pago está aprobado
       if (
         rec.paymentStatus === "approved" &&
         (!rec.qrCode || !rec.validationCode)
@@ -82,7 +95,7 @@ export async function GET(req: NextRequest) {
         let attempts = 0;
         while (attempts < 3) {
           try {
-            const dataToUpdate: any = {};
+            const dataToUpdate: TicketCodesUpdate = {};
             if (!rec.qrCode) dataToUpdate.qrCode = generateQr();
             if (!rec.validationCode)
               dataToUpdate.validationCode = generateValidationCode();
@@ -101,6 +114,7 @@ export async function GET(req: NextRequest) {
             });
             break;
           } catch (e: any) {
+            // P2002 = unique constraint violation -> reintenta
             if (e?.code === "P2002") {
               attempts++;
               continue;
@@ -131,7 +145,10 @@ export async function GET(req: NextRequest) {
         paymentStatus: true,
         qrCode: true,
         validationCode: true,
-        totalPrice: true,
+        totalPrice: true, // Decimal -> casteamos abajo
+        // opcionalmente podrías exponer:
+        // location: true,
+        // tables: true,
       },
     });
     if (!rec) return json({ ok: false, error: "Not found" }, 404);
@@ -147,7 +164,7 @@ export async function GET(req: NextRequest) {
       let attempts = 0;
       while (attempts < 3) {
         try {
-          const dataToUpdate: any = {};
+          const dataToUpdate: TableCodesUpdate = {};
           if (!rec.qrCode) dataToUpdate.qrCode = generateQr();
           if (!rec.validationCode)
             dataToUpdate.validationCode = generateValidationCode();

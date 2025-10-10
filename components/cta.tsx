@@ -48,11 +48,11 @@ export function CTA() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-6 pt-4">
               <div className="flex items-center gap-3 text-primary-foreground/90">
                 <Calendar className="w-5 h-5" />
-                <span className="font-medium">Domingo</span>
+                <span className="font-medium">Domingo 2 de noviembre</span>
               </div>
               <div className="flex items-center gap-3 text-primary-foreground/90">
                 <MapPin className="w-5 h-5" />
-                <span className="font-medium">Zona Norte</span>
+                <span className="font-medium">Ubicación secreta</span>
               </div>
             </div>
 
@@ -61,7 +61,8 @@ export function CTA() {
               <Button
                 size="lg"
                 onClick={() => setTicketModalOpen(true)}
-                className="text-lg px-10 py-7 rounded-full bg-primary-foreground text-primary font-bold tracking-wide hover:scale-105 transition-transform shadow-2xl hover:shadow-primary-foreground/50"
+                className="text-lg px-10 py-7 rounded-full bg-primary-foreground text-primary font-bold tracking-wide hover:scale-105 transition-transform shadow-2xl hover:shadow-primary-foreground/50 hover:bg-primary hover:text-primary-foreground"
+                //                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ <-- Corrección aquí
               >
                 <Ticket className="w-5 h-5 mr-2" />
                 Comprar Entradas

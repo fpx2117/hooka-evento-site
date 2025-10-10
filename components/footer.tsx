@@ -26,7 +26,7 @@ export function Footer() {
               </div>
             </div>
             <p className="text-sm opacity-80 leading-relaxed">
-              La mejor fiesta de la ciudad. Música, diversión y verano todo el
+              La mejor fiesta de Zona Norte. Música, diversión y verano todo el
               año.
             </p>
           </div>
@@ -38,7 +38,7 @@ export function Footer() {
               <div className="flex items-start gap-3">
                 <Clock className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <p>
-                  Domingo
+                  2 de Noviembre
                   <br />
                   10am - 18pm
                 </p>
@@ -58,7 +58,6 @@ export function Footer() {
               <div className="flex items-center gap-3">
                 <Mail className="w-5 h-5 flex-shrink-0" />
                 <p>info@hooka.com.ar</p>
-                <p>info@vasconceldiego.com</p>
               </div>
             </div>
           </div>
