@@ -27,7 +27,7 @@ interface TicketSalesModalProps {
 }
 
 const PRICES = {
-  hombre: 13000,
+  hombre: 100,
   mujer: 11000,
 } as const;
 
