@@ -1,19 +1,17 @@
-"use client"
+"use client";
 
 export function BrandCarousel() {
   const brands = [
-    { name: "Absolut", logo: "/absolut-vodka-logo.jpg" },
-    { name: "Smirnoff", logo: "/smirnoff-logo.jpg" },
-    { name: "Bacardi", logo: "/bacardi-logo.jpg" },
-    { name: "Heineken", logo: "/stylized-green-star.png" },
-    { name: "Corona", logo: "/corona-beer-logo.jpg" },
-    { name: "Red Bull", logo: "/red-bull-logo.jpg" },
-    { name: "Campari", logo: "/campari-logo.jpg" },
-    { name: "Jagermeister", logo: "/jagermeister-logo.jpg" },
-  ]
+    { name: "Absolut", logo: "/absolut-vodka-logo.png" },
+    { name: "Smirnoff", logo: "/smirnoff-logo.png" },
+    { name: "Fernet", logo: "/fernet-logo.png" },
+    { name: "Skyy", logo: "/Sky-vodka.png" },
+    { name: "Corona", logo: "/corona-beer-logo.png" },
+    { name: "Speed", logo: "/speed-unlimited-seeklogo.png" },
+  ];
 
   // Duplicate brands for seamless loop
-  const duplicatedBrands = [...brands, ...brands]
+  const duplicatedBrands = [...brands, ...brands];
 
   return (
     <section className="py-16 bg-background/50 overflow-hidden">
@@ -40,5 +38,5 @@ export function BrandCarousel() {
         </div>
       </div>
     </section>
-  )
+  );
 }
