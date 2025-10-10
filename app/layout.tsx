@@ -3,17 +3,15 @@ import type { Metadata } from "next";
 import { Poppins, Bebas_Neue } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { Suspense } from "react";
-import Providers from "./providers"; // <-- archivo que provee QueryClientProvider
+import Providers from "./providers";
 import "./globals.css";
 
-// Fuentes Google con variables CSS
 const poppins = Poppins({
   subsets: ["latin"],
   weight: ["300", "400", "500", "600", "700", "800"],
   variable: "--font-poppins",
   display: "swap",
 });
-
 const bebasNeue = Bebas_Neue({
   subsets: ["latin"],
   weight: ["400"],
@@ -22,28 +20,41 @@ const bebasNeue = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "Hooka Party - ¡Vive el Verano!",
+  metadataBase: new URL("https://hooka.com.ar"),
+  title: {
+    default: "Hooka Party - ¡Vive el Verano!",
+    template: "%s | Hooka Party",
+  },
   description:
     "El mejor boliche tropical con pool party, música, fiesta y verano. Fiesta de la espuma, Neon Party, Cumbia Night, RKT Session y más.",
-  generator: "v0.app",
-  metadataBase: new URL("https://hooka.com.ar"), // ajustá dominio
   openGraph: {
-    title: "Hooka Party - ¡Vive el Verano!",
-    description:
-      "¡Vení a disfrutar de la mejor fiesta tropical del verano! Música, piscina, espuma, luces y diversión sin fin.",
-    url: "https://hooka.com.ar",
+    type: "website",
+    url: "/",
     siteName: "Hooka Party",
     locale: "es_ES",
-    type: "website",
+    title: "Hooka Party - ¡Vive el Verano!",
+    description: "¡Vení a disfrutar de la mejor fiesta tropical del verano!",
   },
+  alternates: { canonical: "/" },
 };
 
-// Layout raíz
 export default function RootLayout({
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="es" suppressHydrationWarning>
+      <head>
+        {/* Favicon clásico desde /public */}
+        <link rel="icon" href="/logo.png" />
+        {/* Si preferís PNG en /public/icon.png, usá esta en lugar de la anterior: */}
+        {/* <link rel="icon" href="/icon.png" type="image/png" sizes="32x32" /> */}
+
+        {/* Opcional: iOS y manifest si los agregás en /public */}
+        {/* <link rel="apple-touch-icon" href="/apple-touch-icon.png" /> */}
+        {/* <link rel="manifest" href="/site.webmanifest" /> */}
+      </head>
       <body
         className={`min-h-screen bg-white text-gray-900 dark:bg-[#0a0a0a] dark:text-gray-100 antialiased ${poppins.variable} ${bebasNeue.variable}`}
       >
