@@ -151,8 +151,8 @@ export function Hero() {
           </div>
 
           <p className="text-base sm:text-lg md:text-xl text-primary-foreground/80 max-w-2xl mx-auto leading-relaxed px-4">
-            La mejor fiesta bajo las estrellas. Música, diversión y energía
-            tropical todas las noches.
+            La mejor fiesta de zona norte. Música, diversión y energía para
+            disfrutar al máximo.
           </p>
 
           <div className="flex items-center justify-center pt-6 md:pt-8 px-4">

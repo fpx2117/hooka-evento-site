@@ -44,6 +44,7 @@ import {
   ArrowUpDown,
   Search,
   TrendingUp,
+  Mail, // <- NUEVO
 } from "lucide-react";
 import QRCode from "qrcode";
 
@@ -162,12 +163,16 @@ function TicketRow({
   onEdit,
   onDelete,
   onShowQr,
+  onSendEmail, // <- NUEVO
+  sending = false, // <- NUEVO
 }: {
   ticket: AdminTicket;
   onApprove: (t: AdminTicket) => void;
   onEdit: (t: AdminTicket) => void;
   onDelete: (id: string) => void;
   onShowQr: (code: string) => void;
+  onSendEmail: (t: AdminTicket) => void; // <- NUEVO
+  sending?: boolean; // <- NUEVO
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
 
@@ -288,6 +293,22 @@ function TicketRow({
               Aprobar
             </Button>
           )}
+
+          {/* NUEVO: Enviar mail (solo con pago aprobado) */}
+          {ticket.paymentStatus === "approved" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSendEmail(ticket)}
+              disabled={sending}
+              className="border-border/50"
+              title="Enviar email de confirmación"
+            >
+              <Mail className="w-4 h-4 mr-1.5" />
+              {sending ? "Enviando…" : "Enviar mail"}
+            </Button>
+          )}
+
           <Button
             variant="ghost"
             size="sm"
@@ -389,6 +410,9 @@ export default function AdminDashboard() {
   const [qrModalOpen, setQrModalOpen] = useState(false);
   const [qrModalCode, setQrModalCode] = useState<string | null>(null);
   const [qrModalSrc, setQrModalSrc] = useState<string | null>(null);
+
+  // NUEVO: estado de envío por fila
+  const [sendingId, setSendingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTickets();
@@ -745,6 +769,39 @@ export default function AdminDashboard() {
 
     return arr;
   }, [tickets, q, fStatus, fType, fGender, fPay, orderBy, order]);
+
+  // NUEVO: enviar email de confirmación (solo approved)
+  const sendConfirmationEmail = async (ticket: AdminTicket) => {
+    if (ticket.paymentStatus !== "approved") {
+      alert("Solo se puede enviar el mail cuando el pago está aprobado.");
+      return;
+    }
+    setSendingId(ticket.id);
+    try {
+      const r = await fetch("/api/send-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: ticket.ticketType === "vip" ? "vip-table" : "ticket",
+          recordId: ticket.id,
+        }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        console.error("[dashboard] send mail error:", err);
+        alert(err?.error || "No se pudo enviar el mail.");
+        return;
+      }
+
+      alert("Email de confirmación enviado ✅");
+    } catch (e) {
+      console.error("[dashboard] send mail error:", e);
+      alert("Ocurrió un error enviando el mail.");
+    } finally {
+      setSendingId(null);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-50 dark:from-slate-950 dark:via-blue-950/20 dark:to-slate-950">
@@ -1112,6 +1169,8 @@ export default function AdminDashboard() {
                           setQrModalCode(c);
                           setQrModalOpen(true);
                         }}
+                        onSendEmail={sendConfirmationEmail} // <- NUEVO
+                        sending={sendingId === t.id} // <- NUEVO
                       />
                     ))}
                   </tbody>
@@ -1655,7 +1714,7 @@ export default function AdminDashboard() {
 
           <form onSubmit={saveConfig} className="space-y-6 pt-4">
             {/* STOCK TOTAL (PERSONAS) */}
-            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg-black/20">
+            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg:black/20">
               <div className="flex items-center justify-between">
                 <h4 className="font-semibold text-lg">
                   Stock TOTAL (personas)

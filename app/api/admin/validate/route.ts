@@ -72,11 +72,28 @@ export async function POST(req: NextRequest) {
   if (!code) return json({ ok: false, error: "code_required" }, 400);
   if (isDev) console.log("[validate][POST] code:", code);
 
+  // 1) Buscamos el ticket (solo con los campos necesarios para decidir)
   const ticket = await prisma.ticket.findUnique({
     where: { validationCode: code },
+    select: {
+      id: true,
+      validationCode: true,
+      paymentStatus: true,
+      validated: true,
+      validatedAt: true,
+      customerName: true,
+      customerEmail: true,
+      customerPhone: true,
+      customerDni: true,
+      ticketType: true,
+      purchaseDate: true,
+      eventDate: true,
+    },
   });
+
   if (!ticket) return json({ ok: false, error: "not_found" }, 404);
 
+  // 2) Si el pago no está aprobado, no validamos
   if (ticket.paymentStatus !== "approved") {
     return json(
       {
@@ -89,27 +106,34 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (ticket.validated) {
+  // 3) Intento atómico de marcar como validado (solo si aún no lo está)
+  const now = new Date();
+  const result = await prisma.ticket.updateMany({
+    where: { id: ticket.id, validated: false },
+    data: { validated: true, validatedAt: now },
+  });
+
+  // Si count = 0, alguien lo validó “entre medio” → ya utilizado
+  if (result.count === 0) {
+    // refrescamos para devolver el estado actual
+    const latest = await prisma.ticket.findUnique({ where: { id: ticket.id } });
     return json(
       {
         ok: false,
         error: "already_validated",
-        validatedAt: ticket.validatedAt,
-        ticket: serialize(ticket),
+        validatedAt: latest?.validatedAt ?? ticket.validatedAt,
+        ticket: serialize(latest ?? ticket),
       },
       409
     );
   }
 
-  const updated = await prisma.ticket.update({
-    where: { id: ticket.id },
-    data: { validated: true, validatedAt: new Date() },
-  });
-
+  // 4) Éxito — devolvemos el ticket actualizado
+  const updated = await prisma.ticket.findUnique({ where: { id: ticket.id } });
   return json({
     ok: true,
     validated: true,
-    validatedAt: updated.validatedAt,
-    ticket: serialize(updated),
+    validatedAt: updated?.validatedAt ?? now,
+    ticket: serialize(updated ?? ticket),
   });
 }

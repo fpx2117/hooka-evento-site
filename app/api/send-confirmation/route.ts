@@ -14,10 +14,38 @@ function cap(str?: string | null) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-async function makeQrDataUrl(text?: string | null) {
-  if (!text) return null;
+function isHttpsPublicUrl(url?: string | null) {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return /^https:\/\/[^ ]+$/i.test(trimmed);
+}
+
+/** Infiero BASE pública (útil con Railway/ngrok si olvidaste NEXT_PUBLIC_BASE_URL). */
+function getPublicBaseUrl(req: NextRequest) {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+  if (isHttpsPublicUrl(envBase)) return envBase!;
+  const proto = req.headers.get("x-forwarded-proto") || "http";
+  const host =
+    req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  // Si viene https en el proxy, armamos https. Si no, queda http (igual QR funciona).
+  const guessed = `${proto}://${host}`;
+  return guessed.replace(/\/+$/, "");
+}
+
+/** URL que queremos codificar en el QR.
+ *  Elegímos endpoint público de validación directa (API):
+ *    https://BASE/validate?code=XXXXXX
+ *  Si preferís abrir una página de UI (por ejemplo /admin/validate), cambiá la ruta acá.
+ */
+function buildValidateUrl(base: string, code: string) {
+  const origin = base.replace(/\/+$/, "");
+  const c = encodeURIComponent(code);
+  return `${origin}/validate?code=${c}`;
+}
+
+async function makeQrDataUrlFromValidateUrl(url: string) {
   try {
-    return await QRCode.toDataURL(text, {
+    return await QRCode.toDataURL(url, {
       width: 400,
       margin: 2,
       color: { dark: "#000000", light: "#FFFFFF" },
@@ -61,6 +89,7 @@ function emailTemplate({
       .code { font-size: 36px; font-weight: bold; letter-spacing: 5px; }
       .info { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
       .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+      a { color: #06b6d4; }
     </style>
   </head>
   <body>
@@ -91,7 +120,7 @@ function emailTemplate({
                 <h3>Tu Código QR</h3>
                 <img src="${qrCodeImage}" alt="QR Code" style="max-width: 300px; width: 100%;">
                 <p style="font-size: 12px; color: #666; margin-top: 10px;">
-                  Escaneá este QR al ingresar al evento
+                  Este QR contiene el enlace de verificación con tu código.
                 </p>
               </div>`
             : ""
@@ -134,12 +163,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // BASE pública para armar la URL del QR
+    const BASE = getPublicBaseUrl(request);
+
     // Creamos Resend en runtime; si no hay API key, simulamos
     const apiKey = process.env.RESEND_API_KEY?.trim();
     const from =
       process.env.RESEND_FROM?.trim() || "Hooka Party <info@hooka.com.ar>";
     const resend = apiKey ? new Resend(apiKey) : null;
 
+    // ========= ENTRADA (ticket) =========
     if (type === "ticket") {
       const t = await prisma.ticket.findUnique({
         where: { id: recordId },
@@ -149,7 +182,7 @@ export async function POST(request: NextRequest) {
           ticketType: true, // "general" | "vip"
           gender: true, // "hombre" | "mujer" | null
           validationCode: true,
-          qrCode: true,
+          qrCode: true, // legacy/ignorado para QR de email
           totalPrice: true,
           paymentStatus: true,
           event: { select: { name: true, date: true } },
@@ -160,6 +193,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { error: "Ticket no encontrado" },
           { status: 404 }
+        );
+      }
+
+      // Si el pago no está aprobado, no enviamos (opcional)
+      if (t.paymentStatus !== PS.approved) {
+        return NextResponse.json(
+          { error: "El pago no está aprobado para este ticket" },
+          { status: 409 }
         );
       }
 
@@ -180,15 +221,18 @@ export async function POST(request: NextRequest) {
               ? `<strong>Género:</strong> ${genreLabel}<br>`
               : ""
           }
-          <strong>Fecha:</strong> ${dateStr}<br>
+       
           <strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br>
-          <strong>Estado:</strong> ${t.paymentStatus}
+          
         </div>`;
 
-      // QR: priorizamos qrCode; si no hay, usamos validationCode
-      const qrImage =
-        (await makeQrDataUrl(t.qrCode)) ||
-        (await makeQrDataUrl(t.validationCode));
+      // ✅ Armamos URL de validación con el validationCode y generamos el QR con esa URL
+      const validateUrl = t.validationCode
+        ? buildValidateUrl(BASE, t.validationCode)
+        : null;
+      const qrImage = validateUrl
+        ? await makeQrDataUrlFromValidateUrl(validateUrl)
+        : null;
 
       const html = emailTemplate({
         title,
@@ -204,7 +248,11 @@ export async function POST(request: NextRequest) {
         console.warn(
           "[send-confirmation] RESEND_API_KEY no configurada — simulación OK"
         );
-        return NextResponse.json({ success: true, simulated: true });
+        return NextResponse.json({
+          success: true,
+          simulated: true,
+          validateUrl,
+        });
       }
 
       const res = await resend.emails.send({
@@ -222,21 +270,21 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, validateUrl });
     }
 
-    // ========= VIP TABLE =========
+    // ========= MESA VIP (vip-table) =========
     if (type === "vip-table") {
       const r = await prisma.tableReservation.findUnique({
         where: { id: recordId },
         select: {
           customerName: true,
           customerEmail: true,
-          packageType: true, // <- tu modelo
-          tables: true, // por si a futuro permitís >1, hoy es 1
+          packageType: true,
+          tables: true,
           capacity: true,
           validationCode: true,
-          qrCode: true,
+          qrCode: true, // legacy/ignorado para QR de email
           totalPrice: true,
           paymentStatus: true,
           event: { select: { name: true, date: true } },
@@ -250,6 +298,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      if (r.paymentStatus !== PS.approved) {
+        return NextResponse.json(
+          { error: "El pago no está aprobado para esta reserva" },
+          { status: 409 }
+        );
+      }
+
       const title = `🌴 ${r.event?.name || "Hooka Party"} 🌴`;
       const typeLabel = "Mesa VIP";
 
@@ -259,18 +314,20 @@ export async function POST(request: NextRequest) {
 
       const detailsHtml = `
         <div class="info">
-          <strong>Tipo:</strong> ${typeLabel}<br>
-          <strong>Paquete:</strong> ${cap(r.packageType)}<br>
+          
           <strong>Mesas:</strong> ${r.tables || 1}<br>
           <strong>Capacidad (ref):</strong> ${r.capacity || 0} personas<br>
-          <strong>Fecha:</strong> ${dateStr}<br>
           <strong>Total:</strong> $ ${formatARS(r.totalPrice)}<br>
-          <strong>Estado:</strong> ${r.paymentStatus}
+          
         </div>`;
 
-      const qrImage =
-        (await makeQrDataUrl(r.qrCode)) ||
-        (await makeQrDataUrl(r.validationCode));
+      // ✅ URL de validación con validationCode
+      const validateUrl = r.validationCode
+        ? buildValidateUrl(BASE, r.validationCode)
+        : null;
+      const qrImage = validateUrl
+        ? await makeQrDataUrlFromValidateUrl(validateUrl)
+        : null;
 
       const html = emailTemplate({
         title,
@@ -285,7 +342,11 @@ export async function POST(request: NextRequest) {
         console.warn(
           "[send-confirmation] RESEND_API_KEY no configurada — simulación OK"
         );
-        return NextResponse.json({ success: true, simulated: true });
+        return NextResponse.json({
+          success: true,
+          simulated: true,
+          validateUrl,
+        });
       }
 
       const res = await resend.emails.send({
@@ -303,7 +364,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, validateUrl });
     }
 
     return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });
