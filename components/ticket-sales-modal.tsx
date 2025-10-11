@@ -18,11 +18,14 @@ import {
   Mail,
   Phone,
   Award as IdCard,
+  Percent,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 /* =========================
-   Tipos mínimos de la API de config
+   Tipos mínimos de la API
 ========================= */
 type TicketsConfig = {
   tickets: {
@@ -37,14 +40,23 @@ type TicketsConfig = {
     };
   };
   totals?: {
-    remainingPersons?: number; // opcional, si tu API lo expone
+    remainingPersons?: number;
   };
+};
+
+type DiscountRule = {
+  id?: string;
+  ticketType: "general" | "vip";
+  minQty: number;
+  type: "percent" | "amount"; // descuento SOBRE EL TOTAL
+  value: number; // % o $ (según type)
+  priority?: number;
+  isActive: boolean;
 };
 
 interface TicketSalesModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-
   configEndpoint?: string;
 }
 
@@ -72,6 +84,10 @@ export function TicketSalesModal({
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgError, setCfgError] = useState<string | null>(null);
 
+  // ======= Reglas de descuento (general) =======
+  const [rules, setRules] = useState<DiscountRule[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+
   // ======= Datos del cliente =======
   const [customerInfo, setCustomerInfo] = useState({
     name: "",
@@ -80,6 +96,8 @@ export function TicketSalesModal({
     dni: "",
     gender: "" as "" | GenderKey,
   });
+  const [quantity, setQuantity] = useState<number>(1);
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<{ [k: string]: string }>({});
 
@@ -91,9 +109,7 @@ export function TicketSalesModal({
       setCfgLoading(true);
       setCfgError(null);
 
-      // Intento #2 (fallback silencioso): /api/admin/tickets/config por si sólo existe ese
       const tryEndpoints = [configEndpoint, "/api/admin/tickets/config"];
-
       for (const ep of tryEndpoints) {
         try {
           const r = await fetch(ep, { cache: "no-store" });
@@ -105,7 +121,6 @@ export function TicketSalesModal({
           setPriceH(data?.tickets?.general?.hombre?.price ?? 0);
           setPriceM(data?.tickets?.general?.mujer?.price ?? 0);
 
-          // Si tu API expone un total de restantes, lo mostramos (no bloquea pago)
           const rem =
             data?.totals?.remainingPersons ??
             data?.tickets?.general?.hombre?.remaining ??
@@ -128,17 +143,99 @@ export function TicketSalesModal({
       }
     }
 
-    if (open) loadConfig();
+    async function loadDiscounts() {
+      setRulesLoading(true);
+      try {
+        const r = await fetch(
+          "/api/admin/tickets/discounts?ticketType=general&isActive=true",
+          { cache: "no-store" }
+        );
+        if (!r.ok) {
+          setRules([]);
+          return;
+        }
+        const data = await r.json();
+        const list: DiscountRule[] = Array.isArray(data?.rules)
+          ? data.rules
+          : [];
+        // nos quedamos solo con general activas por si la API devolviera más
+        setRules(
+          list
+            .filter((d) => d.ticketType === "general" && d.isActive)
+            .map((d) => ({
+              ...d,
+              value: Number(d.value) || 0,
+            }))
+        );
+      } catch {
+        setRules([]);
+      } finally {
+        setRulesLoading(false);
+      }
+    }
+
+    if (open) {
+      loadConfig();
+      loadDiscounts();
+    }
     return () => {
       cancelled = true;
     };
   }, [open, configEndpoint]);
 
-  // ======= Precio actual según género elegido =======
-  const ticketPrice = useMemo(() => {
+  // ======= Precio unitario según género elegido =======
+  const unitPrice = useMemo(() => {
     if (!customerInfo.gender) return 0;
     return customerInfo.gender === "hombre" ? priceH || 0 : priceM || 0;
   }, [customerInfo.gender, priceH, priceM]);
+
+  // ======= Descuento sobre TOTAL: elegimos la mejor regla =======
+  const { subtotal, bestRule, discountAmount, totalToPay } = useMemo(() => {
+    const q = Math.max(1, quantity || 1);
+    const sub = Math.max(0, (unitPrice || 0) * q);
+
+    // elegimos la mejor regla que cumpla minQty <= q
+    const candidates = rules.filter((r) => r.minQty <= q);
+
+    // función para calcular cuánto descuenta una regla sobre el total
+    const computeDiscount = (r: DiscountRule) => {
+      const val = Number(r.value) || 0;
+      if (val <= 0) return 0;
+      if (r.type === "percent") {
+        return Math.floor((sub * val) / 100);
+      }
+      // amount => monto fijo sobre el total (capado a subtotal)
+      return Math.min(val, sub);
+    };
+
+    let chosen: DiscountRule | null = null;
+    let bestDisc = 0;
+
+    for (const r of candidates) {
+      const disc = computeDiscount(r);
+      if (disc > bestDisc) {
+        bestDisc = disc;
+        chosen = r;
+      } else if (disc === bestDisc && disc > 0) {
+        // desempate por mayor priority
+        const pa = (chosen?.priority ?? 0) as number;
+        const pb = (r.priority ?? 0) as number;
+        if (pb > pa) {
+          chosen = r;
+          bestDisc = disc;
+        }
+      }
+    }
+
+    const total = Math.max(0, sub - bestDisc);
+
+    return {
+      subtotal: sub,
+      bestRule: chosen,
+      discountAmount: bestDisc,
+      totalToPay: total,
+    };
+  }, [rules, quantity, unitPrice]);
 
   // ======= Validaciones =======
   const validate = () => {
@@ -147,22 +244,23 @@ export function TicketSalesModal({
     if (!customerInfo.name.trim()) e.name = "Ingresá tu nombre completo";
     if (!customerInfo.gender) e.gender = "Seleccioná tu género";
 
-    // email simple
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerInfo.email))
       e.email = "Ingresá un email válido";
 
-    // DNI: solo dígitos, 7-9 aprox (flexible)
     const dniDigits = cleanDigits(customerInfo.dni);
     if (!dniDigits) e.dni = "Ingresá tu DNI";
     else if (dniDigits.length < 7 || dniDigits.length > 9)
       e.dni = "DNI inválido";
 
-    // Phone: solo dígitos, longitud mínima flexible
     const phoneDigits = cleanDigits(customerInfo.phone);
     if (!phoneDigits) e.phone = "Ingresá tu celular";
     else if (phoneDigits.length < 8) e.phone = "Celular inválido";
 
-    if (!ticketPrice) e.price = "Precio no disponible, intentá nuevamente.";
+    if (!unitPrice) e.price = "Precio no disponible, intentá nuevamente.";
+    if (quantity < 1) e.quantity = "La cantidad debe ser al menos 1";
+    if (typeof remaining === "number" && quantity > remaining) {
+      e.quantity = `Solo hay ${remaining} disponibles`;
+    }
 
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -180,8 +278,8 @@ export function TicketSalesModal({
           {
             title: `Entrada General - ${customerInfo.gender === "hombre" ? "Hombre" : "Mujer"}`,
             description: "Entrada General",
-            quantity: 1,
-            unit_price: ticketPrice, // ✅ precio desde BD
+            quantity, // ✅ cantidad seleccionada
+            unit_price: unitPrice, // display: el servidor calcula el real
           },
         ],
         payer: {
@@ -192,10 +290,12 @@ export function TicketSalesModal({
           additionalInfo: {
             ticketType: "general",
             gender: customerInfo.gender,
-            quantity: 1,
+            quantity, // ✅ lo ve también el backend
           },
         },
         type: "ticket" as const,
+        // opcional: podrías enviar un preview de descuento para auditoría UI
+        // discount_preview: { ruleId: bestRule?.id, discountAmount },
       };
 
       const res = await fetch("/api/create-payment", {
@@ -232,6 +332,13 @@ export function TicketSalesModal({
       setIsProcessing(false);
     }
   };
+
+  // helpers cantidad
+  const decQty = () => setQuantity((q) => Math.max(1, q - 1));
+  const incQty = () =>
+    setQuantity((q) =>
+      typeof remaining === "number" ? Math.min(remaining, q + 1) : q + 1
+    );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -417,24 +524,113 @@ export function TicketSalesModal({
             </div>
           </div>
 
+          {/* Cantidad */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2">
+              <Ticket className="w-4 h-4" />
+              Cantidad de entradas
+            </Label>
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 w-10 p-0"
+                onClick={decQty}
+                disabled={quantity <= 1}
+                aria-label="Restar"
+                title="Restar"
+              >
+                <Minus className="w-4 h-4" />
+              </Button>
+              <Input
+                value={quantity}
+                onChange={(e) => {
+                  const v = Math.max(1, Number(e.target.value) || 1);
+                  if (typeof remaining === "number") {
+                    setQuantity(Math.min(remaining, v));
+                  } else {
+                    setQuantity(v);
+                  }
+                }}
+                type="number"
+                min={1}
+                className="h-12 text-center font-semibold"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 w-10 p-0"
+                onClick={incQty}
+                disabled={
+                  typeof remaining === "number" && quantity >= remaining
+                }
+                aria-label="Sumar"
+                title="Sumar"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
+            {errors.quantity && (
+              <p className="text-sm text-red-600">{errors.quantity}</p>
+            )}
+          </div>
+
           {/* Summary + Pay */}
           <div className="bg-gradient-to-r from-primary/10 to-secondary/10 rounded-xl p-6 space-y-4 border-2 border-primary/20">
-            <div className="flex justify-between items-center text-2xl">
-              <span className="font-bold">Total a pagar:</span>
-              <span className="font-bold text-primary">
-                ${formatMoney(ticketPrice)}
-              </span>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="font-bold">Precio unitario</span>
+                <span>${formatMoney(unitPrice)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold">Cantidad</span>
+                <span>{quantity}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold">Subtotal</span>
+                <span>${formatMoney(subtotal)}</span>
+              </div>
+
+              {bestRule && discountAmount > 0 && (
+                <div className="flex justify-between items-center text-emerald-700 dark:text-emerald-300">
+                  <span className="inline-flex items-center gap-2">
+                    <Percent className="w-4 h-4" />
+                    Descuento{" "}
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40">
+                      {bestRule.type === "percent"
+                        ? `${bestRule.value}%`
+                        : `$${formatMoney(bestRule.value)}`}
+                    </span>
+                    {bestRule.minQty > 1 && (
+                      <span className="text-xs text-muted-foreground">
+                        (desde {bestRule.minQty})
+                      </span>
+                    )}
+                  </span>
+                  <span>- ${formatMoney(discountAmount)}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between text-2xl pt-2 border-t">
+                <span className="font-bold">Total a pagar</span>
+                <span className="font-bold text-primary">
+                  ${formatMoney(totalToPay)}
+                </span>
+              </div>
             </div>
+
             <Button
               size="lg"
               onClick={handleCheckout}
               disabled={
                 isProcessing ||
                 cfgLoading ||
+                rulesLoading ||
                 !!cfgError ||
                 !customerInfo.gender ||
-                (customerInfo.gender === "hombre" && !priceH) ||
-                (customerInfo.gender === "mujer" && !priceM)
+                !unitPrice ||
+                quantity < 1 ||
+                (typeof remaining === "number" && quantity > remaining)
               }
               className="w-full text-lg py-6 rounded-full bg-gradient-to-r from-primary via-secondary to-accent hover:scale-105 transition-transform disabled:opacity-60"
             >

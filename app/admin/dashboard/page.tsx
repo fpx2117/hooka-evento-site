@@ -5,6 +5,7 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import DiscountsModal from "@/components/DiscountsModal";
 import {
   Card,
   CardContent,
@@ -44,7 +45,7 @@ import {
   ArrowUpDown,
   Search,
   TrendingUp,
-  Mail, // <- NUEVO
+  Mail,
 } from "lucide-react";
 import QRCode from "qrcode";
 
@@ -98,6 +99,16 @@ type AdminForm = {
   totalPrice: number;
 };
 
+type DiscountCfg = {
+  id?: string;
+  ticketType: "general" | "vip";
+  minQty: number;
+  type: "percent" | "amount";
+  value: number;
+  priority?: number;
+  isActive?: boolean;
+};
+
 // ✅ TicketsConfig con TOTAL en personas + VIP en personas
 type TicketsConfig = {
   eventId: string;
@@ -121,12 +132,12 @@ type TicketsConfig = {
       mujer?: { price: number; limit: number; sold: number; remaining: number };
     };
     vip?: {
-      price: number; // precio por mesa
+      price: number;
       limit: number; // PERSONAS
       sold: number; // PERSONAS
       remaining: number; // PERSONAS
-      unitSize: number; // personas por mesa
-      remainingTables: number; // mesas restantes
+      unitSize: number;
+      remainingTables: number;
     };
   };
   vipTables: Array<{
@@ -137,6 +148,7 @@ type TicketsConfig = {
     remaining: number;
     capacityPerTable?: number | null;
   }>;
+  discounts?: DiscountCfg[];
 };
 
 /* =========================
@@ -144,7 +156,9 @@ type TicketsConfig = {
 ========================= */
 function buildValidateUrl(code: string) {
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/admin/validate?code=${encodeURIComponent(code)}`;
+    return `${window.location.origin}/admin/validate?code=${encodeURIComponent(
+      code
+    )}`;
   }
   return `/admin/validate?code=${encodeURIComponent(code)}`;
 }
@@ -163,16 +177,16 @@ function TicketRow({
   onEdit,
   onDelete,
   onShowQr,
-  onSendEmail, // <- NUEVO
-  sending = false, // <- NUEVO
+  onSendEmail,
+  sending = false,
 }: {
   ticket: AdminTicket;
   onApprove: (t: AdminTicket) => void;
   onEdit: (t: AdminTicket) => void;
   onDelete: (id: string) => void;
   onShowQr: (code: string) => void;
-  onSendEmail: (t: AdminTicket) => void; // <- NUEVO
-  sending?: boolean; // <- NUEVO
+  onSendEmail: (t: AdminTicket) => void;
+  sending?: boolean;
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
 
@@ -293,8 +307,6 @@ function TicketRow({
               Aprobar
             </Button>
           )}
-
-          {/* NUEVO: Enviar mail (solo con pago aprobado) */}
           {ticket.paymentStatus === "approved" && (
             <Button
               variant="outline"
@@ -308,7 +320,6 @@ function TicketRow({
               {sending ? "Enviando…" : "Enviar mail"}
             </Button>
           )}
-
           <Button
             variant="ghost"
             size="sm"
@@ -343,6 +354,20 @@ export default function AdminDashboard() {
   const [cfg, setCfg] = useState<TicketsConfig | null>(null);
   const [cfgLoading, setCfgLoading] = useState(true);
 
+  // Discounts
+  const [discounts, setDiscounts] = useState<DiscountCfg[]>([]);
+  const [showDiscountsModal, setShowDiscountsModal] = useState(false);
+  const [creatingDiscount, setCreatingDiscount] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [discountForm, setDiscountForm] = useState({
+    ticketType: "general" as "general" | "vip",
+    minQty: 4,
+    type: "percent" as "percent" | "amount",
+    value: 10,
+    priority: 0,
+    isActive: "true" as "true" | "false",
+  });
+
   // Filtros
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState<
@@ -358,7 +383,7 @@ export default function AdminDashboard() {
   );
   const [order, setOrder] = useState<"desc" | "asc">("desc");
 
-  // Modales
+  // Modales existentes
   const [showAddGeneral, setShowAddGeneral] = useState(false);
   const [showAddVip, setShowAddVip] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -382,7 +407,7 @@ export default function AdminDashboard() {
     customerPhone: "",
     customerDni: "",
     paymentMethod: "efectivo",
-    quantity: 1, // MESAS
+    quantity: 1,
   });
 
   // Form editar ticket
@@ -403,7 +428,7 @@ export default function AdminDashboard() {
     genHPrice: 0,
     genMPrice: 0,
     vipPrice: 0,
-    vipLimitPersons: 0, // PERSONAS (ej: 20 mesas * 10 = 200)
+    vipLimitPersons: 0,
   });
 
   // Modal QR grande
@@ -411,7 +436,7 @@ export default function AdminDashboard() {
   const [qrModalCode, setQrModalCode] = useState<string | null>(null);
   const [qrModalSrc, setQrModalSrc] = useState<string | null>(null);
 
-  // NUEVO: estado de envío por fila
+  // estado de envío por fila
   const [sendingId, setSendingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -441,19 +466,22 @@ export default function AdminDashboard() {
     }
   };
 
-  // ✅ Lee totals y VIP en PERSONAS
+  // ✅ Lee totals, VIP (PERSONAS) y discounts
   const fetchConfig = async () => {
     try {
-      const r = await fetch(`/api/admin/tickets/config`, { cache: "no-store" });
+      const r = await fetch(`/api/admin/tickets/config`, {
+        cache: "no-store",
+      });
       if (r.ok) {
         const data: TicketsConfig = await r.json();
         setCfg(data);
+        setDiscounts((data as any).discounts || []);
         setConfigForm({
           totalLimitPersons: data.totals?.limitPersons ?? 0,
           genHPrice: data.tickets.general.hombre?.price ?? 0,
           genMPrice: data.tickets.general.mujer?.price ?? 0,
           vipPrice: data.tickets.vip?.price ?? 0,
-          vipLimitPersons: data.tickets.vip?.limit ?? 0, // PERSONAS
+          vipLimitPersons: data.tickets.vip?.limit ?? 0,
         });
       }
     } catch (e) {
@@ -642,7 +670,7 @@ export default function AdminDashboard() {
     try {
       const payload = {
         ticketType: "vip",
-        quantity: formVip.quantity, // mesas
+        quantity: formVip.quantity,
         customerName: formVip.customerName,
         customerEmail: formVip.customerEmail,
         customerPhone: formVip.customerPhone,
@@ -704,14 +732,14 @@ export default function AdminDashboard() {
     e.preventDefault();
     try {
       const payload = {
-        totalEntriesLimit: Number(configForm.totalLimitPersons), // STOCK TOTAL (personas)
+        totalEntriesLimit: Number(configForm.totalLimitPersons),
         general: {
           hombre: { price: Number(configForm.genHPrice) },
           mujer: { price: Number(configForm.genMPrice) },
         },
         vip: {
-          price: Number(configForm.vipPrice), // precio por mesa
-          stockLimit: Number(configForm.vipLimitPersons), // PERSONAS
+          price: Number(configForm.vipPrice),
+          stockLimit: Number(configForm.vipLimitPersons),
         },
       };
 
@@ -733,6 +761,94 @@ export default function AdminDashboard() {
     } catch (e) {
       console.error("[dashboard] Error saving config:", e);
       alert("Ocurrió un error guardando la configuración");
+    }
+  };
+
+  // ======= Descuentos =======
+  const sortedDiscounts = useMemo(() => {
+    const list = [...discounts];
+    list.sort((a, b) => {
+      if (a.ticketType !== b.ticketType)
+        return a.ticketType < b.ticketType ? -1 : 1;
+      if ((b.minQty || 0) !== (a.minQty || 0))
+        return (b.minQty || 0) - (a.minQty || 0);
+      return (b.priority || 0) - (a.priority || 0);
+    });
+    return list;
+  }, [discounts]);
+
+  const createDiscount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingDiscount(true);
+    try {
+      const newRule: DiscountCfg = {
+        id:
+          (globalThis.crypto as any)?.randomUUID?.() ||
+          `d_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        ticketType: discountForm.ticketType,
+        minQty: Number(discountForm.minQty),
+        type: discountForm.type,
+        value: Number(discountForm.value),
+        priority: Number(discountForm.priority) || 0,
+        isActive: discountForm.isActive === "true",
+      };
+
+      const next = [...discounts, newRule];
+
+      const r = await fetch("/api/admin/tickets/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discounts: next }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        console.error("[dashboard] Error saving discounts:", err);
+        alert(err?.error || "No se pudo guardar el descuento");
+        return;
+      }
+
+      setDiscountForm((f) => ({
+        ...f,
+        minQty: 4,
+        type: "percent",
+        value: 10,
+        priority: 0,
+        isActive: "true",
+      }));
+      await fetchConfig();
+    } catch (e) {
+      console.error("[dashboard] Error creating discount:", e);
+      alert("Ocurrió un error creando el descuento");
+    } finally {
+      setCreatingDiscount(false);
+    }
+  };
+
+  const deleteDiscount = async (id: string) => {
+    if (!confirm("¿Eliminar esta regla de descuento?")) return;
+    setDeletingId(id);
+    try {
+      const next = discounts.filter((d) => d.id !== id);
+
+      const r = await fetch("/api/admin/tickets/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discounts: next }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        console.error("[dashboard] Error deleting discount:", err);
+        alert(err?.error || "No se pudo eliminar");
+        return;
+      }
+      await fetchConfig();
+    } catch (e) {
+      console.error("[dashboard] Error deleting discount:", e);
+      alert("Ocurrió un error eliminando el descuento");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -770,7 +886,7 @@ export default function AdminDashboard() {
     return arr;
   }, [tickets, q, fStatus, fType, fGender, fPay, orderBy, order]);
 
-  // NUEVO: enviar email de confirmación (solo approved)
+  // enviar email de confirmación (solo approved)
   const sendConfirmationEmail = async (ticket: AdminTicket) => {
     if (ticket.paymentStatus !== "approved") {
       alert("Solo se puede enviar el mail cuando el pago está aprobado.");
@@ -837,6 +953,19 @@ export default function AdminDashboard() {
               >
                 <SlidersHorizontal className="w-4 h-4 mr-2" />
                 Configuración
+              </Button>
+              {/* Botón Descuentos */}
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  setShowDiscountsModal(true);
+                  await fetchConfig();
+                }}
+                className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 dark:bg-emerald-950 dark:hover:bg-emerald-900 dark:text-emerald-300"
+                title="Configurar descuentos por cantidad"
+              >
+                <DollarSign className="w-4 h-4 mr-2" />
+                Descuentos
               </Button>
               <Button
                 variant="ghost"
@@ -1169,8 +1298,8 @@ export default function AdminDashboard() {
                           setQrModalCode(c);
                           setQrModalOpen(true);
                         }}
-                        onSendEmail={sendConfirmationEmail} // <- NUEVO
-                        sending={sendingId === t.id} // <- NUEVO
+                        onSendEmail={sendConfirmationEmail}
+                        sending={sendingId === t.id}
                       />
                     ))}
                   </tbody>
@@ -1233,7 +1362,6 @@ export default function AdminDashboard() {
                 />
               </div>
             </div>
-
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Email</Label>
@@ -1267,7 +1395,6 @@ export default function AdminDashboard() {
                 />
               </div>
             </div>
-
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Género</Label>
@@ -1327,25 +1454,14 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="space-y-3 pt-4 border-t border-border/50">
-              <div className="rounded-xl bg-muted/50 p-4 flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Precio unitario
-                </span>
-                <b className="text-lg text-foreground">
-                  ${generalUnitPrice.toLocaleString("es-AR")}
-                </b>
-              </div>
-              <div className="rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/50 dark:to-indigo-950/50 p-4 flex items-center justify-between border border-blue-200/50 dark:border-blue-800/50">
-                <span className="text-base font-semibold text-blue-900 dark:text-blue-100">
-                  Total a cobrar
-                </span>
-                <b className="text-2xl text-blue-600 dark:text-blue-400">
-                  ${generalTotal.toLocaleString("es-AR")}
-                </b>
-              </div>
+            <div className="rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/50 dark:to-indigo-950/50 p-4 flex items-center justify-between border border-blue-200/50 dark:border-blue-800/50">
+              <span className="text-base font-semibold text-blue-900 dark:text-blue-100">
+                Total a cobrar
+              </span>
+              <b className="text-2xl text-blue-600 dark:text-blue-400">
+                ${generalTotal.toLocaleString("es-AR")}
+              </b>
             </div>
-
             <div className="flex gap-3 pt-2">
               <Button
                 type="button"
@@ -1482,23 +1598,13 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="space-y-3 pt-4 border-t border-border/50">
-              <div className="rounded-xl bg-muted/50 p-4 flex items-center justify-between">
-                <span className="text-sm font-medium text-muted-foreground">
-                  Precio por mesa
-                </span>
-                <b className="text-lg text-foreground">
-                  ${vipUnitPrice.toLocaleString("es-AR")}
-                </b>
-              </div>
-              <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/50 dark:to-orange-950/50 p-4 flex items-center justify-between border border-amber-200/50 dark:border-amber-800/50">
-                <span className="text-base font-semibold text-amber-900 dark:text-amber-100">
-                  Total a cobrar
-                </span>
-                <b className="text-2xl text-amber-600 dark:text-amber-400">
-                  ${vipTotal.toLocaleString("es-AR")}
-                </b>
-              </div>
+            <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/50 dark:to-orange-950/50 p-4 flex items-center justify-between border border-amber-200/50 dark:border-amber-800/50">
+              <span className="text-base font-semibold text-amber-900 dark:text-amber-100">
+                Total a cobrar
+              </span>
+              <b className="text-2xl text-amber-600 dark:text-amber-400">
+                ${vipTotal.toLocaleString("es-AR")}
+              </b>
             </div>
 
             <div className="flex gap-3 pt-2">
@@ -1940,6 +2046,11 @@ export default function AdminDashboard() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <DiscountsModal
+        open={showDiscountsModal}
+        onOpenChange={setShowDiscountsModal}
+      />
 
       {/* Modal QR grande */}
       <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>

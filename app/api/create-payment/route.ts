@@ -1,4 +1,7 @@
 // app/api/create-payment/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
@@ -7,11 +10,12 @@ import { Prisma, PaymentStatus as PS } from "@prisma/client";
 // 1 mesa VIP = N personas (configurable)
 const VIP_UNIT_SIZE = Number(process.env.VIP_UNIT_SIZE || 10);
 
+// ========== Utils ==========
 type Item = {
   title: string;
   description?: string;
   quantity: number;
-  unit_price: number; // display only; el cálculo real sale de la DB
+  unit_price: number; // solo display para MP (enviamos TOTAL con descuento)
 };
 
 function isHttpsPublicUrl(url?: string | null) {
@@ -44,9 +48,73 @@ const n = (v: any, def = 0) => {
   return Number.isFinite(num) ? num : def;
 };
 
+// ======= Descuentos (orden TOTAL) =======
+
+type RuleRow = {
+  id: string;
+  minQty: number;
+  type: "percent" | "amount";
+  value: Prisma.Decimal;
+  priority: number;
+};
+
+async function getActiveRulesFor(
+  eventId: string,
+  ticketType: "general" | "vip"
+): Promise<RuleRow[]> {
+  const rows = await prisma.discountRule.findMany({
+    where: { eventId, ticketType, isActive: true },
+    select: { id: true, minQty: true, type: true, value: true, priority: true },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    minQty: r.minQty,
+    type: r.type as "percent" | "amount",
+    value: new Prisma.Decimal(r.value),
+    priority: r.priority ?? 0,
+  }));
+}
+
+/** Descuento TOTAL (no por entrada); empate => mayor prioridad */
+function pickBestOrderLevelDiscount(
+  qty: number,
+  unit: Prisma.Decimal,
+  rules: RuleRow[]
+): { discount: Prisma.Decimal; ruleId?: string } {
+  const zero = new Prisma.Decimal(0);
+  const subtotal = unit.mul(qty);
+
+  let bestDisc = zero;
+  let bestRuleId: string | undefined;
+  let bestPriority = -Infinity;
+
+  for (const r of rules) {
+    if (qty < r.minQty) continue;
+
+    let disc = zero;
+    if (r.type === "percent") {
+      disc = subtotal.mul(r.value).div(100);
+    } else {
+      disc = new Prisma.Decimal(r.value); // monto total sobre la orden
+    }
+
+    if (disc.gt(subtotal)) disc = subtotal;
+
+    if (disc.gt(bestDisc) || (disc.eq(bestDisc) && r.priority > bestPriority)) {
+      bestDisc = disc;
+      bestRuleId = r.id;
+      bestPriority = r.priority;
+    }
+  }
+
+  return { discount: bestDisc, ruleId: bestRuleId };
+}
+
+// =======================================
+
 export async function POST(request: NextRequest) {
   let recordId: string | null = null;
-  let recordType: "vip-table" | "ticket" | null = null;
 
   try {
     const body = await request.json();
@@ -55,7 +123,6 @@ export async function POST(request: NextRequest) {
       payer: any;
       type: "vip-table" | "ticket";
     };
-    recordType = type;
 
     const MP_TOKEN = process.env.MERCADO_PAGO_ACCESS_TOKEN;
     if (!MP_TOKEN) {
@@ -103,17 +170,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Valores para display en MP (el cálculo real queda persistido en DB)
+    // Valores DISPLAY (se reemplazan al final por TOTAL con descuento)
     let unitPriceForDisplay = n(items?.[0]?.unit_price, 0);
     let quantityForDisplay = Math.max(1, n(items?.[0]?.quantity, 1));
 
     // =================================================================
-    // VIP TABLE (1 mesa por compra) -> Ticket tipo 'vip' (gender: null)
+    // VIP TABLE
     // =================================================================
     if (type === "vip-table") {
-      const tables = 1; // 1 mesa por transacción
+      const tables = Math.max(1, n(payer?.additionalInfo?.tables, 1));
 
-      // Config VIP (precio por mesa; stock en PERSONAS)
       const cfgVip = await prisma.ticketConfig.findFirst({
         where: { eventId: event.id, ticketType: "vip", gender: null },
         select: { id: true, price: true, stockLimit: true },
@@ -125,7 +191,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Personas vendidas en VIP (aprobadas)
       const vipApproved = await prisma.ticket.findMany({
         where: {
           eventId: event.id,
@@ -149,8 +214,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const unit = new Prisma.Decimal(cfgVip.price); // precio por mesa
-      const total = unit.mul(tables);
+      const unit = new Prisma.Decimal(cfgVip.price);
+      const subtotal = unit.mul(tables);
+
+      const rules = await getActiveRulesFor(event.id, "vip");
+      const { discount } = pickBestOrderLevelDiscount(tables, unit, rules);
+      const total = subtotal.sub(discount);
 
       const ticket = await prisma.ticket.create({
         data: {
@@ -158,8 +227,8 @@ export async function POST(request: NextRequest) {
           eventDate: event.date,
           ticketType: "vip",
           gender: null,
-          quantity: tables, // # mesas
-          totalPrice: total, // Decimal
+          quantity: tables,
+          totalPrice: total,
           customerName: s(payer?.name) ?? "",
           customerEmail: s(payer?.email) ?? "",
           customerPhone: s(payer?.phone) ?? "",
@@ -170,13 +239,13 @@ export async function POST(request: NextRequest) {
       });
       recordId = ticket.id;
 
-      unitPriceForDisplay = Number(unit);
-      quantityForDisplay = tables;
+      // 👉 MP recibe 1 ítem con el TOTAL ya con descuento
+      unitPriceForDisplay = Number(total);
+      quantityForDisplay = 1;
     }
 
     // =================================================================
-    // ENTRADA GENERAL ('ticket')
-    // Precio por género desde DB, PERO stock se valida SOLO contra TOTAL
+    // ENTRADA GENERAL
     // =================================================================
     else if (type === "ticket") {
       const gender = s(payer?.additionalInfo?.gender) as
@@ -191,7 +260,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // 1) Precio unitario: TicketConfig('general', gender)
       const cfgPrice = await prisma.ticketConfig.findFirst({
         where: {
           eventId: event.id,
@@ -207,8 +275,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // 2) STOCK TOTAL (ignorar límites por género):
-      //    TicketConfig('total', null) y vendidos aprobados (general H+M) + VIP (personas)
       const cfgTotal = await prisma.ticketConfig.findFirst({
         where: { eventId: event.id, ticketType: "total", gender: null },
         select: { stockLimit: true },
@@ -259,9 +325,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // 3) Precio real desde DB
       const unit = new Prisma.Decimal(cfgPrice.price);
-      const total = unit.mul(quantity);
+      const subtotal = unit.mul(quantity);
+
+      const rules = await getActiveRulesFor(event.id, "general");
+      const { discount } = pickBestOrderLevelDiscount(quantity, unit, rules);
+      const total = subtotal.sub(discount);
 
       const ticket = await prisma.ticket.create({
         data: {
@@ -281,8 +350,9 @@ export async function POST(request: NextRequest) {
       });
       recordId = ticket.id;
 
-      unitPriceForDisplay = Number(unit);
-      quantityForDisplay = quantity;
+      // 👉 MP recibe 1 ítem con el TOTAL ya con descuento
+      unitPriceForDisplay = Number(total);
+      quantityForDisplay = 1;
     } else {
       return NextResponse.json(
         { error: "Tipo de operación inválido" },
@@ -293,12 +363,15 @@ export async function POST(request: NextRequest) {
     // ================== Preferencia MP ==================
     const mpItems = [
       {
-        title: String(items?.[0]?.title ?? "").slice(0, 255),
+        title:
+          quantityForDisplay === 1
+            ? String(items?.[0]?.title ?? "Compra de entradas")
+            : `Entradas x${quantityForDisplay}`,
         description: items?.[0]?.description
           ? String(items[0].description).slice(0, 256)
           : undefined,
-        quantity: quantityForDisplay,
-        unit_price: unitPriceForDisplay, // solo display (el real ya quedó guardado)
+        quantity: 1, // SIEMPRE 1
+        unit_price: unitPriceForDisplay, // TOTAL CON DESCUENTO
         currency_id: "ARS" as const,
       },
     ];
@@ -342,11 +415,6 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    console.log(
-      "[create-payment] Preference payload ->",
-      JSON.stringify(preference, null, 2)
-    );
-
     const idempotencyKey = crypto.randomUUID();
     const mpRes = await fetch(
       "https://api.mercadopago.com/checkout/preferences",
@@ -362,25 +430,59 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    if (!mpRes.ok) {
-      const errorData = await mpRes.json().catch(() => ({}));
-      console.error("[create-payment] Error de Mercado Pago:", errorData);
+    const rawText = await mpRes.text().catch(() => "");
+    let data: any = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      data = {};
+    }
 
+    // Logs de diagnóstico (no exponen secrets)
+    console.log("[create-payment] MP status:", mpRes.status);
+    console.log("[create-payment] MP body keys:", Object.keys(data || {}));
+
+    if (!mpRes.ok) {
+      console.error("[create-payment] Error MP:", data);
       if (recordId) {
         await prisma.ticket.update({
           where: { id: recordId },
           data: { paymentStatus: PS.failed_preference },
         });
       }
-
       return NextResponse.json(
-        { error: "Error al crear la preferencia de pago", details: errorData },
+        { error: "Error al crear la preferencia de pago", details: data },
         { status: 502 }
       );
     }
 
-    const data = await mpRes.json();
-    const redirect_url = data.sandbox_init_point || data.init_point;
+    // Fallback si faltan URLs (algunas cuentas devuelven sólo id)
+    let redirect_url: string | undefined =
+      data.sandbox_init_point || data.init_point;
+
+    if (!redirect_url && data.id) {
+      redirect_url = `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
+        String(data.id)
+      )}`;
+      console.warn(
+        "[create-payment] MP sin init_point; uso fallback con pref_id."
+      );
+    }
+
+    if (!redirect_url) {
+      console.error("[create-payment] Preferencia sin URL utilizable:", data);
+      // Marcamos el intento como fallido para trazabilidad
+      if (recordId) {
+        await prisma.ticket.update({
+          where: { id: recordId },
+          data: { paymentStatus: PS.failed_preference },
+        });
+      }
+      return NextResponse.json(
+        { error: "Preferencia creada sin URL de pago", details: data },
+        { status: 502 }
+      );
+    }
 
     return NextResponse.json({
       id: data.id,
