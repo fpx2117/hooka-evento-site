@@ -79,17 +79,23 @@ async function getActiveEventId() {
   const ev = await prisma.event.findFirst({
     where: { isActive: true },
     select: { id: true },
+    orderBy: { date: "desc" },
   });
   return ev?.id || null;
 }
 
-/* =========================
+/* =========================================================
    GET /api/admin/tickets/discounts
-   Filtros opcionales: ticketType=general|vip, isActive=true|false, gender=hombre|mujer|null
-========================= */
+   • Si hay admin-token => modo ADMIN (filtros completos)
+   • Si NO hay token    => modo PÚBLICO (solo reglas activas
+                           del evento activo; ignora isActive)
+   Filtros soportados:
+     ticketType=general|vip
+     isActive=true|false   (solo en modo admin)
+     gender=hombre|mujer|null
+========================================================= */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
-  if (!auth) return json({ error: "Unauthorized" }, 401);
 
   try {
     const eventId = await getActiveEventId();
@@ -97,29 +103,61 @@ export async function GET(request: NextRequest) {
 
     const sp = request.nextUrl.searchParams;
     const ticketType = toTicketType(sp.get("ticketType") || undefined);
-    const isActiveRaw = sp.get("isActive");
     const genderParsed = parseGenderParam(sp.get("gender"));
 
     if (sp.has("gender") && genderParsed === undefined) {
       return json({ error: "Parámetro gender inválido" }, 400);
     }
 
-    const where: any = { eventId };
-    if (ticketType) where.ticketType = ticketType;
-    if (isActiveRaw !== null) where.isActive = b(isActiveRaw, true);
-    if (genderParsed !== undefined) where.gender = genderParsed;
+    // ======= MODO ADMIN (requiere auth) =======
+    if (auth) {
+      const isActiveRaw = sp.get("isActive");
 
-    const rules = await prisma.discountRule.findMany({
-      where,
+      const where: any = { eventId };
+      if (ticketType) where.ticketType = ticketType;
+      if (isActiveRaw !== null) where.isActive = b(isActiveRaw, true);
+      if (genderParsed !== undefined) where.gender = genderParsed;
+
+      const rules = await prisma.discountRule.findMany({
+        where,
+        orderBy: [
+          { ticketType: "asc" },
+          { minQty: "asc" },
+          { priority: "desc" },
+          { createdAt: "asc" },
+        ],
+      });
+
+      return json({ ok: true, rules, mode: "admin" });
+    }
+
+    // ======= MODO PÚBLICO (sin auth) =======
+    const wherePublic: any = { eventId, isActive: true };
+    if (ticketType) wherePublic.ticketType = ticketType;
+    if (genderParsed !== undefined) wherePublic.gender = genderParsed;
+
+    const rulesPublic = await prisma.discountRule.findMany({
+      where: wherePublic,
+      select: {
+        id: true,
+        ticketType: true,
+        gender: true,
+        minQty: true,
+        type: true,
+        value: true,
+        priority: true,
+        isActive: true, // siempre true acá
+        createdAt: true,
+      },
       orderBy: [
         { ticketType: "asc" },
         { minQty: "asc" },
-        { priority: "desc" }, // mayor prioridad desempata
+        { priority: "desc" },
         { createdAt: "asc" },
       ],
     });
 
-    return json({ ok: true, rules });
+    return json({ ok: true, rules: rulesPublic, mode: "public" });
   } catch (e) {
     console.error("[discounts][GET] error:", e);
     return json({ error: "Error al listar descuentos" }, 500);
