@@ -96,7 +96,7 @@ export function Hero() {
           {/* Main Title - Improved responsive sizing */}
           <h1 className="text-5xl sm:text-6xl md:text-8xl lg:text-9xl font-display tracking-tight leading-none">
             <span className="block neon-glow text-primary-foreground">
-              ¡VIVE EL
+              ¡VIENE EL
             </span>
             <span className="block text-gradient mt-2">VERANO!</span>
           </h1>
