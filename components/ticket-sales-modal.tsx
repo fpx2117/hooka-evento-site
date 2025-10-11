@@ -263,15 +263,9 @@ export function TicketSalesModal({
               <div className="grid grid-cols-2 gap-4">
                 <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-primary/30">
                   <p className="text-sm text-muted-foreground mb-1">Hombres</p>
-                  <p className="text-2xl font-bold text-primary">
-                    ${formatMoney(priceH ?? 0)}
-                  </p>
                 </div>
                 <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-secondary/30">
                   <p className="text-sm text-muted-foreground mb-1">Mujeres</p>
-                  <p className="text-2xl font-bold text-secondary">
-                    ${formatMoney(priceM ?? 0)}
-                  </p>
                 </div>
               </div>
             )}
