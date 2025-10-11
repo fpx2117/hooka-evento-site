@@ -11,9 +11,7 @@ export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    const handleScroll = () => {
-      setScrolled(window.scrollY > 50);
-    };
+    const handleScroll = () => setScrolled(window.scrollY > 50);
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
@@ -29,8 +27,9 @@ export function Header() {
       >
         <div className="container mx-auto px-4 py-3 md:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 md:gap-3 animate-float">
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-gradient-to-br from-[#F25691] via-[#EF6065] to-[#EAD1A6] flex items-center justify-center animate-pulse-glow shadow-md">
+            {/* Logo + Title (sin animaciones) */}
+            <div className="flex items-center gap-2 md:gap-3">
+              <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-gradient-to-br from-[#F25691] via-[#EF6065] to-[#EAD1A6] flex items-center justify-center shadow-md">
                 <span className="text-xl md:text-2xl font-display">
                   <img
                     src="/logo.png"
@@ -49,6 +48,7 @@ export function Header() {
               </div>
             </div>
 
+            {/* Desktop actions */}
             <div className="hidden md:flex items-center gap-3">
               <Button
                 size="sm"
@@ -105,6 +105,7 @@ export function Header() {
               </div>
             </div>
 
+            {/* Mobile burger */}
             <div className="flex md:hidden items-center gap-2">
               <Button
                 size="icon"
@@ -121,8 +122,9 @@ export function Header() {
             </div>
           </div>
 
+          {/* Mobile menu (sin animaciones) */}
           {mobileMenuOpen && (
-            <div className="md:hidden mt-4 pb-4 space-y-4 animate-in slide-in-from-top">
+            <div className="md:hidden mt-4 pb-4 space-y-4">
               <Button
                 size="sm"
                 onClick={() => {
