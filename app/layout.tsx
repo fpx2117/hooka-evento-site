@@ -22,18 +22,18 @@ const bebasNeue = Bebas_Neue({
 export const metadata: Metadata = {
   metadataBase: new URL("https://hooka.com.ar"),
   title: {
-    default: "Hooka Party - ¡Vive el Verano!",
+    default: "Hooka Party",
     template: "%s | Hooka Party",
   },
   description:
-    "El mejor boliche tropical con pool party, música, fiesta y verano. Fiesta de la espuma, Neon Party, Cumbia Night, RKT Session y más.",
+    "La mejor fiesta de zona norte, música, fiesta y verano. Fiesta de la espuma, Neon Party, Cumbia Night, RKT Session y más.",
   openGraph: {
     type: "website",
     url: "/",
     siteName: "Hooka Party",
     locale: "es_ES",
-    title: "Hooka Party - ¡Vive el Verano!",
-    description: "¡Vení a disfrutar de la mejor fiesta tropical del verano!",
+    title: "Hooka Party",
+    description: "La mejor fiesta de zona norte.",
   },
   alternates: { canonical: "/" },
 };
