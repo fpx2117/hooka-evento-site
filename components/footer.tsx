@@ -17,8 +17,12 @@ export function Footer() {
           {/* Brand */}
           <div className="space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary via-secondary to-accent flex items-center justify-center">
-                <span className="text-2xl">🌴</span>
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F25691] via-[#EF6065] to-[#EAD1A6] flex items-center justify-center shadow-md">
+                <img
+                  src="/logo.png"
+                  alt="Hooka Party"
+                  className="h-7 w-7 md:h-10 md:w-10 object-contain"
+                />
               </div>
               <div>
                 <h3 className="text-2xl font-display tracking-wider">Hooka</h3>
@@ -26,7 +30,7 @@ export function Footer() {
               </div>
             </div>
             <p className="text-sm opacity-80 leading-relaxed">
-              La mejor fiesta de Zona Norte. Música, diversión y verano todo el
+              La mejor fiesta de zona norte. Música, diversión y verano todo el
               año.
             </p>
           </div>
