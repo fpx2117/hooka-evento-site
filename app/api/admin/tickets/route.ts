@@ -251,24 +251,32 @@ export async function POST(request: NextRequest) {
       where: {
         eventId: event.id,
         ticketType,
-        // Prisma: omitimos gender para VIP; seteamos gender para general
         ...(ticketType === "general"
-          ? { gender: gender as any }
+          ? { gender: (gender as any) ?? undefined }
           : { gender: null }),
       },
       select: { id: true, price: true },
     });
 
+    // 🔥 Permitir override de total (para cargas manuales con descuentos)
+    const overrideTotal = normNumber(body.totalPrice);
+    const forceOverride =
+      body.forceTotalPrice === true || body.forceTotalPrice === "true";
+
     let totalPriceDecimal: Prisma.Decimal;
     let ticketConfigId: string | undefined;
 
-    if (cfg) {
+    if (forceOverride && overrideTotal !== undefined) {
+      // ✅ Respeta el total calculado en el dashboard (con descuentos)
+      totalPriceDecimal = new Prisma.Decimal(overrideTotal);
+      if (cfg) ticketConfigId = cfg.id;
+    } else if (cfg) {
       const unit = new Prisma.Decimal(cfg.price);
       totalPriceDecimal = unit.mul(quantity);
       ticketConfigId = cfg.id;
     } else {
-      const totalPrice = normNumber(body.totalPrice);
-      if (totalPrice === undefined) {
+      // Sin config: requiere totalPrice
+      if (overrideTotal === undefined) {
         return NextResponse.json(
           {
             error:
@@ -277,7 +285,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      totalPriceDecimal = new Prisma.Decimal(totalPrice);
+      totalPriceDecimal = new Prisma.Decimal(overrideTotal);
     }
 
     let attempts = 0;
@@ -291,7 +299,6 @@ export async function POST(request: NextRequest) {
             eventId: event.id,
             eventDate: event.date,
             ticketType,
-            // Solo setear gender cuando corresponde (general); VIP: omitido (queda NULL)
             ...(ticketType === "general" && gender
               ? { gender: gender as any }
               : {}),
@@ -351,7 +358,6 @@ export async function PUT(request: NextRequest) {
     if (ticketType) dataToUpdate.ticketType = ticketType;
 
     if (body.gender !== undefined) {
-      // Solo permitir gender cuando el tipo final sea general
       const nextType = (ticketType || "").toLowerCase();
       if (nextType === "general") {
         const g = normString(body.gender);
@@ -385,7 +391,6 @@ export async function PUT(request: NextRequest) {
     const quantity = normNumber(body.quantity);
     if (quantity !== undefined) dataToUpdate.quantity = quantity;
 
-    // Ya no reasignamos por "eventCode". Solo permitimos ajustar eventDate si querés.
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }

@@ -30,6 +30,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   LogOut,
   Plus,
   Trash2,
@@ -46,8 +52,28 @@ import {
   Search,
   TrendingUp,
   Mail,
+  MoreVertical,
 } from "lucide-react";
 import QRCode from "qrcode";
+
+/* =========================
+   Utils responsive
+========================= */
+function useIsMobile(breakpoint: number = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      // @ts-ignore
+      setIsMobile(!!e.matches);
+    };
+    onChange(mql as any);
+    mql.addEventListener?.("change", onChange as any);
+    return () => mql.removeEventListener?.("change", onChange as any);
+  }, [breakpoint]);
+  return isMobile;
+}
 
 /* =========================
    Tipos
@@ -148,7 +174,6 @@ type TicketsConfig = {
     remaining: number;
     capacityPerTable?: number | null;
   }>;
-  discounts?: DiscountCfg[];
 };
 
 /* =========================
@@ -166,6 +191,136 @@ function buildValidateUrl(code: string) {
 async function makeQrDataUrl(code: string, scale = 4) {
   const url = buildValidateUrl(code);
   return await QRCode.toDataURL(url, { margin: 1, scale });
+}
+
+/* =========================
+   Helpers Descuentos
+========================= */
+function pickDiscountRule(
+  rules: DiscountCfg[],
+  ticketType: "general" | "vip",
+  qty: number
+): DiscountCfg | null {
+  const active = rules.filter(
+    (r) => r.isActive !== false && r.ticketType === ticketType
+  );
+  if (!active.length) return null;
+  const candidates = active.filter((r) => (r.minQty || 0) <= qty);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    if ((b.minQty || 0) !== (a.minQty || 0))
+      return (b.minQty || 0) - (a.minQty || 0);
+    if ((b.priority || 0) !== (a.priority || 0))
+      return (b.priority || 0) - (a.priority || 0);
+    return (b.value || 0) - (a.value || 0);
+  });
+  return candidates[0] || null;
+}
+
+function applyDiscount(
+  unit: number,
+  qty: number,
+  rule: DiscountCfg | null
+): {
+  subtotal: number;
+  discount: number;
+  total: number;
+  rule?: DiscountCfg | null;
+} {
+  const cleanUnit = Math.max(0, unit || 0);
+  const cleanQty = Math.max(1, qty || 1);
+  const subtotal = cleanUnit * cleanQty;
+  if (!rule) return { subtotal, discount: 0, total: subtotal, rule: null };
+
+  let discount = 0;
+  if (rule.type === "percent") {
+    discount = Math.floor((subtotal * Math.max(0, rule.value || 0)) / 100);
+  } else {
+    discount = Math.max(0, Math.floor(rule.value || 0));
+  }
+  const total = Math.max(0, subtotal - discount);
+  return { subtotal, discount, total, rule };
+}
+
+/* =========================
+   Subcomponentes responsive
+========================= */
+function MobileHeaderActions({
+  onOpenConfig,
+  onOpenDiscounts,
+  onLogout,
+}: {
+  onOpenConfig: () => void;
+  onOpenDiscounts: () => void;
+  onLogout: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" className="sm:hidden" aria-label="Abrir menú">
+          <MoreVertical className="w-4 h-4 mr-2" />
+          Menú
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={onOpenConfig} className="gap-2">
+          <SlidersHorizontal className="w-4 h-4" /> Configuración
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onOpenDiscounts} className="gap-2">
+          <DollarSign className="w-4 h-4" /> Descuentos
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onLogout} className="gap-2 text-red-600">
+          <LogOut className="w-4 h-4" /> Salir
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function RowActionsMenu({
+  onApprove,
+  onSendEmail,
+  onEdit,
+  onDelete,
+  canApprove,
+  canEmail,
+  sending,
+}: {
+  onApprove: () => void;
+  onSendEmail: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  canApprove: boolean;
+  canEmail: boolean;
+  sending: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" className="sm:hidden">
+          <MoreVertical className="w-4 h-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {canApprove && (
+          <DropdownMenuItem onClick={onApprove} className="gap-2">
+            <CheckCircle className="w-4 h-4" /> Aprobar
+          </DropdownMenuItem>
+        )}
+        {canEmail && (
+          <DropdownMenuItem onClick={onSendEmail} className="gap-2">
+            <Mail className="w-4 h-4" /> {sending ? "Enviando…" : "Enviar mail"}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={onEdit} className="gap-2">
+          <Edit className="w-4 h-4" /> Editar
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onDelete} className="gap-2 text-red-600">
+          <Trash2 className="w-4 h-4" /> Eliminar
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 /* =========================
@@ -209,12 +364,40 @@ function TicketRow({
     };
   }, [ticket.validationCode]);
 
+  const approveBtn = (
+    <Button
+      variant="default"
+      size="sm"
+      onClick={() => onApprove(ticket)}
+      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+    >
+      <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
+      Aprobar
+    </Button>
+  );
+
+  const sendBtn = (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => onSendEmail(ticket)}
+      disabled={sending}
+      className="border-border/50"
+      title="Enviar email de confirmación"
+    >
+      <Mail className="w-4 h-4 mr-1.5" />
+      {sending ? "Enviando…" : "Enviar mail"}
+    </Button>
+  );
+
   return (
     <tr className="border-b border-border/50 hover:bg-gray/50 transition-colors">
-      <td className="p-4">
+      <td className="p-4 min-w-[180px]">
         <div className="space-y-1">
-          <p className="font-semibold text-foreground">{ticket.customerName}</p>
-          <p className="text-sm text-muted-foreground">
+          <p className="font-semibold text-foreground break-words">
+            {ticket.customerName}
+          </p>
+          <p className="text-sm text-muted-foreground break-words">
             {ticket.customerEmail}
           </p>
         </div>
@@ -295,31 +478,10 @@ function TicketRow({
         </div>
       </td>
       <td className="p-4 text-right">
-        <div className="flex items-center justify-end gap-2">
-          {ticket.paymentStatus !== "approved" && (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => onApprove(ticket)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
-            >
-              <CheckCircle className="w-3.5 h-3.5 mr-1.5" />
-              Aprobar
-            </Button>
-          )}
-          {ticket.paymentStatus === "approved" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onSendEmail(ticket)}
-              disabled={sending}
-              className="border-border/50"
-              title="Enviar email de confirmación"
-            >
-              <Mail className="w-4 h-4 mr-1.5" />
-              {sending ? "Enviando…" : "Enviar mail"}
-            </Button>
-          )}
+        {/* Desktop actions */}
+        <div className="hidden sm:flex items-center justify-end gap-2">
+          {ticket.paymentStatus !== "approved" && approveBtn}
+          {ticket.paymentStatus === "approved" && sendBtn}
           <Button
             variant="ghost"
             size="sm"
@@ -337,6 +499,18 @@ function TicketRow({
             <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
           </Button>
         </div>
+        {/* Mobile actions submenu */}
+        <div className="sm:hidden flex justify-end">
+          <RowActionsMenu
+            onApprove={() => onApprove(ticket)}
+            onSendEmail={() => onSendEmail(ticket)}
+            onEdit={() => onEdit(ticket)}
+            onDelete={() => onDelete(ticket.id)}
+            canApprove={ticket.paymentStatus !== "approved"}
+            canEmail={ticket.paymentStatus === "approved"}
+            sending={!!sending}
+          />
+        </div>
       </td>
     </tr>
   );
@@ -347,26 +521,18 @@ function TicketRow({
 ========================= */
 export default function AdminDashboard() {
   const router = useRouter();
+  const isMobile = useIsMobile();
+
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Config desde BD
+  // Config desde BD (sin descuentos)
   const [cfg, setCfg] = useState<TicketsConfig | null>(null);
   const [cfgLoading, setCfgLoading] = useState(true);
 
-  // Discounts
+  // Discounts (API dedicada)
   const [discounts, setDiscounts] = useState<DiscountCfg[]>([]);
   const [showDiscountsModal, setShowDiscountsModal] = useState(false);
-  const [creatingDiscount, setCreatingDiscount] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [discountForm, setDiscountForm] = useState({
-    ticketType: "general" as "general" | "vip",
-    minQty: 4,
-    type: "percent" as "percent" | "amount",
-    value: 10,
-    priority: 0,
-    isActive: "true" as "true" | "false",
-  });
 
   // Filtros
   const [q, setQ] = useState("");
@@ -383,7 +549,7 @@ export default function AdminDashboard() {
   );
   const [order, setOrder] = useState<"desc" | "asc">("desc");
 
-  // Modales existentes
+  // Modales
   const [showAddGeneral, setShowAddGeneral] = useState(false);
   const [showAddVip, setShowAddVip] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -436,12 +602,14 @@ export default function AdminDashboard() {
   const [qrModalCode, setQrModalCode] = useState<string | null>(null);
   const [qrModalSrc, setQrModalSrc] = useState<string | null>(null);
 
-  // estado de envío por fila
+  // ✉️ Estado de envío de mail por ticket
   const [sendingId, setSendingId] = useState<string | null>(null);
 
+  // Carga inicial
   useEffect(() => {
     fetchTickets();
     fetchConfig();
+    fetchDiscounts();
   }, []);
 
   const fetchTickets = async () => {
@@ -466,16 +634,13 @@ export default function AdminDashboard() {
     }
   };
 
-  // ✅ Lee totals, VIP (PERSONAS) y discounts
+  // ✅ Lee totals/VIP (PERSONAS) — sin descuentos
   const fetchConfig = async () => {
     try {
-      const r = await fetch(`/api/admin/tickets/config`, {
-        cache: "no-store",
-      });
+      const r = await fetch(`/api/admin/tickets/config`, { cache: "no-store" });
       if (r.ok) {
         const data: TicketsConfig = await r.json();
         setCfg(data);
-        setDiscounts((data as any).discounts || []);
         setConfigForm({
           totalLimitPersons: data.totals?.limitPersons ?? 0,
           genHPrice: data.tickets.general.hombre?.price ?? 0,
@@ -488,6 +653,26 @@ export default function AdminDashboard() {
       console.error("[dashboard] Error fetching config:", e);
     } finally {
       setCfgLoading(false);
+    }
+  };
+
+  // ✅ Descuentos desde API dedicada
+  const fetchDiscounts = async () => {
+    try {
+      const r = await fetch(`/api/admin/tickets/discounts`, {
+        cache: "no-store",
+      });
+      if (r.ok) {
+        const payload = await r.json();
+        const list: DiscountCfg[] = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.discounts)
+            ? payload.discounts
+            : [];
+        setDiscounts(list);
+      }
+    } catch (e) {
+      console.error("[dashboard] Error fetching discounts:", e);
     }
   };
 
@@ -570,7 +755,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // ===== Altas manuales (General/VIP) con precio desde BD =====
+  // ===== Altas manuales (General/VIP) con precio desde BD + DESCUENTOS =====
   const generalUnitPrice = useMemo(() => {
     if (!cfg) return 0;
     const g = formGeneral.gender;
@@ -587,10 +772,19 @@ export default function AdminDashboard() {
       : cfg.tickets.general.mujer?.remaining || 0;
   }, [cfg, formGeneral.gender]);
 
-  const generalTotal = useMemo(
+  const generalDiscountRule = useMemo(
+    () => pickDiscountRule(discounts, "general", formGeneral.quantity),
+    [discounts, formGeneral.quantity]
+  );
+
+  const generalTotalInfo = useMemo(
     () =>
-      Math.max(0, generalUnitPrice) * Math.max(1, formGeneral.quantity || 1),
-    [generalUnitPrice, formGeneral.quantity]
+      applyDiscount(
+        generalUnitPrice,
+        formGeneral.quantity,
+        generalDiscountRule
+      ),
+    [generalUnitPrice, formGeneral.quantity, generalDiscountRule]
   );
 
   const vipUnitPrice = useMemo(() => cfg?.tickets.vip?.price || 0, [cfg]);
@@ -598,8 +792,9 @@ export default function AdminDashboard() {
     () => cfg?.tickets.vip?.remainingTables || 0,
     [cfg]
   );
-  const vipTotal = useMemo(
-    () => Math.max(0, vipUnitPrice) * Math.max(1, formVip.quantity || 1),
+
+  const vipTotalInfo = useMemo(
+    () => applyDiscount(vipUnitPrice, formVip.quantity, null),
     [vipUnitPrice, formVip.quantity]
   );
 
@@ -632,7 +827,7 @@ export default function AdminDashboard() {
     }
     try {
       const payload = {
-        ticketType: "general",
+        ticketType: "general" as const,
         gender: formGeneral.gender,
         quantity: formGeneral.quantity,
         customerName: formGeneral.customerName,
@@ -640,6 +835,8 @@ export default function AdminDashboard() {
         customerPhone: formGeneral.customerPhone,
         customerDni: formGeneral.customerDni,
         paymentMethod: formGeneral.paymentMethod,
+        totalPrice: generalTotalInfo.total,
+        forceTotalPrice: true,
       };
       const r = await fetch("/api/admin/tickets", {
         method: "POST",
@@ -654,9 +851,11 @@ export default function AdminDashboard() {
       } else {
         const err = await r.json().catch(() => ({}));
         console.error("[dashboard] Error add general:", err);
+        alert(err?.error || "No se pudo crear la entrada general");
       }
     } catch (e) {
       console.error("[dashboard] Error add general:", e);
+      alert("Ocurrió un error creando la entrada general");
     }
   };
 
@@ -669,13 +868,15 @@ export default function AdminDashboard() {
     }
     try {
       const payload = {
-        ticketType: "vip",
+        ticketType: "vip" as const,
         quantity: formVip.quantity,
         customerName: formVip.customerName,
         customerEmail: formVip.customerEmail,
         customerPhone: formVip.customerPhone,
         customerDni: formVip.customerDni,
         paymentMethod: formVip.paymentMethod,
+        totalPrice: vipTotalInfo.total,
+        forceTotalPrice: true,
       };
       const r = await fetch("/api/admin/tickets", {
         method: "POST",
@@ -690,18 +891,48 @@ export default function AdminDashboard() {
       } else {
         const err = await r.json().catch(() => ({}));
         console.error("[dashboard] Error add vip:", err);
+        alert(err?.error || "No se pudo crear la entrada VIP");
       }
     } catch (e) {
       console.error("[dashboard] Error add vip:", e);
+      alert("Ocurrió un error creando la entrada VIP");
+    }
+  };
+
+  // ✉️ Enviar email de confirmación (solo approved)
+  const sendConfirmationEmail = async (ticket: AdminTicket) => {
+    if (ticket.paymentStatus !== "approved") {
+      alert("Solo se puede enviar el mail cuando el pago está aprobado.");
+      return;
+    }
+    setSendingId(ticket.id);
+    try {
+      const r = await fetch("/api/send-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: ticket.ticketType === "vip" ? "vip-table" : "ticket",
+          recordId: ticket.id,
+        }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        console.error("[dashboard] send mail error:", err);
+        alert(err?.error || "No se pudo enviar el mail.");
+        return;
+      }
+
+      alert("Email de confirmación enviado ✅");
+    } catch (e) {
+      console.error("[dashboard] send mail error:", e);
+      alert("Ocurrió un error enviando el mail.");
+    } finally {
+      setSendingId(null);
     }
   };
 
   // Modal QR grande
-  function openQrModal(code: string) {
-    setQrModalCode(code);
-    setQrModalOpen(true);
-  }
-
   useEffect(() => {
     let active = true;
     (async () => {
@@ -727,7 +958,7 @@ export default function AdminDashboard() {
     revenue: tickets.reduce((sum, t) => sum + (Number(t.totalPrice) || 0), 0),
   };
 
-  // ✅ Guardar configuración (TOTAL + precios H/M + VIP personas)
+  // ✅ Guardar configuración
   const saveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -764,95 +995,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // ======= Descuentos =======
-  const sortedDiscounts = useMemo(() => {
-    const list = [...discounts];
-    list.sort((a, b) => {
-      if (a.ticketType !== b.ticketType)
-        return a.ticketType < b.ticketType ? -1 : 1;
-      if ((b.minQty || 0) !== (a.minQty || 0))
-        return (b.minQty || 0) - (a.minQty || 0);
-      return (b.priority || 0) - (a.priority || 0);
-    });
-    return list;
-  }, [discounts]);
-
-  const createDiscount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreatingDiscount(true);
-    try {
-      const newRule: DiscountCfg = {
-        id:
-          (globalThis.crypto as any)?.randomUUID?.() ||
-          `d_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        ticketType: discountForm.ticketType,
-        minQty: Number(discountForm.minQty),
-        type: discountForm.type,
-        value: Number(discountForm.value),
-        priority: Number(discountForm.priority) || 0,
-        isActive: discountForm.isActive === "true",
-      };
-
-      const next = [...discounts, newRule];
-
-      const r = await fetch("/api/admin/tickets/config", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ discounts: next }),
-      });
-
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        console.error("[dashboard] Error saving discounts:", err);
-        alert(err?.error || "No se pudo guardar el descuento");
-        return;
-      }
-
-      setDiscountForm((f) => ({
-        ...f,
-        minQty: 4,
-        type: "percent",
-        value: 10,
-        priority: 0,
-        isActive: "true",
-      }));
-      await fetchConfig();
-    } catch (e) {
-      console.error("[dashboard] Error creating discount:", e);
-      alert("Ocurrió un error creando el descuento");
-    } finally {
-      setCreatingDiscount(false);
-    }
-  };
-
-  const deleteDiscount = async (id: string) => {
-    if (!confirm("¿Eliminar esta regla de descuento?")) return;
-    setDeletingId(id);
-    try {
-      const next = discounts.filter((d) => d.id !== id);
-
-      const r = await fetch("/api/admin/tickets/config", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ discounts: next }),
-      });
-
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        console.error("[dashboard] Error deleting discount:", err);
-        alert(err?.error || "No se pudo eliminar");
-        return;
-      }
-      await fetchConfig();
-    } catch (e) {
-      console.error("[dashboard] Error deleting discount:", e);
-      alert("Ocurrió un error eliminando el descuento");
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  // ======= Filtro + Orden local =======
+  // ======= Filtro + Orden local
   const filteredSortedTickets = useMemo(() => {
     let arr = tickets.slice();
 
@@ -886,58 +1029,48 @@ export default function AdminDashboard() {
     return arr;
   }, [tickets, q, fStatus, fType, fGender, fPay, orderBy, order]);
 
-  // enviar email de confirmación (solo approved)
-  const sendConfirmationEmail = async (ticket: AdminTicket) => {
-    if (ticket.paymentStatus !== "approved") {
-      alert("Solo se puede enviar el mail cuando el pago está aprobado.");
-      return;
+  // Refrescar al abrir modales para tener reglas/config más recientes
+  useEffect(() => {
+    if (showAddGeneral) {
+      fetchConfig();
+      fetchDiscounts();
     }
-    setSendingId(ticket.id);
-    try {
-      const r = await fetch("/api/send-confirmation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: ticket.ticketType === "vip" ? "vip-table" : "ticket",
-          recordId: ticket.id,
-        }),
-      });
-
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        console.error("[dashboard] send mail error:", err);
-        alert(err?.error || "No se pudo enviar el mail.");
-        return;
-      }
-
-      alert("Email de confirmación enviado ✅");
-    } catch (e) {
-      console.error("[dashboard] send mail error:", e);
-      alert("Ocurrió un error enviando el mail.");
-    } finally {
-      setSendingId(null);
+  }, [showAddGeneral]);
+  useEffect(() => {
+    if (showAddVip) {
+      fetchConfig();
+      fetchDiscounts();
     }
-  };
+  }, [showAddVip]);
+
+  // Clases de tamaño para Dialog en mobile/desktop
+  const modalClass = (extra = "") =>
+    `${isMobile ? "w-[100vw] h-[100vh] max-w-none rounded-none" : "sm:max-w-2xl sm:max-h-[90vh]"} overflow-y-auto ${extra}`;
+
+  const largeModalClass = (extra = "") =>
+    `${isMobile ? "w-[100vw] h-[100vh] max-w-none rounded-none" : "sm:max-w-3xl sm:max-h-[90vh]"} overflow-y-auto ${extra}`;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-50 dark:from-slate-950 dark:via-blue-950/20 dark:to-slate-950">
       <header className="border-b border-border/50 bg-card/80 backdrop-blur-xl sticky top-0 z-50 shadow-sm">
-        <div className="container mx-auto px-6 py-5">
+        <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
                 <Ticket className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-foreground tracking-tight">
+                <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">
                   Panel de Administración
                 </h1>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs sm:text-sm text-muted-foreground">
                   Gestión de entradas y eventos
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+
+            {/* Acciones en desktop */}
+            <div className="hidden sm:flex items-center gap-3">
               <Button
                 variant="outline"
                 onClick={() => router.push("/admin/validate")}
@@ -954,12 +1087,11 @@ export default function AdminDashboard() {
                 <SlidersHorizontal className="w-4 h-4 mr-2" />
                 Configuración
               </Button>
-              {/* Botón Descuentos */}
               <Button
                 variant="secondary"
                 onClick={async () => {
                   setShowDiscountsModal(true);
-                  await fetchConfig();
+                  await fetchDiscounts();
                 }}
                 className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 dark:bg-emerald-950 dark:hover:bg-emerald-900 dark:text-emerald-300"
                 title="Configurar descuentos por cantidad"
@@ -976,13 +1108,34 @@ export default function AdminDashboard() {
                 Salir
               </Button>
             </div>
+
+            {/* Mobile: botón rápido de Validar QR + Dropdown con Configuración/Descuentos/Salir */}
+            <div className="sm:hidden flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => router.push("/admin/validate")}
+                className="border-border/50 hover:bg-accent"
+                aria-label="Validar QR"
+              >
+                <QrCode className="w-4 h-4" />
+              </Button>
+
+              <MobileHeaderActions
+                onOpenConfig={() => setShowConfigModal(true)}
+                onOpenDiscounts={async () => {
+                  setShowDiscountsModal(true);
+                  await fetchDiscounts();
+                }}
+                onLogout={handleLogout}
+              />
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-6 py-8">
+      <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow bg-gradient-to-br from-card to-card/50">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -993,7 +1146,7 @@ export default function AdminDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-foreground">
+              <div className="text-2xl sm:text-3xl font-bold text-foreground">
                 {stats.total}
               </div>
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
@@ -1013,7 +1166,7 @@ export default function AdminDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-foreground">
+              <div className="text-2xl sm:text-3xl font-bold text-foreground">
                 {stats.validated}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
@@ -1035,7 +1188,7 @@ export default function AdminDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-foreground">
+              <div className="text-2xl sm:text-3xl font-bold text-foreground">
                 ${stats.revenue.toLocaleString("es-AR")}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
@@ -1173,7 +1326,7 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="mt-4 pt-4 border-t border-border/50 flex items-end gap-3">
+            <div className="mt-4 pt-4 border-t border-border/50 flex flex-col sm:flex-row sm:items-end gap-3">
               <div className="flex-1">
                 <Label className="text-sm font-medium mb-2 block">
                   Ordenar por
@@ -1209,24 +1362,32 @@ export default function AdminDashboard() {
           <CardHeader className="bg-white">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
-                <CardTitle className="text-xl">Entradas Vendidas</CardTitle>
+                <CardTitle className="text-lg sm:text-xl">
+                  Entradas Vendidas
+                </CardTitle>
                 <CardDescription className="mt-1">
                   Gestiona todas las entradas del evento (
                   {filteredSortedTickets.length}{" "}
                   {filteredSortedTickets.length === 1 ? "entrada" : "entradas"})
                 </CardDescription>
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
                 <Button
-                  onClick={() => setShowAddGeneral(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                  onClick={async () => {
+                    await Promise.all([fetchConfig(), fetchDiscounts()]);
+                    setShowAddGeneral(true);
+                  }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm w-full sm:w-auto"
                 >
                   <Plus className="w-4 h-4 mr-2" />
                   Agregar General
                 </Button>
                 <Button
-                  onClick={() => setShowAddVip(true)}
-                  className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-sm"
+                  onClick={async () => {
+                    await Promise.all([fetchConfig(), fetchDiscounts()]);
+                    setShowAddVip(true);
+                  }}
+                  className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-sm w-full sm:w-auto"
                 >
                   <Crown className="w-4 h-4 mr-2" />
                   Agregar VIP
@@ -1254,34 +1415,35 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full">
+                {/* Forzar ancho mínimo para buena UX en móviles */}
+                <table className="w-full min-w-[980px]">
                   <thead className="bg-muted/50 border-b border-border/50">
                     <tr>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Cliente
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         DNI
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Tipo
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Género
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Precio
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Método Pago
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Estado
                       </th>
-                      <th className="text-left p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Código
                       </th>
-                      <th className="text-right p-4 text-sm font-semibold text-muted-foreground">
+                      <th className="text-right p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Acciones
                       </th>
                     </tr>
@@ -1312,7 +1474,7 @@ export default function AdminDashboard() {
 
       {/* ===== Modal Agregar General ===== */}
       <Dialog open={showAddGeneral} onOpenChange={setShowAddGeneral}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className={modalClass("max-w-2xl")}>
           <DialogHeader className="pb-4 border-b border-border/50">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-950 flex items-center justify-center">
@@ -1454,15 +1616,60 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/50 dark:to-indigo-950/50 p-4 flex items-center justify-between border border-blue-200/50 dark:border-blue-800/50">
-              <span className="text-base font-semibold text-blue-900 dark:text-blue-100">
-                Total a cobrar
-              </span>
-              <b className="text-2xl text-blue-600 dark:text-blue-400">
-                ${generalTotal.toLocaleString("es-AR")}
-              </b>
+            {/* Resumen con descuento */}
+            <div className="space-y-2">
+              {generalDiscountRule && (
+                <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 p-3 text-sm border border-emerald-200/60 dark:border-emerald-800/60">
+                  <div className="flex items-center justify-between">
+                    <span className="text-emerald-900 dark:text-emerald-100">
+                      Descuento aplicado
+                    </span>
+                    <b className="text-emerald-900 dark:text-emerald-100">
+                      {generalDiscountRule.type === "percent"
+                        ? `${generalDiscountRule.value}%`
+                        : `$ ${generalDiscountRule.value.toLocaleString("es-AR")}`}
+                    </b>
+                  </div>
+                  <div className="mt-1 text-xs text-emerald-800/80 dark:text-emerald-200/80">
+                    Desde {generalDiscountRule.minQty} unidades
+                    {typeof generalDiscountRule.priority === "number"
+                      ? ` · prioridad ${generalDiscountRule.priority}`
+                      : ""}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl bg-muted/50 p-4 flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Subtotal
+                </span>
+                <b className="text-lg text-foreground">
+                  ${generalTotalInfo.subtotal.toLocaleString("es-AR")}
+                </b>
+              </div>
+
+              {generalTotalInfo.discount > 0 && (
+                <div className="rounded-xl bg-emerald-100/50 dark:bg-emerald-900/30 p-4 flex items-center justify-between border border-emerald-200/60 dark:border-emerald-800/60">
+                  <span className="text-sm font-medium text-emerald-900 dark:text-emerald-100">
+                    Descuento
+                  </span>
+                  <b className="text-lg text-emerald-700 dark:text-emerald-300">
+                    - ${generalTotalInfo.discount.toLocaleString("es-AR")}
+                  </b>
+                </div>
+              )}
+
+              <div className="rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/50 dark:to-indigo-950/50 p-4 flex items-center justify-between border border-blue-200/50 dark:border-blue-800/50">
+                <span className="text-base font-semibold text-blue-900 dark:text-blue-100">
+                  Total a cobrar
+                </span>
+                <b className="text-2xl text-blue-600 dark:text-blue-400">
+                  ${generalTotalInfo.total.toLocaleString("es-AR")}
+                </b>
+              </div>
             </div>
-            <div className="flex gap-3 pt-2">
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <Button
                 type="button"
                 variant="outline"
@@ -1484,7 +1691,7 @@ export default function AdminDashboard() {
 
       {/* ===== Modal Agregar VIP ===== */}
       <Dialog open={showAddVip} onOpenChange={setShowAddVip}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className={modalClass("max-w-2xl")}>
           <DialogHeader className="pb-4 border-b border-border/50">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-lg">
@@ -1603,11 +1810,11 @@ export default function AdminDashboard() {
                 Total a cobrar
               </span>
               <b className="text-2xl text-amber-600 dark:text-amber-400">
-                ${vipTotal.toLocaleString("es-AR")}
+                ${vipTotalInfo.total.toLocaleString("es-AR")}
               </b>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
               <Button
                 type="button"
                 variant="outline"
@@ -1629,7 +1836,7 @@ export default function AdminDashboard() {
 
       {/* ===== Modal Editar Ticket ===== */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className={modalClass("max-w-2xl")}>
           <DialogHeader className="pb-4 border-b border-border/50">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-950 flex items-center justify-center">
@@ -1778,7 +1985,7 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-4">
+            <div className="flex flex-col sm:flex-row gap-3 pt-4">
               <Button
                 type="button"
                 variant="outline"
@@ -1800,7 +2007,7 @@ export default function AdminDashboard() {
 
       {/* ===== Modal Configurar precios y cupos ===== */}
       <Dialog open={showConfigModal} onOpenChange={setShowConfigModal}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className={largeModalClass("max-w-3xl")}>
           <DialogHeader className="pb-4 border-b border-border/50">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-950 flex items-center justify-center">
@@ -1820,7 +2027,7 @@ export default function AdminDashboard() {
 
           <form onSubmit={saveConfig} className="space-y-6 pt-4">
             {/* STOCK TOTAL (PERSONAS) */}
-            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg:black/20">
+            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg-black/20">
               <div className="flex items-center justify-between">
                 <h4 className="font-semibold text-lg">
                   Stock TOTAL (personas)
@@ -2027,7 +2234,7 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="flex gap-3 pt-4">
+            <div className="flex flex-col sm:flex-row gap-3 pt-4">
               <Button
                 type="button"
                 variant="outline"
@@ -2049,12 +2256,17 @@ export default function AdminDashboard() {
 
       <DiscountsModal
         open={showDiscountsModal}
-        onOpenChange={setShowDiscountsModal}
+        onOpenChange={(v) => {
+          setShowDiscountsModal(v);
+          if (!v) {
+            fetchDiscounts();
+          }
+        }}
       />
 
       {/* Modal QR grande */}
       <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className={modalClass("max-w-md")}>
           <DialogHeader className="pb-4 border-b border-border/50">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-950 flex items-center justify-center">
@@ -2071,7 +2283,7 @@ export default function AdminDashboard() {
 
           <div className="flex flex-col items-center gap-4 py-6">
             {qrModalCode && (
-              <code className="text-sm bg-muted/60 px-3 py-2 rounded-lg font-mono border border-border/50">
+              <code className="text-sm bg-muted/60 px-3 py-2 rounded-lg font-mono border border-border/50 break-all">
                 {qrModalCode}
               </code>
             )}
