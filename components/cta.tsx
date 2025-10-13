@@ -79,7 +79,7 @@ export function CTA() {
 
             {/* Trust Badge */}
             <p className="text-sm text-primary-foreground/70 pt-4">
-              ✨ Más de 10,000 personas ya disfrutaron nuestras fiestas
+              ¡Esto va a explotar! no te lo pierdas. 💣🫦
             </p>
           </div>
         </div>

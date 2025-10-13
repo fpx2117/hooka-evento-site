@@ -289,7 +289,7 @@ export default function PaymentSuccessPage() {
             </Link>
           </Button>
           <p className="text-xs text-muted-foreground">
-            ¡Nos vemos en la fiesta! 🌴🎉
+            ¡Nos vemos en la fiesta! 🫦💣
           </p>
         </div>
       </div>
