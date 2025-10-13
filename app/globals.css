@@ -56,6 +56,23 @@
   --sidebar-ring: oklch(0.65 0.18 200);
 }
 
+/* Texto con gradiente animado */
+.text-gradient {
+  background-image: linear-gradient(90deg, #f25691, #ef6065, #ead1a6);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: gradient-move 6s ease-in-out infinite;
+}
+
+/* Glow suave estilo neón */
+.neon-glow {
+  text-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.25),
+    0 0 18px rgba(242, 86, 145, 0.45);
+}
+
 .dark {
   --background: oklch(0.15 0.02 280);
   --foreground: oklch(0.98 0.01 280);
@@ -161,8 +178,11 @@
 
   /* Neon glow effect */
   .neon-glow {
-    text-shadow: 0 0 10px oklch(0.65 0.18 200 / 0.8), 0 0 20px oklch(0.65 0.18 200 / 0.6), 0 0 30px
-      oklch(0.65 0.18 200 / 0.4), 0 0 40px oklch(0.7 0.2 35 / 0.3);
+    text-shadow:
+      0 0 10px oklch(0.65 0.18 200 / 0.8),
+      0 0 20px oklch(0.65 0.18 200 / 0.6),
+      0 0 30px oklch(0.65 0.18 200 / 0.4),
+      0 0 40px oklch(0.7 0.2 35 / 0.3);
   }
 
   /* Tropical gradient background */
@@ -242,10 +262,14 @@
   @keyframes pulse-glow {
     0%,
     100% {
-      box-shadow: 0 0 20px oklch(0.65 0.18 200 / 0.4), 0 0 40px oklch(0.7 0.2 35 / 0.2);
+      box-shadow:
+        0 0 20px oklch(0.65 0.18 200 / 0.4),
+        0 0 40px oklch(0.7 0.2 35 / 0.2);
     }
     50% {
-      box-shadow: 0 0 30px oklch(0.65 0.18 200 / 0.6), 0 0 60px oklch(0.7 0.2 35 / 0.4);
+      box-shadow:
+        0 0 30px oklch(0.65 0.18 200 / 0.6),
+        0 0 60px oklch(0.7 0.2 35 / 0.4);
     }
   }
 

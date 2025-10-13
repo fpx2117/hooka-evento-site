@@ -16,44 +16,31 @@ export function Hero() {
 
   useEffect(() => {
     const targetDate = new Date("2025-11-02T22:00:00").getTime();
-
-    const updateCountdown = () => {
-      const now = new Date().getTime();
-      const difference = targetDate - now;
-
-      if (difference > 0) {
-        setTimeLeft({
-          days: Math.floor(difference / (1000 * 60 * 60 * 24)),
-          hours: Math.floor(
-            (difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
-          ),
-          minutes: Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60)),
-          seconds: Math.floor((difference % (1000 * 60)) / 1000),
-        });
-      }
+    const tick = () => {
+      const diff = Math.max(targetDate - Date.now(), 0);
+      setTimeLeft({
+        days: Math.floor(diff / 86_400_000),
+        hours: Math.floor((diff % 86_400_000) / 3_600_000),
+        minutes: Math.floor((diff % 3_600_000) / 60_000),
+        seconds: Math.floor((diff % 60_000) / 1000),
+      });
     };
-
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-
-    return () => clearInterval(interval);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
   }, []);
 
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
-      {/* Animated gradient background */}
+      {/* BG */}
       <div className="absolute inset-0 z-0">
         <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.85_0.15_95)] via-[oklch(0.7_0.18_35)] to-[oklch(0.65_0.18_210)] animate-gradient" />
-
-        {/* Sun */}
         <div className="absolute top-20 right-20 w-32 h-32 md:w-48 md:h-48 rounded-full bg-gradient-radial from-[oklch(0.95_0.2_90)] to-transparent opacity-60 blur-2xl animate-pulse-slow" />
-
         <div className="absolute top-1/4 left-10 w-20 h-20 md:w-24 md:h-24 rounded-full bg-primary/20 blur-xl animate-float-slow" />
         <div className="absolute bottom-1/3 right-20 w-24 h-24 md:w-32 md:h-32 rounded-full bg-secondary/20 blur-xl animate-float-slower" />
         <div className="absolute top-1/2 left-1/4 w-12 h-12 md:w-16 md:h-16 rounded-full bg-accent/20 blur-lg animate-float" />
         <div className="absolute top-1/3 right-1/3 w-16 h-16 md:w-20 md:h-20 rounded-full bg-primary/15 blur-xl animate-float" />
-        <div className="absolute bottom-1/4 left-1/3 w-14 h-14 md:w-18 md:h-18 rounded-full bg-accent/15 blur-lg animate-float-slower" />
-
+        <div className="absolute bottom-1/4 left-1/3 w-14 h-14 md:w-[4.5rem] md:h-[4.5rem] rounded-full bg-accent/15 blur-lg animate-float-slower" />
         <div className="absolute bottom-0 left-0 right-0 -mb-1">
           <svg
             viewBox="0 0 1440 200"
@@ -81,11 +68,11 @@ export function Hero() {
 
       <div className="absolute inset-0 z-10 bg-gradient-to-b from-background/50 via-background/30 to-background/40" />
 
-      {/* Content */}
-      <div className="relative z-20 container mx-auto px-4 text-center pt-24 md:pt-32 pb-12">
-        <div className="max-w-5xl mx-auto space-y-6 md:space-y-8">
+      {/* CONTENT */}
+      <div className="relative z-20 container mx-auto px-4 text-center pt-24 md:pt-28 pb-10">
+        <div className="max-w-5xl mx-auto space-y-5 md:space-y-7">
           {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 md:px-6 md:py-3 rounded-full bg-background/80 backdrop-blur-sm border-2 border-primary/50 animate-pulse-glow">
+          <div className="inline-flex items-center gap-2 px-4 py-2 md:px-6 md:py-3 rounded-full bg-background/80 backdrop-blur-sm border-2 border-primary/50">
             <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-accent" />
             <span className="text-xs md:text-sm font-semibold tracking-wider text-foreground">
               TEMPORADA 2025
@@ -93,22 +80,32 @@ export function Hero() {
             <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-secondary" />
           </div>
 
-          {/* Main Title - Improved responsive sizing */}
-          <h1 className="text-5xl sm:text-6xl md:text-8xl lg:text-9xl font-display tracking-tight leading-none">
+          {/* H1 principal */}
+          <h1 className="text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-display tracking-tight leading-[0.95] mb-2 md:mb-3">
             <span className="block neon-glow text-primary-foreground">
               ¡VIENE EL
             </span>
-            <span className="block text-gradient mt-2">VERANO!</span>
+            <span className="block text-gradient mt-1 md:mt-2">VERANO!</span>
           </h1>
 
-          {/* Subtitle - Improved responsive sizing */}
-          <p className="text-xl sm:text-2xl md:text-4xl font-display text-primary-foreground/90 tracking-wide">
-            Hooka Party
-          </p>
+          {/* Hooka Party — centrado y sin logo */}
+          <h2
+            className="
+              font-display text-white
+              text-5xl sm:text-6xl
+              md:text-7xl lg:text-6xl xl:text-6xl
+              font-extrabold tracking-tight leading-[0.95]
+              text-center whitespace-nowrap
+              drop-shadow-[0_1px_0_rgba(0,0,0,0.15)]
+            "
+          >
+            Hooka&nbsp;Party
+          </h2>
 
-          <div className="flex items-center justify-center gap-3 sm:gap-4 md:gap-6 pt-4">
+          {/* Countdown */}
+          <div className="flex items-center justify-center gap-3 sm:gap-4 md:gap-6 pt-3 md:pt-4">
             <div className="text-center">
-              <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
+              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.days.toString().padStart(2, "0")}
               </div>
               <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
@@ -119,7 +116,7 @@ export function Hero() {
               :
             </div>
             <div className="text-center">
-              <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
+              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.hours.toString().padStart(2, "0")}
               </div>
               <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
@@ -130,7 +127,7 @@ export function Hero() {
               :
             </div>
             <div className="text-center">
-              <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
+              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.minutes.toString().padStart(2, "0")}
               </div>
               <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
@@ -141,7 +138,7 @@ export function Hero() {
               :
             </div>
             <div className="text-center">
-              <div className="text-3xl sm:text-4xl md:text-5xl font-display text-gradient font-bold">
+              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
                 {timeLeft.seconds.toString().padStart(2, "0")}
               </div>
               <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
@@ -150,12 +147,14 @@ export function Hero() {
             </div>
           </div>
 
+          {/* Copy */}
           <p className="text-base sm:text-lg md:text-xl text-primary-foreground/80 max-w-2xl mx-auto leading-relaxed px-4">
             La mejor fiesta de zona norte. Música, diversión y energía para
             disfrutar al máximo.
           </p>
 
-          <div className="flex items-center justify-center pt-6 md:pt-8 px-4">
+          {/* CTA */}
+          <div className="flex items-center justify-center pt-6 md:pt-7 px-4">
             <Button
               size="lg"
               onClick={() => setShowTicketModal(true)}
