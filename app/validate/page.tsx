@@ -71,29 +71,39 @@ function toUiTicket(t: ApiTicket, code?: string): UiTicket {
   };
 }
 
-/** Ejecuta la validación con tu misma lógica original, pero en el servidor */
+/** Flujo más tolerante: GET primero; si corresponde, POST para marcar validado */
 async function runValidationFlow(
   code: string
 ): Promise<{ ticket?: UiTicket; error?: string }> {
   try {
+    // 1) Traigo el ticket por código (si no existe, error claro)
     let t: ApiTicket | undefined;
     try {
-      const res = await validateTicket(code); // POST al backend
-      t = res.ticket;
-    } catch (e: any) {
-      // Si ya validado o no aprobado, buscamos detalle
-      if (e?.code === "already_validated" || e?.code === "not_approved") {
-        try {
-          t = await getTicketByCode(code); // GET por código
-        } catch {
-          // se maneja abajo si sigue sin datos
+      t = await getTicketByCode(code);
+    } catch {
+      return { error: "Código no encontrado" };
+    }
+
+    // 2) Si no está aprobado, devuelvo datos igual (UI mostrará estado)
+    if (t.paymentStatus !== "approved") {
+      return { ticket: toUiTicket(t, code) };
+    }
+
+    // 3) Si está aprobado y NO validado, intento validar.
+    if (!t.validated) {
+      try {
+        const res = await validateTicket(code); // marca validado
+        if (res?.ticket) t = res.ticket;
+      } catch (e: any) {
+        // Si el backend dice "ya validado", sigo con el detalle que tengo
+        if (e?.code !== "already_validated") {
+          // Cualquier otro error, muestro lo que tengo sin cortar
         }
       }
-      if (!t) return { error: e?.details?.error || "Validación fallida" };
     }
-    return t
-      ? { ticket: toUiTicket(t, code) }
-      : { error: "No se encontró la entrada" };
+
+    // 4) Devuelvo estado final
+    return { ticket: toUiTicket(t, code) };
   } catch {
     return { error: "Error al validar" };
   }
@@ -107,7 +117,7 @@ function EmptyState() {
     <Card className="p-6">
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="code">Código de Validación (6 dígitos)</Label>
+          <Label htmlFor="code">Código de validación</Label>
           {/* GET directo para no generar POST/303 adicionales */}
           <form method="GET" action="/admin/validate">
             <Input
@@ -115,7 +125,7 @@ function EmptyState() {
               name="code"
               inputMode="numeric"
               pattern="[0-9]*"
-              maxLength={6}
+              maxLength={12}
               placeholder="123456"
               className="text-center text-2xl tracking-widest font-mono"
               required
@@ -146,7 +156,7 @@ function ErrorCard({ message }: { message: string }) {
             name="code"
             inputMode="numeric"
             pattern="[0-9]*"
-            maxLength={6}
+            maxLength={12}
             placeholder="Ingresá otro código"
             className="text-center text-lg font-mono mb-3"
             required
@@ -262,7 +272,7 @@ function TicketCard({ t }: { t: UiTicket }) {
             name="code"
             inputMode="numeric"
             pattern="[0-9]*"
-            maxLength={6}
+            maxLength={12}
             placeholder="Ingresá otro código"
             className="text-center text-lg font-mono mb-3"
             required
@@ -286,14 +296,17 @@ export default async function Page({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // Next 15: searchParams es async
+  // Next 15: searchParams async
   const sp = await searchParams;
 
-  // Code en URL
-  const codeParam = typeof sp?.code === "string" ? sp.code.trim() : "";
-  const validCode = /^\d{6}$/.test(codeParam) ? codeParam : "";
+  // Normalizo el parámetro: quito todo lo que no sea dígito (espacios, %0A, etc.)
+  const raw =
+    (Array.isArray(sp?.code) ? sp.code[0] : sp?.code)?.toString() ?? "";
+  const codeParam = raw.normalize("NFKC").replace(/[^\d]/g, ""); // solo números
 
-  // Si hay code, validamos en servidor (helpers)
+  // Si tengo al menos 4 dígitos, intento validar (no corto por largo exacto)
+  const validCode = codeParam.length >= 4 ? codeParam : "";
+
   let ui: { ticket?: UiTicket; error?: string } | null = null;
   if (validCode) {
     ui = await runValidationFlow(validCode);
@@ -318,10 +331,6 @@ export default async function Page({
 
         {/* Contenido principal */}
         {!validCode && <EmptyState />}
-
-        {sp?.error === "badcode" && (
-          <ErrorCard message="Ingresá un código de 6 dígitos." />
-        )}
 
         {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
         {validCode && ui && ui.ticket && <TicketCard t={ui.ticket} />}
