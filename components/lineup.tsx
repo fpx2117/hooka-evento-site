@@ -21,19 +21,18 @@ const INITIAL_DJS = [
     youtubeUrl: "https://www.youtube.com/@DjPirata",
   },
   {
-    name: "Brian Segovia DJ",
+    name: "Braian Segovia DJ",
     specialty: "",
     image: "/braiansegoviadj.jpg",
     spotifyUrl: "",
     youtubeUrl: "https://www.youtube.com/@braiansegoviadj",
   },
   {
-    name: "Eiron RMX",
+    name: "Juanc RMX",
     specialty: "",
-    image: "/eirondj.jpg",
-    spotifyUrl:
-      "https://open.spotify.com/intl-es/artist/5YTcIjhh7GFjC8tEkeLnwQ?si=Sv-9VfDzTg2Q6vbyGdQL4w&fbclid=PAZXh0bgNhZW0CMTEAAaexKF4qHH1FIRc7z3C5J-_ed07xYo1MgC-LoZkvP7_yXKosE-IVIqrsFk4Yxg_aem_fDO9cKGzLIrDjDsK2uLtOQ&nd=1&dlsi=987f78e8656541b5",
-    youtubeUrl: "https://www.youtube.com/@EIRONRMX",
+    image: "/juanc_rmx.jpg",
+    spotifyUrl: "",
+    youtubeUrl: "https://www.instagram.com/juanc_rmx",
   },
 
   // Podés agregar hasta 2 más; el componente recorta a 6
