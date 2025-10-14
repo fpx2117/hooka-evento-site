@@ -283,7 +283,7 @@ function emailTemplate({
                 </div>
 
                 <p style="font-size:13px; color:#555; margin:16px 0 0 0; font-weight:600; line-height:1.5;">
-                  📱 Escaneá el QR para verificación instantánea
+                  📱 Mostrá este código o tu QR al personal 📱
                 </p>
               </div>`
               : ""
