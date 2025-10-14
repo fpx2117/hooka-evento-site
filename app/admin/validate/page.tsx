@@ -71,38 +71,40 @@ function toUiTicket(t: ApiTicket, code?: string): UiTicket {
   };
 }
 
-/** Flujo más tolerante: GET primero; si corresponde, POST para marcar validado */
+/** Flujo tolerante: GET primero; si corresponde, POST para marcar validado */
 async function runValidationFlow(
   code: string
 ): Promise<{ ticket?: UiTicket; error?: string }> {
   try {
-    // 1) Traigo el ticket por código (si no existe, error claro)
     let t: ApiTicket | undefined;
+
+    // 1) Obtenemos detalle por código (si falla, devolvemos el error real del backend)
     try {
       t = await getTicketByCode(code);
-    } catch {
-      return { error: "Código no encontrado" };
+    } catch (e: any) {
+      return {
+        error: e?.code ? `Error backend: ${e.code}` : "Código no encontrado",
+      };
     }
 
-    // 2) Si no está aprobado, devuelvo datos igual (UI mostrará estado)
+    // 2) Si no está aprobado, devolvemos estado igualmente (la UI lo muestra)
     if (t.paymentStatus !== "approved") {
       return { ticket: toUiTicket(t, code) };
     }
 
-    // 3) Si está aprobado y NO validado, intento validar.
+    // 3) Si está aprobado y NO validado, intentamos validar (ignorar "already_validated")
     if (!t.validated) {
       try {
-        const res = await validateTicket(code); // marca validado
+        const res = await validateTicket(code);
         if (res?.ticket) t = res.ticket;
       } catch (e: any) {
-        // Si el backend dice "ya validado", sigo con el detalle que tengo
         if (e?.code !== "already_validated") {
-          // Cualquier otro error, muestro lo que tengo sin cortar
+          // cualquier otro error: seguimos con el detalle que ya tenemos
         }
       }
     }
 
-    // 4) Devuelvo estado final
+    // 4) Devolvemos estado final
     return { ticket: toUiTicket(t, code) };
   } catch {
     return { error: "Error al validar" };
@@ -123,9 +125,9 @@ function EmptyState() {
             <Input
               id="code"
               name="code"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={12}
+              inputMode="text" // permite alfanuméricos si existieran
+              // sin pattern: no bloqueamos letras
+              maxLength={32}
               placeholder="123456"
               className="text-center text-2xl tracking-widest font-mono"
               required
@@ -154,9 +156,8 @@ function ErrorCard({ message }: { message: string }) {
         <form method="GET" action="/admin/validate">
           <Input
             name="code"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            maxLength={12}
+            inputMode="text"
+            maxLength={32}
             placeholder="Ingresá otro código"
             className="text-center text-lg font-mono mb-3"
             required
@@ -270,9 +271,8 @@ function TicketCard({ t }: { t: UiTicket }) {
         <form method="GET" action="/admin/validate" className="w-full mt-6">
           <Input
             name="code"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            maxLength={12}
+            inputMode="text"
+            maxLength={32}
             placeholder="Ingresá otro código"
             className="text-center text-lg font-mono mb-3"
             required
@@ -299,12 +299,17 @@ export default async function Page({
   // Next 15: searchParams async
   const sp = await searchParams;
 
-  // Normalizo el parámetro: quito todo lo que no sea dígito (espacios, %0A, etc.)
-  const raw =
-    (Array.isArray(sp?.code) ? sp.code[0] : sp?.code)?.toString() ?? "";
-  const codeParam = raw.normalize("NFKC").replace(/[^\d]/g, ""); // solo números
+  // Tomamos ?code= o ?validationCode= (cualquiera de los dos)
+  const pick = (val: string | string[] | undefined) =>
+    (Array.isArray(val) ? val[0] : val) ?? "";
 
-  // Si tengo al menos 4 dígitos, intento validar (no corto por largo exacto)
+  const rawCode =
+    pick(sp?.code) || // ?code=XXXX
+    pick(sp?.validationCode) || // ?validationCode=XXXX
+    "";
+
+  // Normalizo pero NO elimino letras: solo trim
+  const codeParam = rawCode.toString().normalize("NFKC").trim();
   const validCode = codeParam.length >= 4 ? codeParam : "";
 
   let ui: { ticket?: UiTicket; error?: string } | null = null;
@@ -325,7 +330,8 @@ export default async function Page({
           </h1>
           <p className="text-muted-foreground">
             Si llegaste desde un QR, esta página valida automáticamente con{" "}
-            <code>?code=XXXXXX</code>. Si no, ingresá el código manualmente.
+            <code>?code=XXXXXX</code> (o <code>?validationCode=XXXXXX</code>).
+            Si no, ingresá el código manualmente.
           </p>
         </div>
 
