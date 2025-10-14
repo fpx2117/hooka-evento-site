@@ -1,6 +1,4 @@
 // app/admin/validate/page.tsx
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 
 // UI (shadcn)
 import { Card } from "@/components/ui/card";
@@ -18,12 +16,9 @@ import {
   Ticket,
   Calendar,
   Hash,
-  Lock,
-  LogIn,
-  LogOut,
 } from "lucide-react";
 
-// 🔸 IMPORTAMOS TUS HELPERS (se usan en el servidor)
+// Helpers (server)
 import { getTicketByCode, validateTicket } from "@/lib/api";
 
 /* ======================
@@ -83,13 +78,13 @@ async function runValidationFlow(
   try {
     let t: ApiTicket | undefined;
     try {
-      const res = await validateTicket(code); // ← TU helper (POST al backend)
+      const res = await validateTicket(code); // POST al backend
       t = res.ticket;
     } catch (e: any) {
-      // Igual que tu flujo: si ya validado o no aprobado, buscamos el detalle
+      // Si ya validado o no aprobado, buscamos detalle
       if (e?.code === "already_validated" || e?.code === "not_approved") {
         try {
-          t = await getTicketByCode(code); // ← TU helper (GET por código)
+          t = await getTicketByCode(code); // GET por código
         } catch {
           // se maneja abajo si sigue sin datos
         }
@@ -105,94 +100,8 @@ async function runValidationFlow(
 }
 
 /* ======================
-   Server Actions (auth)
+   Vistas
 ====================== */
-export const dynamic = "force-dynamic";
-
-export async function loginAction(formData: FormData) {
-  "use server";
-  const PASS = process.env.ADMIN_VALIDATE_PASS ?? "";
-  const HOURS = parseInt(process.env.ADMIN_VALIDATE_SESSION_HOURS || "12", 10);
-
-  if (!PASS) redirect("/admin/validate?error=env");
-
-  const password = String(formData.get("password") ?? "");
-  if (password !== PASS) redirect("/admin/validate?error=1");
-
-  (await cookies()).set({
-    name: "admin_validate_auth",
-    value: "ok",
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/admin/validate",
-    maxAge: HOURS * 60 * 60,
-  });
-
-  redirect("/admin/validate");
-}
-
-export async function logoutAction() {
-  "use server";
-  (await cookies()).set({
-    name: "admin_validate_auth",
-    value: "",
-    expires: new Date(0),
-    path: "/admin/validate",
-  });
-  redirect("/admin/validate");
-}
-
-/* ======================
-   Vistas (SSR)
-====================== */
-function LoginGate({ errorKey }: { errorKey?: string }) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-background via-primary/5 to-secondary/5 p-4">
-      <Card className="w-full max-w-sm p-6 space-y-5">
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
-            <Lock className="w-6 h-6 text-primary" />
-          </div>
-          <h1 className="text-xl font-semibold">Acceso requerido</h1>
-          <p className="text-sm text-muted-foreground">
-            Ingresá la contraseña de administrador.
-          </p>
-        </div>
-
-        {errorKey && (
-          <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2">
-            <XCircle className="w-4 h-4" />
-            {errorKey === "env"
-              ? "Falta configurar ADMIN_VALIDATE_PASS en .env.local"
-              : errorKey === "1"
-                ? "Contraseña incorrecta"
-                : "Error de autenticación"}
-          </div>
-        )}
-
-        <form action={loginAction} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="password">Contraseña</Label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              placeholder="••••••••"
-              required
-              autoFocus
-            />
-          </div>
-          <Button type="submit" className="w-full">
-            <LogIn className="w-4 h-4 mr-2" />
-            Ingresar
-          </Button>
-        </form>
-      </Card>
-    </div>
-  );
-}
-
 function EmptyState() {
   return (
     <Card className="p-6">
@@ -368,30 +277,23 @@ function TicketCard({ t }: { t: UiTicket }) {
 }
 
 /* ======================
-   Página (SSR c/ searchParams async)
+   Página (SSR)
 ====================== */
+export const dynamic = "force-dynamic";
+
 export default async function Page({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // Auth
-  const cookie = (await cookies()).get("admin_validate_auth");
-  const allowed = cookie?.value === "ok";
-
   // Next 15: searchParams es async
   const sp = await searchParams;
-  const errorKey = typeof sp?.error === "string" ? sp.error : undefined;
 
-  if (!allowed) {
-    return <LoginGate errorKey={errorKey} />;
-  }
-
-  // Header
+  // Code en URL
   const codeParam = typeof sp?.code === "string" ? sp.code.trim() : "";
   const validCode = /^\d{6}$/.test(codeParam) ? codeParam : "";
 
-  // Si hay code en URL, validamos en servidor (con tus helpers)
+  // Si hay code, validamos en servidor (helpers)
   let ui: { ticket?: UiTicket; error?: string } | null = null;
   if (validCode) {
     ui = await runValidationFlow(validCode);
@@ -400,7 +302,7 @@ export default async function Page({
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-primary/5 to-secondary/5 py-12 px-4">
       <div className="container mx-auto max-w-2xl">
-        {/* Header + Logout */}
+        {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-primary to-secondary mb-4">
             <QrCode className="w-8 h-8 text-white" />
@@ -414,21 +316,11 @@ export default async function Page({
           </p>
         </div>
 
-        <form action={logoutAction} className="mb-6">
-          <Button variant="outline" className="w-full sm:w-auto">
-            <LogOut className="w-4 h-4 mr-2" />
-            Cerrar sesión
-          </Button>
-        </form>
-
         {/* Contenido principal */}
-        {!validCode && !errorKey && <EmptyState />}
+        {!validCode && <EmptyState />}
 
-        {errorKey === "badcode" && (
+        {sp?.error === "badcode" && (
           <ErrorCard message="Ingresá un código de 6 dígitos." />
-        )}
-        {errorKey === "env" && (
-          <ErrorCard message="Falta configurar ADMIN_VALIDATE_PASS en .env.local." />
         )}
 
         {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
