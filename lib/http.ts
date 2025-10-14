@@ -1,53 +1,90 @@
 // lib/http.ts
-import axios, { AxiosError } from "axios";
-import axiosRetry from "axios-retry";
+import axios, { AxiosInstance } from "axios";
 
-export type ApiError = {
-  status: number;
-  code?: string;
-  message: string;
-  details?: unknown;
-};
+/**
+ * Normaliza y valida la base pública.
+ * Acepta:
+ *  - https://mi-dominio.com
+ *  - http://localhost:3000
+ *  - (si viene sin esquema, se asume https en prod y http en dev)
+ */
+function normalizeBaseUrl(raw?: string): string {
+  let v = (raw || "").trim();
 
-function getBaseURL() {
-  // Navegador
-  if (typeof window !== "undefined") {
-    return window.location.origin; // funciona en dev y prod
+  if (!v) {
+    const vercel = process.env.VERCEL_URL?.trim(); // sin esquema
+    if (vercel) v = `https://${vercel}`;
   }
-  // Server (SSR / RSC): intenta tomar del env, cae a localhost
-  return process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+
+  if (!v) {
+    // Fallback local
+    v = "http://localhost:3000";
+  }
+
+  // Si viene sin esquema
+  if (!/^https?:\/\//i.test(v)) {
+    const isProd = process.env.NODE_ENV === "production";
+    v = `${isProd ? "https" : "http"}://${v}`;
+  }
+
+  // quitar barras finales repetidas
+  return v.replace(/\/+$/, "");
 }
 
-export const http = axios.create({
-  baseURL: getBaseURL(),
-  timeout: 10_000,
-  headers: { "Content-Type": "application/json" },
-  // con credenciales si lo necesitás (cookies admin)
-  withCredentials: true,
-});
+/**
+ * Devuelve instancia Axios lista para usar.
+ * Si la primera llamada falla por ECONNREFUSED y la base contiene http/https,
+ * getHttpRetry() se encarga de reintentar con el esquema alternativo.
+ */
+export function getHttp(baseOverride?: string): AxiosInstance {
+  const baseURL = normalizeBaseUrl(
+    baseOverride ?? process.env.NEXT_PUBLIC_BASE_URL
+  );
 
-// Reintentos exponenciales ante 5xx / network
-axiosRetry(http, {
-  retries: 2,
-  retryDelay: axiosRetry.exponentialDelay,
-  retryCondition: (error) =>
-    axiosRetry.isNetworkOrIdempotentRequestError(error) ||
-    (error.response?.status ?? 0) >= 500,
-});
+  const instance = axios.create({
+    baseURL,
+    withCredentials: false,
+    timeout: 15000,
+  });
 
-// Normalizamos errores a ApiError
-http.interceptors.response.use(
-  (res) => res,
-  (error: AxiosError) => {
-    const status = error.response?.status ?? 0;
-    const data: any = error.response?.data ?? {};
-    const apiErr: ApiError = {
-      status,
-      code: data?.error ?? (error.code || "unknown_error"),
-      message:
-        data?.message ?? data?.error ?? error.message ?? "Request failed",
-      details: data,
-    };
-    return Promise.reject(apiErr);
+  if (process.env.NODE_ENV !== "production") {
+    // eslint-disable-next-line no-console
+    console.log("[http] baseURL =", baseURL);
   }
-);
+
+  return instance;
+}
+
+/**
+ * Ejecuta una función que hace request con axios y, si hay ECONNREFUSED,
+ * intenta de nuevo con el protocolo alternativo (http<->https).
+ */
+export async function withProtocolFallback<T>(
+  run: (client: AxiosInstance) => Promise<T>,
+  base?: string
+): Promise<T> {
+  const first = getHttp(base);
+  try {
+    return await run(first);
+  } catch (err: any) {
+    const msg = err?.code || err?.message || "";
+    const currentBase = (first.defaults.baseURL || "") as string;
+
+    // Solo tiene sentido si hay esquema http/https y el error es conexión rechazada
+    if (/ECONNREFUSED/i.test(msg) && /^https?:\/\//i.test(currentBase)) {
+      const altBase = currentBase.startsWith("https://")
+        ? currentBase.replace(/^https:\/\//i, "http://")
+        : currentBase.replace(/^http:\/\//i, "https://");
+
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.warn("[http] ECONNREFUSED, reintentando con:", altBase);
+      }
+
+      const second = getHttp(altBase);
+      return await run(second);
+    }
+
+    throw err;
+  }
+}

@@ -1,117 +1,94 @@
 // lib/api.ts
-import { http } from "./http";
 import { z } from "zod";
+import { getHttp, withProtocolFallback } from "./http";
 import {
-  ValidateGetResSchema, // { ok: true, ticket: ... }
-  ValidatePostOkSchema, // { ok: true, validated: boolean, validatedAt?, ticket: ... }
-  ValidateErrorSchema, // { ok: false, error: "...", ... }
+  ValidateGetResSchema,
+  ValidatePostOkSchema,
+  ValidateErrorSchema,
   Ticket,
 } from "./schemas";
 
 const GetUnionSchema = z.union([ValidateGetResSchema, ValidateErrorSchema]);
 const PostUnionSchema = z.union([ValidatePostOkSchema, ValidateErrorSchema]);
 
-/* ============================================================================
-   Endpoints conocidos (soportamos instalaciones con rutas antiguas)
-   ============================================================================ */
+// Probamos primero endpoints públicos, luego el admin
 const API_ENDPOINTS = [
-  "/api/admin/validate",
   "/api/validate",
   "/api/validate-qr",
+  "/api/admin/validate",
 ] as const;
 
-/* ============================================================================
-   Helpers de bajo nivel con fallback de parámetro (code / validationCode)
-   ============================================================================ */
 async function getWithParam(
   path: (typeof API_ENDPOINTS)[number],
   code: string,
-  paramKey: "code" | "validationCode"
+  key: "code" | "validationCode",
+  baseOverride?: string
 ) {
-  return http.get(path, { params: { [paramKey]: code } });
+  return withProtocolFallback(
+    (client) => client.get(path, { params: { [key]: code } }),
+    baseOverride
+  );
 }
-
 async function postWithParam(
   path: (typeof API_ENDPOINTS)[number],
   code: string,
-  paramKey: "code" | "validationCode"
+  key: "code" | "validationCode",
+  baseOverride?: string
 ) {
-  return http.post(path, { [paramKey]: code });
+  return withProtocolFallback(
+    (client) => client.post(path, { [key]: code }),
+    baseOverride
+  );
 }
 
-/** GET: recorre endpoints y prueba {code} y {validationCode} */
-async function getWithFallback(
-  code: string
-): Promise<{ data: unknown; status: number }> {
+async function getWithFallback(code: string, baseOverride?: string) {
   let lastErr: any;
-
   for (const ep of API_ENDPOINTS) {
-    // 1) intento con ?code=
     try {
-      const res = await getWithParam(ep, code, "code");
-      return { data: res.data, status: res.status };
-    } catch (e: any) {
-      // si la ruta no existe en este deploy, seguimos probando
-      if (
-        e?.response?.status === 404 &&
-        typeof e?.response?.data === "string"
-      ) {
-        lastErr = e;
-        continue;
-      }
-      // 2) si respondió pero con error de payload, probamos con validationCode
+      const r = await getWithParam(ep, code, "code", baseOverride);
+      return { data: r.data, status: r.status };
+    } catch (e1: any) {
       try {
-        const res2 = await getWithParam(ep, code, "validationCode");
-        return { data: res2.data, status: res2.status };
+        const r2 = await getWithParam(ep, code, "validationCode", baseOverride);
+        return { data: r2.data, status: r2.status };
       } catch (e2: any) {
-        // si tampoco, nos guardamos el último error y probamos el próximo endpoint
         lastErr = e2;
         continue;
       }
     }
   }
-
   throw lastErr ?? new Error("GET validate endpoint not found");
 }
 
-/** POST: recorre endpoints y prueba {code} y {validationCode} */
-async function postWithFallback(
-  code: string
-): Promise<{ data: unknown; status: number }> {
+async function postWithFallback(code: string, baseOverride?: string) {
   let lastErr: any;
-
   for (const ep of API_ENDPOINTS) {
-    // 1) intento con { code }
     try {
-      const res = await postWithParam(ep, code, "code");
-      return { data: res.data, status: res.status };
-    } catch (e: any) {
-      if (
-        e?.response?.status === 404 &&
-        typeof e?.response?.data === "string"
-      ) {
-        lastErr = e;
-        continue;
-      }
-      // 2) reintento con { validationCode }
+      const r = await postWithParam(ep, code, "code", baseOverride);
+      return { data: r.data, status: r.status };
+    } catch (e1: any) {
       try {
-        const res2 = await postWithParam(ep, code, "validationCode");
-        return { data: res2.data, status: res2.status };
+        const r2 = await postWithParam(
+          ep,
+          code,
+          "validationCode",
+          baseOverride
+        );
+        return { data: r2.data, status: r2.status };
       } catch (e2: any) {
         lastErr = e2;
         continue;
       }
     }
   }
-
   throw lastErr ?? new Error("POST validate endpoint not found");
 }
 
-/* ============================================================================
-   API: GET ticket por código
-   ============================================================================ */
-export async function getTicketByCode(code: string): Promise<Ticket> {
-  const { data, status } = await getWithFallback(code);
+export async function getTicketByCode(
+  code: string,
+  baseOverride?: string
+): Promise<Ticket> {
+  const { data, status } = await getWithFallback(code, baseOverride);
 
   const parsed = GetUnionSchema.safeParse(data);
   if (!parsed.success) {
@@ -121,7 +98,6 @@ export async function getTicketByCode(code: string): Promise<Ticket> {
       details: data,
     };
   }
-
   const payload = parsed.data;
   if (payload.ok === false) {
     throw {
@@ -136,19 +112,14 @@ export async function getTicketByCode(code: string): Promise<Ticket> {
       details: payload,
     };
   }
-
   return payload.ticket;
 }
 
-/* ============================================================================
-   API: POST validar ticket por código
-   ============================================================================ */
-export async function validateTicket(code: string): Promise<{
-  validated: boolean;
-  validatedAt?: string;
-  ticket: Ticket;
-}> {
-  const { data, status } = await postWithFallback(code);
+export async function validateTicket(
+  code: string,
+  baseOverride?: string
+): Promise<{ validated: boolean; validatedAt?: string; ticket: Ticket }> {
+  const { data, status } = await postWithFallback(code, baseOverride);
 
   const parsed = PostUnionSchema.safeParse(data);
   if (!parsed.success) {
@@ -158,11 +129,10 @@ export async function validateTicket(code: string): Promise<{
       details: data,
     };
   }
-
   const payload = parsed.data;
 
   if (payload.ok === false) {
-    const mappedStatus =
+    const mapped =
       payload.error === "not_found"
         ? 404
         : payload.error === "not_approved" ||
@@ -171,9 +141,8 @@ export async function validateTicket(code: string): Promise<{
           : payload.error === "code_required"
             ? 400
             : status || 400;
-
     throw {
-      status: mappedStatus,
+      status: mapped,
       code: payload.error,
       message: "Validación fallida",
       details: payload,
