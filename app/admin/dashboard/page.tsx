@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import DiscountsModal from "@/components/DiscountsModal";
+import { DownloadCloud } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -55,6 +56,7 @@ import {
   MoreVertical,
 } from "lucide-react";
 import QRCode from "qrcode";
+import { ExportModal } from "@/components/export-modal"; // + modal
 
 /* =========================
    Utils responsive
@@ -529,6 +531,9 @@ export default function AdminDashboard() {
   // Config desde BD (sin descuentos)
   const [cfg, setCfg] = useState<TicketsConfig | null>(null);
   const [cfgLoading, setCfgLoading] = useState(true);
+
+  // Export (modal)
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Discounts (API dedicada)
   const [discounts, setDiscounts] = useState<DiscountCfg[]>([]);
@@ -1079,6 +1084,18 @@ export default function AdminDashboard() {
                 <QrCode className="w-4 h-4 mr-2" />
                 Validar QR
               </Button>
+
+              {/* NUEVO: Exportar */}
+              <Button
+                variant="secondary"
+                onClick={() => setShowExportModal(true)}
+                className="bg-teal-100 hover:bg-teal-200 text-teal-700 dark:bg-teal-950 dark:hover:bg-teal-900 dark:text-teal-300"
+                title="Exportar Tickets o Reservas VIP"
+              >
+                <DownloadCloud className="w-4 h-4 mr-2" />
+                Exportar
+              </Button>
+
               <Button
                 variant="secondary"
                 onClick={() => setShowConfigModal(true)}
@@ -1688,6 +1705,8 @@ export default function AdminDashboard() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <ExportModal open={showExportModal} onOpenChange={setShowExportModal} />
 
       {/* ===== Modal Agregar VIP ===== */}
       <Dialog open={showAddVip} onOpenChange={setShowAddVip}>
