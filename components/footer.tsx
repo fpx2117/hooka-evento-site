@@ -1,34 +1,28 @@
-import {
-  Instagram,
-  MessageCircle,
-  Music,
-  Clock,
-  Mail,
-  Phone,
-} from "lucide-react";
+import { Instagram, MessageCircle, Music, Clock, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import Image from "next/image";
 
 export function Footer() {
   return (
     <footer className="bg-foreground text-background py-16">
       <div className="container mx-auto px-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 mb-12">
-          {/* Brand */}
+          {/* Brand (logo a la izquierda, sin círculo) */}
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#F25691] via-[#EF6065] to-[#EAD1A6] flex items-center justify-center shadow-md">
-                <img
-                  src="/logo.png"
+            <a href="/" aria-label="Hooka Party" className="block">
+              <div className="flex items-start">
+                <Image
+                  src="/logov1.png"
                   alt="Hooka Party"
-                  className="h-7 w-7 md:h-10 md:w-10 object-contain"
+                  width={800}
+                  height={300}
+                  priority
+                  className="h-16 md:h-20 lg:h-20 w-auto object-contain"
+                  sizes="(max-width: 768px) 128px, (max-width: 1024px) 160px, 160px"
                 />
               </div>
-              <div>
-                <h3 className="text-2xl font-display tracking-wider">Hooka</h3>
-                <p className="text-xs tracking-widest opacity-70">PARTY</p>
-              </div>
-            </div>
+            </a>
             <p className="text-sm opacity-80 leading-relaxed">
               La mejor fiesta de zona norte. Música, diversión y verano todo el
               año.
@@ -44,7 +38,7 @@ export function Footer() {
                 <p>
                   2 de Noviembre
                   <br />
-                  10am - 18pm
+                  12:00 - 21:00hs
                 </p>
               </div>
               <p className="text-xs leading-relaxed">
@@ -67,7 +61,7 @@ export function Footer() {
           </div>
 
           {/* Redes Sociales */}
-          <div className="space-y-4">
+          <div className="space-y-4 md:col-span-2 lg:col-span-3">
             <h4 className="text-lg font-display tracking-wide">SEGUINOS</h4>
             <div className="flex gap-3">
               <Button

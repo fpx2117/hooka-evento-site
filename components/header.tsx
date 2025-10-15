@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Instagram, MessageCircle, Music, Ticket, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TicketSalesModal } from "@/components/ticket-sales-modal";
+import Image from "next/image";
 
 export function Header() {
   const [scrolled, setScrolled] = useState(false);
@@ -18,34 +19,27 @@ export function Header() {
 
   return (
     <>
+      {/* HEADER: transparente por defecto; blanco solo si hay scroll */}
       <header
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-          scrolled
-            ? "bg-background/95 backdrop-blur-md shadow-lg"
-            : "bg-transparent"
+        className={`fixed top-0 left-0 right-0 z-50 transition-colors duration-300 ${
+          scrolled ? "bg-white/95 backdrop-blur-md shadow-lg" : "bg-transparent"
         }`}
       >
-        <div className="container mx-auto px-4 py-3 md:py-4">
-          <div className="flex items-center justify-between">
-            {/* Logo + Title (sin animaciones) */}
-            <div className="flex items-center gap-2 md:gap-3">
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-gradient-to-br from-[#F25691] via-[#EF6065] to-[#EAD1A6] flex items-center justify-center shadow-md">
-                <span className="text-xl md:text-2xl font-display">
-                  <img
-                    src="/logo.png"
-                    alt="Hooka Party"
-                    className="h-7 w-7 md:h-10 md:w-10 object-contain"
-                  />
-                </span>
-              </div>
-              <div>
-                <h1 className="text-xl md:text-2xl lg:text-3xl font-display tracking-wider text-gradient">
-                  Hooka
-                </h1>
-                <p className="text-[10px] md:text-xs text-muted-foreground tracking-widest">
-                  PARTY
-                </p>
-              </div>
+        <div className="container mx-auto px-4">
+          <div className="flex items-center justify-between h-16 md:h-20 lg:h-24">
+            {/* Logo */}
+            <div className="flex items-center">
+              <a href="/" className="block" aria-label="Hooka Party">
+                <Image
+                  src="/logov1.png"
+                  alt="Hooka Party"
+                  width={800}
+                  height={300}
+                  priority
+                  className="h-full w-auto max-h-16 md:max-h-20 lg:max-h-24 shrink-0"
+                  sizes="(max-width: 768px) 64px, (max-width: 1024px) 80px, 96px"
+                />
+              </a>
             </div>
 
             {/* Desktop actions */}
@@ -111,7 +105,9 @@ export function Header() {
                 size="icon"
                 variant="ghost"
                 className="rounded-full"
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                onClick={() => setMobileMenuOpen((v) => !v)}
+                aria-expanded={mobileMenuOpen}
+                aria-controls="mobile-menu"
               >
                 {mobileMenuOpen ? (
                   <X className="w-5 h-5" />
@@ -122,9 +118,12 @@ export function Header() {
             </div>
           </div>
 
-          {/* Mobile menu (sin animaciones) */}
+          {/* MOBILE MENU: solo el panel es blanco */}
           {mobileMenuOpen && (
-            <div className="md:hidden mt-4 pb-4 space-y-4">
+            <div
+              id="mobile-menu"
+              className="md:hidden mt-2 mb-4 rounded-xl bg-white border border-black/10 p-4 space-y-4 shadow-xl"
+            >
               <Button
                 size="sm"
                 onClick={() => {
