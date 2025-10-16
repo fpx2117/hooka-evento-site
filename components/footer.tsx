@@ -71,7 +71,7 @@ export function Footer() {
                 asChild
               >
                 <a
-                  href="https://instagram.com"
+                  href="https://www.instagram.com/hooka.official"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
