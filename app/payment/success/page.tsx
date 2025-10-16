@@ -1,11 +1,19 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { CheckCircle, Home, Download } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  XCircle,
+  Home,
+  Download,
+  Copy,
+} from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
 /* =========================
    Tipos de las APIs usadas
@@ -52,10 +60,11 @@ export default function PaymentSuccessPage() {
   const [recordId, setRecordId] = useState<string | null>(null);
 
   const emailSentRef = useRef(false);
+  const [copied, setCopied] = useState(false);
 
   // Genera imagen de QR desde un texto
   const renderQr = async (text: string) => {
-    const img = await QRCode.toDataURL(text, { width: 300, margin: 2 });
+    const img = await QRCode.toDataURL(text, { width: 360, margin: 2 });
     setQrCodeImg(img);
   };
 
@@ -68,23 +77,15 @@ export default function PaymentSuccessPage() {
         cache: "no-store",
         body: JSON.stringify({ type: t, recordId: id }),
       });
-      if (r.ok) {
-        emailSentRef.current = true;
-      } else {
-        // opcional: log de error para depurar
-        const err = await r.json().catch(() => ({}));
-        console.warn("[success] send-confirmation no OK:", err);
-      }
-    } catch (e) {
-      // no bloquea UX
-      console.warn("[success] send-confirmation error:", e);
+      if (r.ok) emailSentRef.current = true;
+    } catch {
+      /* no bloquea UX */
     }
   };
 
   useEffect(() => {
     const run = async () => {
       try {
-        // 1) IDs devueltos por Mercado Pago
         const paymentId =
           searchParams.get("payment_id") ||
           searchParams.get("collection_id") ||
@@ -92,7 +93,6 @@ export default function PaymentSuccessPage() {
         const merchantOrderId = searchParams.get("merchant_order_id") || "";
         const externalRef = searchParams.get("external_reference");
 
-        // Variables locales (evitan carreras con setState)
         let localType: "ticket" | "vip-table" | null = null;
         let localRecordId: string | null = null;
         let localApproved: boolean | null = null;
@@ -105,12 +105,9 @@ export default function PaymentSuccessPage() {
           }
         }
 
-        // 2) Confirmación fuerte con backend (si hay paymentId/merchantOrderId)
-        const buildConfirmUrl = (): string | "" => {
+        const confirmUrl = (() => {
           if (paymentId) {
-            return `/api/payments/confirm?payment_id=${encodeURIComponent(
-              paymentId
-            )}`;
+            return `/api/payments/confirm?payment_id=${encodeURIComponent(paymentId)}`;
           }
           if (merchantOrderId) {
             return `/api/payments/confirm?merchant_order_id=${encodeURIComponent(
@@ -118,9 +115,8 @@ export default function PaymentSuccessPage() {
             )}`;
           }
           return "";
-        };
+        })();
 
-        const confirmUrl = buildConfirmUrl();
         if (confirmUrl) {
           try {
             const r = await fetch(confirmUrl, { cache: "no-store" });
@@ -128,17 +124,14 @@ export default function PaymentSuccessPage() {
 
             if (isConfirmOk(data)) {
               setConfirmed(true);
-
               if (data.type) localType = data.type;
               if (data.recordId) localRecordId = data.recordId;
 
-              // derive aprobado local
               localApproved =
                 typeof data.approvedStrong === "boolean"
                   ? data.approvedStrong
                   : data.status === "approved";
 
-              // reflejar en UI
               setApproved(localApproved);
               if (localType) setType(localType);
               if (localRecordId) setRecordId(localRecordId);
@@ -147,7 +140,6 @@ export default function PaymentSuccessPage() {
               setApproved(null);
             }
           } catch {
-            // si falla confirmación, seguimos con external_reference si lo tenemos
             setConfirmed(false);
             setApproved(null);
           }
@@ -156,28 +148,21 @@ export default function PaymentSuccessPage() {
           setApproved(null);
         }
 
-        // 3) Cargar códigos públicos si tenemos identificadores
         if (localType && localRecordId) {
           const requireApproved =
             localApproved === true ? "&requireApproved=1" : "";
           const r = await fetch(
-            `/api/tickets/public?type=${encodeURIComponent(
-              localType
-            )}&id=${encodeURIComponent(localRecordId)}${requireApproved}`,
+            `/api/tickets/public?type=${encodeURIComponent(localType)}&id=${encodeURIComponent(
+              localRecordId
+            )}${requireApproved}`,
             { cache: "no-store" }
           );
           const info: PublicTicketResp = await r.json();
 
           if (info.ok) {
             if (info.validationCode) setValidationCode(info.validationCode);
-
-            // Si el endpoint ya trae un string para QR lo usamos;
-            // si no, generamos QR desde el validationCode como fallback.
-            if (info.qrCode) {
-              await renderQr(info.qrCode);
-            } else if (info.validationCode) {
-              await renderQr(info.validationCode);
-            }
+            if (info.qrCode) await renderQr(info.qrCode);
+            else if (info.validationCode) await renderQr(info.validationCode);
 
             const approvedNow =
               localApproved === true || info.paymentStatus === "approved";
@@ -201,98 +186,165 @@ export default function PaymentSuccessPage() {
     if (!qrCodeImg) return;
     const link = document.createElement("a");
     link.href = qrCodeImg;
-    link.download = `tropical-pool-party-qr-${validationCode || "codigo"}.png`;
+    link.download = `hooka-qr-${validationCode || "codigo"}.png`;
     link.click();
   };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-primary/20 via-secondary/20 to-accent/20">
-      <div className="max-w-md w-full bg-background rounded-2xl shadow-2xl p-8 text-center space-y-6">
-        <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-500/20 animate-pulse-glow">
-          <CheckCircle className="w-12 h-12 text-green-500" />
+  const copyCode = async () => {
+    if (!validationCode) return;
+    try {
+      await navigator.clipboard.writeText(validationCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {}
+  };
+
+  const StatusBadge = () => {
+    if (approved === true)
+      return (
+        <div className="inline-flex items-center gap-2 rounded-full bg-emerald-600/20 text-emerald-200 px-3 py-1 text-xs">
+          <CheckCircle2 className="w-4 h-4" />
+          Acreditado
         </div>
-
-        <div className="space-y-2">
-          <h1 className="text-3xl font-display text-balance">¡Pago Exitoso!</h1>
-          <p className="text-muted-foreground leading-relaxed">
-            Tu compra ha sido procesada correctamente. Recibirás un email de
-            confirmación con todos los detalles.
-          </p>
+      );
+    if (approved === false)
+      return (
+        <div className="inline-flex items-center gap-2 rounded-full bg-red-600/20 text-red-200 px-3 py-1 text-xs">
+          <XCircle className="w-4 h-4" />
+          No acreditado
         </div>
-
-        {/* Bloque QR + Código */}
-        {!loading && (validationCode || qrCodeImg) && (
-          <>
-            {validationCode && (
-              <div className="bg-primary text-primary-foreground rounded-xl p-6 space-y-2">
-                <p className="text-sm font-medium">CÓDIGO DE VALIDACIÓN</p>
-                <p className="text-4xl font-bold tracking-wider">
-                  {validationCode}
-                </p>
-                <p className="text-xs opacity-90">
-                  Mostrá este código al personal de seguridad
-                </p>
-              </div>
-            )}
-
-            {qrCodeImg && (
-              <div className="bg-white rounded-xl p-6 space-y-3">
-                <p className="text-sm font-medium text-foreground">
-                  Tu Código QR
-                </p>
-                <img
-                  src={qrCodeImg}
-                  alt="QR Code"
-                  className="mx-auto w-64 h-64"
-                />
-                <Button
-                  onClick={downloadQR}
-                  variant="outline"
-                  size="sm"
-                  className="w-full bg-transparent"
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Descargar QR
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Mensaje de espera si todavía no tenemos códigos */}
-        {!loading && !validationCode && !qrCodeImg && (
-          <div className="rounded-xl p-4 bg-yellow-50 text-yellow-700 text-sm">
-            Estamos validando los datos de tu compra. Si no ves tu QR en unos
-            segundos, revisá tu email.
-          </div>
-        )}
-
-        {/* Info adicional y advertencia si no quedó aprobado */}
-        <div className="bg-muted/50 rounded-xl p-4 space-y-2 text-sm">
-          <p className="text-xs text-muted-foreground">
-            Te enviamos toda la información necesaria para disfrutar de tu
-            experiencia en Tropical Pool Party
-          </p>
-          {confirmed === true && approved === false && (
-            <p className="text-xs text-red-600">
-              Atención: el pago aún no figura como acreditado en Mercado Pago.
-              Si ya pagaste, se actualizará en breve.
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-3 pt-4">
-          <Button asChild size="lg" className="w-full rounded-full">
-            <Link href="/">
-              <Home className="w-4 h-4 mr-2" />
-              Volver al inicio
-            </Link>
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            ¡Nos vemos en la fiesta! 🫦💣
-          </p>
-        </div>
+      );
+    return (
+      <div className="inline-flex items-center gap-2 rounded-full bg-yellow-500/20 text-yellow-100 px-3 py-1 text-xs">
+        <Clock className="w-4 h-4" />
+        Validando
       </div>
-    </div>
+    );
+  };
+
+  return (
+    <main className="relative min-h-[100svh] overflow-hidden text-white">
+      {/* Fondo con HOOKA */}
+      <HeroBackgroundEasy
+        mobile={{ rows: 4, cols: 1 }}
+        desktop={{ rows: 4, cols: 3 }}
+        fontMobile="clamp(2.6rem, 21vw, 9rem)"
+        opacity={0.55}
+        gap="clamp(0px, 1vh, 10px)"
+        navTopPx={0}
+      />
+      {/* Velo para contraste */}
+      <div aria-hidden className="absolute inset-0 bg-black/55" />
+
+      {/* Contenido */}
+      <section className="relative z-10 grid min-h-[100svh] place-items-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-white/15 bg-white/5 backdrop-blur-xl shadow-2xl">
+          {/* Header */}
+          <div className="px-6 pt-6 text-center space-y-2">
+            <StatusBadge />
+            <h1 className="text-3xl font-display">¡Pago exitoso!</h1>
+            <p className="text-sm text-white/80">
+              Te enviamos un email con tu entrada. Guardá el **código** o **QR**
+              para el ingreso.
+            </p>
+          </div>
+
+          {/* Skeleton / Content */}
+          <div className="p-6 space-y-6">
+            {loading ? (
+              <div className="space-y-4">
+                <div className="h-28 rounded-xl bg-white/10 animate-pulse" />
+                <div className="h-72 rounded-xl bg-white/10 animate-pulse" />
+              </div>
+            ) : (
+              <>
+                {/* Código de validación */}
+                {validationCode && (
+                  <div className="rounded-xl bg-[#5b0d0d]/70 border border-white/10 p-5 text-center space-y-2">
+                    <p className="text-xs uppercase tracking-wide text-white/80">
+                      Código de validación
+                    </p>
+                    <p className="text-4xl font-extrabold tracking-widest">
+                      {validationCode}
+                    </p>
+                    <div className="flex gap-2 justify-center pt-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="bg-white/10 hover:bg-white/20 text-white border border-white/20"
+                        onClick={copyCode}
+                      >
+                        <Copy className="w-4 h-4 mr-2" />
+                        {copied ? "¡Copiado!" : "Copiar código"}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-white/75">
+                      Mostralo en acceso si te lo solicitan.
+                    </p>
+                  </div>
+                )}
+
+                {/* QR */}
+                {qrCodeImg && (
+                  <div className="rounded-xl bg-black/30 border border-white/10 p-5 text-center space-y-4">
+                    <p className="text-sm text-white/85">Tu Código QR</p>
+                    <div className="mx-auto w-[260px] h-[260px] bg-white rounded-xl p-3 shadow-inner">
+                      <img
+                        src={qrCodeImg}
+                        alt="QR Code"
+                        className="w-full h-full object-contain rounded-md"
+                      />
+                    </div>
+                    <Button
+                      onClick={downloadQR}
+                      variant="outline"
+                      className="w-full bg-white/10 hover:bg-white/20 text-white border border-white/20"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Descargar QR
+                    </Button>
+                  </div>
+                )}
+
+                {/* Mensaje si todavía no hay códigos */}
+                {!validationCode && !qrCodeImg && (
+                  <div className="rounded-xl border border-yellow-300/20 bg-yellow-500/15 p-4 text-yellow-50 text-sm">
+                    Estamos validando tu compra. Si no ves tu QR en unos
+                    segundos, revisá tu email (incluido spam).
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Nota inferior */}
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-[12px] text-white/80">
+              Te enviamos toda la info para disfrutar de HOOKA. Si tenés dudas,
+              respondé el email de confirmación.
+              {confirmed === true && approved === false && (
+                <p className="mt-2 text-red-200">
+                  Aviso: tu pago aún no figura como acreditado. Se actualizará
+                  automáticamente en breve.
+                </p>
+              )}
+            </div>
+
+            {/* CTA Volver */}
+            <Button
+              asChild
+              size="lg"
+              className="w-full rounded-full bg-white text-[#5b0d0d] hover:bg-white/90"
+            >
+              <Link href="/">
+                <Home className="w-4 h-4 mr-2" />
+                Volver al inicio
+              </Link>
+            </Button>
+            <p className="text-center text-[11px] text-white/70 pb-1">
+              ¡Nos vemos en la fiesta! 🫦💣
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
