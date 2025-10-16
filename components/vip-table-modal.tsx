@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Sparkles,
   CreditCard,
@@ -18,6 +19,7 @@ import {
   Phone,
   Music,
   Waves,
+  User,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -89,12 +91,13 @@ export function VIPTableModal({
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgError, setCfgError] = useState<string | null>(null);
 
-  // ======= Datos del cliente =======
+  // ======= Datos del cliente (incluye GÉNERO) =======
   const [customer, setCustomer] = useState({
     name: "",
     dni: "",
     email: "",
     phone: "",
+    gender: "" as "" | "hombre" | "mujer",
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -132,7 +135,7 @@ export function VIPTableModal({
           setVipTablesCfg(tables);
 
           // elegir ubicación por defecto:
-          // 1) dj si existe, 2) piscina si existe, 3) la primera que tenga remaining > 0, 4) primera disponible
+          // 1) dj si existe, 2) piscina si existe, 3) la primera con stock, 4) primera disponible
           let defaultLoc: TableLoc | null = null;
           const hasDJ = tables.find((t) => t.location === "dj");
           const hasPiscina = tables.find((t) => t.location === "piscina");
@@ -161,7 +164,7 @@ export function VIPTableModal({
     if (open) {
       loadConfig();
       // limpiar formulario al abrir
-      setCustomer({ name: "", dni: "", email: "", phone: "" });
+      setCustomer({ name: "", dni: "", email: "", phone: "", gender: "" });
       setErrors({});
     }
     return () => {
@@ -221,6 +224,9 @@ export function VIPTableModal({
     if (!phoneDigits) e.phone = "Ingresá tu celular";
     else if (phoneDigits.length < 8) e.phone = "Celular inválido";
 
+    // ✅ Género requerido (idéntico criterio al de TicketSalesModal)
+    if (!customer.gender) e.gender = "Elegí tu género";
+
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -265,12 +271,14 @@ export function VIPTableModal({
             tables: 1, // siempre 1 mesa por compra
             unitSize: capacity,
             location: selectedLocation ?? undefined, // ✅ enviar ubicación
+            gender: customer.gender || undefined, // ✅ enviamos género
           },
         },
         type: "vip-table" as const,
         // opcional: podés enviar un campo `meta` si tu backend lo soporta
         meta: {
           location: selectedLocation ?? undefined,
+          gender: customer.gender || undefined,
         },
       };
 
@@ -494,6 +502,70 @@ export function VIPTableModal({
               )}
             </div>
 
+            {/* GÉNERO - EXACTAMENTE como en TicketSalesModal */}
+            <div className="space-y-3">
+              <Label className="flex items-center gap-2">
+                <User className="w-4 h-4" />
+                Género
+              </Label>
+
+              <RadioGroup
+                value={customer.gender}
+                onValueChange={(value) =>
+                  setCustomer({
+                    ...customer,
+                    gender: value as "hombre" | "mujer",
+                  })
+                }
+                className="grid grid-cols-2 gap-3 sm:gap-4"
+              >
+                {/* Hombre */}
+                <div>
+                  <RadioGroupItem
+                    value="hombre"
+                    id="vip-gender-hombre"
+                    className="peer sr-only"
+                  />
+                  <Label
+                    htmlFor="vip-gender-hombre"
+                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                      border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
+                      peer-data-[state=checked]:border-[#5b0d0d]
+                      peer-data-[state=checked]:bg-[#5b0d0d]/10`}
+                  >
+                    <span className="text-2xl mb-2">👨</span>
+                    <span className="font-semibold text-sm sm:text-base">
+                      Hombre
+                    </span>
+                  </Label>
+                </div>
+
+                {/* Mujer */}
+                <div>
+                  <RadioGroupItem
+                    value="mujer"
+                    id="vip-gender-mujer"
+                    className="peer sr-only"
+                  />
+                  <Label
+                    htmlFor="vip-gender-mujer"
+                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                      border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
+                      peer-data-[state=checked]:border-[#7f0d0d]
+                      peer-data-[state=checked]:bg-[#7f0d0d]/10`}
+                  >
+                    <span className="text-2xl mb-2">👩</span>
+                    <span className="font-semibold text-sm sm:text-base">
+                      Mujer
+                    </span>
+                  </Label>
+                </div>
+              </RadioGroup>
+              {errors.gender && (
+                <p className="text-sm text-red-600">{errors.gender}</p>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="vip-phone" className="flex items-center gap-2">
                 <Phone className="w-4 h-4" />
@@ -581,7 +653,8 @@ export function VIPTableModal({
                 !vipPrice ||
                 (!remainingTables && remainingTables !== 0) || // null/undefined
                 soldOut ||
-                !selectedLocation
+                !selectedLocation ||
+                !customer.gender // ✅ requerimos género
               }
               aria-disabled={soldOut || undefined}
               className="
@@ -613,3 +686,8 @@ export function VIPTableModal({
     </Dialog>
   );
 }
+
+/* Tailwind util (animación del texto gradiente de los precios) 
+   Asegurate de tener en globals.css:
+   @keyframes gradient-move { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+*/
