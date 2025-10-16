@@ -97,10 +97,6 @@ export function Hero() {
             <TimeBox value={pad(timeLeft.seconds)} label="SEG" />
           </div>
 
-          <p className="text-sm md:text-base opacity-90 mt-2">
-            Recibí el calor con nosotros
-          </p>
-
           {/* CTA */}
           <div className="flex items-center justify-center pt-4 md:pt-5 px-4">
             <Button
