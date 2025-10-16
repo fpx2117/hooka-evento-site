@@ -183,11 +183,11 @@ type TicketsConfig = {
 ========================= */
 function buildValidateUrl(code: string) {
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/admin/validate?code=${encodeURIComponent(
+    return `${window.location.origin}/validate?code=${encodeURIComponent(
       code
     )}`;
   }
-  return `/admin/validate?code=${encodeURIComponent(code)}`;
+  return `/validate?code=${encodeURIComponent(code)}`;
 }
 
 async function makeQrDataUrl(code: string, scale = 4) {
