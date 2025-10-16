@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as any;
 
-    // 🚫 Sin eventCode: usamos SIEMPRE el evento activo
+    // Usar SIEMPRE el evento activo
     const event = await prisma.event.findFirst({
       where: { isActive: true },
       select: { id: true, date: true },
@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
       select: { id: true, price: true },
     });
 
-    // 🔥 Permitir override de total (para cargas manuales con descuentos)
+    // Permitir override de total (para cargas manuales con descuentos)
     const overrideTotal = normNumber(body.totalPrice);
     const forceOverride =
       body.forceTotalPrice === true || body.forceTotalPrice === "true";
@@ -267,7 +267,7 @@ export async function POST(request: NextRequest) {
     let ticketConfigId: string | undefined;
 
     if (forceOverride && overrideTotal !== undefined) {
-      // ✅ Respeta el total calculado en el dashboard (con descuentos)
+      // Respeta el total calculado manualmente
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
       if (cfg) ticketConfigId = cfg.id;
     } else if (cfg) {
@@ -288,6 +288,7 @@ export async function POST(request: NextRequest) {
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
     }
 
+    // Crear ticket con códigos iniciales
     let attempts = 0;
     while (attempts < 3) {
       const qrCode = generateQr();
@@ -352,18 +353,29 @@ export async function PUT(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
+    // ⚠️ Leemos el ticket actual para decidir el tratamiento de gender
+    const current = await prisma.ticket.findUnique({
+      where: { id },
+      select: { ticketType: true },
+    });
+    if (!current)
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+
     const dataToUpdate: any = {};
 
     const ticketType = normString(body.ticketType);
     if (ticketType) dataToUpdate.ticketType = ticketType;
 
     if (body.gender !== undefined) {
-      const nextType = (ticketType || "").toLowerCase();
-      if (nextType === "general") {
+      const effectiveType = (ticketType || current.ticketType || "")
+        .toString()
+        .toLowerCase();
+      if (effectiveType === "general") {
         const g = normString(body.gender);
         if (g === "hombre" || g === "mujer") dataToUpdate.gender = g;
         else dataToUpdate.gender = null;
       } else {
+        // Si el tipo efectivo es VIP, forzamos null
         dataToUpdate.gender = null;
       }
     }
@@ -394,6 +406,10 @@ export async function PUT(request: NextRequest) {
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }
+
+    // (Opcional) permitir actualizar paymentStatus por PUT
+    const nextPs = toPaymentStatus(normString(body.paymentStatus));
+    if (nextPs) dataToUpdate.paymentStatus = nextPs;
 
     const ticket = await prisma.ticket.update({
       where: { id },
@@ -490,6 +506,7 @@ export async function PATCH(request: NextRequest) {
     }
     dataToUpdate.paymentStatus = nextStatus;
 
+    // ⚠️ Sólo generar códigos si se pasa a approved y faltan
     const needsCodes =
       nextStatus === PS.approved &&
       (!current.qrCode || !current.validationCode);

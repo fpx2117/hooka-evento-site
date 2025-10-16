@@ -31,7 +31,7 @@ const n = (v: unknown, d = 0) => {
 };
 
 // 1 mesa VIP = N personas (config)
-const VIP_UNIT_SIZE = Number(process.env.VIP_UNIT_SIZE || 10);
+const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 
 type CreateBody = {
   type: "ticket" | "vip-table";
@@ -146,7 +146,6 @@ export async function POST(req: NextRequest) {
       );
 
     /** ------- VARIABLES COMUNES ------- */
-    let quantityForOrder = 1; // entradas (general) o mesas (vip)
     let unitPriceFromDB = 0; // SIEMPRE desde DB
     let recordId: string;
 
@@ -156,7 +155,6 @@ export async function POST(req: NextRequest) {
         1,
         n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
       );
-      quantityForOrder = tables;
 
       const cfgVip = await prisma.ticketConfig.findFirst({
         where: { eventId: event.id, ticketType: "vip", gender: null },
@@ -181,7 +179,10 @@ export async function POST(req: NextRequest) {
         (a, t) => a + (t.quantity || 0) * VIP_UNIT_SIZE,
         0
       );
-      const remainingPersons = Math.max(0, cfgVip.stockLimit - vipPersonsSold);
+      const remainingPersons = Math.max(
+        0,
+        Number(cfgVip.stockLimit) - vipPersonsSold
+      );
       const remainingTables = Math.floor(remainingPersons / VIP_UNIT_SIZE);
       if (remainingTables < tables)
         return NextResponse.json(
@@ -193,11 +194,7 @@ export async function POST(req: NextRequest) {
 
       // Descuentos (por mesa)
       const rules = await getActiveRulesFor(event.id, "vip");
-      const { total, subtotal, discount } = pickBestDiscount(
-        tables,
-        unitPriceFromDB,
-        rules
-      );
+      const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
       const created = await prisma.ticket.create({
         data: {
@@ -212,7 +209,6 @@ export async function POST(req: NextRequest) {
           customerPhone: s(body.payer?.phone) ?? "",
           customerDni: s(body.payer?.dni) ?? "",
           paymentStatus: "pending" as any,
-
           ticketConfigId: cfgVip.id,
         },
         select: { id: true, totalPrice: true },
@@ -345,24 +341,27 @@ export async function POST(req: NextRequest) {
       where: { eventId: event.id, ticketType: "total", gender: null },
       select: { stockLimit: true },
     });
-    const totalLimit = cfgTotal?.stockLimit ?? 0;
+    const totalLimit = Number(cfgTotal?.stockLimit ?? 0);
 
-    const [soldGenH, soldGenM, vipApproved] = await Promise.all([
-      prisma.ticket.count({
+    // ✅ Personas vendidas aprobadas (GENERAL) — usar SUM(quantity), no count()
+    const [soldGenHAggr, soldGenMAggr, vipApproved] = await Promise.all([
+      prisma.ticket.aggregate({
         where: {
           eventId: event.id,
           ticketType: "general",
           gender: "hombre",
           paymentStatus: "approved" as any,
         },
+        _sum: { quantity: true },
       }),
-      prisma.ticket.count({
+      prisma.ticket.aggregate({
         where: {
           eventId: event.id,
           ticketType: "general",
           gender: "mujer",
           paymentStatus: "approved" as any,
         },
+        _sum: { quantity: true },
       }),
       prisma.ticket.findMany({
         where: {
@@ -373,12 +372,16 @@ export async function POST(req: NextRequest) {
         select: { quantity: true },
       }),
     ]);
+    const soldGenH = Number(soldGenHAggr._sum.quantity || 0);
+    const soldGenM = Number(soldGenMAggr._sum.quantity || 0);
+
     const vipPersonsSold = vipApproved.reduce(
       (a, t) => a + (t.quantity || 0) * VIP_UNIT_SIZE,
       0
     );
     const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
     const remainingTotal = Math.max(0, totalLimit - soldTotalPersons);
+
     if (remainingTotal < qty)
       return NextResponse.json(
         { error: "No hay cupo disponible en el evento" },
@@ -389,11 +392,7 @@ export async function POST(req: NextRequest) {
 
     // Descuentos (por entrada)
     const rules = await getActiveRulesFor(event.id, "general");
-    const { total, subtotal, discount } = pickBestDiscount(
-      qty,
-      unitPriceFromDB,
-      rules
-    );
+    const { total } = pickBestDiscount(qty, unitPriceFromDB, rules);
 
     const created = await prisma.ticket.create({
       data: {
@@ -408,7 +407,6 @@ export async function POST(req: NextRequest) {
         customerPhone: s(body.payer?.phone) ?? "",
         customerDni: s(body.payer?.dni) ?? "",
         paymentStatus: "pending" as any,
-
         ticketConfigId: cfgGen.id,
       },
       select: { id: true, totalPrice: true },

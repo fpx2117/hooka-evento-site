@@ -2,15 +2,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// 1 mesa VIP = N personas (default 10)
-const VIP_UNIT_SIZE = Number(process.env.VIP_UNIT_SIZE || 10);
+// 1 mesa VIP = N personas (default 10) — clamp mínimo 1
+const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 
 // ============ Utils ============
 function json(payload: any, init?: number | ResponseInit) {
   const initObj: ResponseInit =
     typeof init === "number" ? { status: init } : init || {};
   const headers = new Headers(initObj.headers || {});
-  headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  headers.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate"
+  );
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
   return NextResponse.json(payload, { ...initObj, headers });
@@ -19,6 +22,11 @@ function json(payload: any, init?: number | ResponseInit) {
 function toNumber(v: any, def?: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : (def as number);
+}
+
+function clampNonNegative(n: number | undefined) {
+  if (n === undefined || !Number.isFinite(n)) return 0;
+  return Math.max(0, n);
 }
 
 async function getOrCreateActiveEvent() {
@@ -89,25 +97,30 @@ export async function GET(_req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
 
-    // Vendidos aprobados del evento (general por género)
-    const [soldGenH, soldGenM] = await Promise.all([
-      prisma.ticket.count({
+    // Vendidos aprobados del evento (GENERAL por género) — usar SUM(quantity)
+    const [soldGenHAggr, soldGenMAggr] = await Promise.all([
+      prisma.ticket.aggregate({
         where: {
           eventId: event.id,
           ticketType: "general",
           gender: "hombre",
           paymentStatus: "approved",
         },
+        _sum: { quantity: true },
       }),
-      prisma.ticket.count({
+      prisma.ticket.aggregate({
         where: {
           eventId: event.id,
           ticketType: "general",
           gender: "mujer",
           paymentStatus: "approved",
         },
+        _sum: { quantity: true },
       }),
     ]);
+
+    const soldGenH = clampNonNegative(soldGenHAggr._sum.quantity || 0);
+    const soldGenM = clampNonNegative(soldGenMAggr._sum.quantity || 0);
 
     // VIP: mesas vendidas = sum(quantity) tickets VIP (aprobados) del evento
     const vipTickets = await prisma.ticket.findMany({
@@ -118,7 +131,10 @@ export async function GET(_req: NextRequest) {
       },
       select: { quantity: true },
     });
-    const vipTablesSold = vipTickets.reduce((a, t) => a + (t.quantity || 0), 0);
+    const vipTablesSold = vipTickets.reduce(
+      (a, t) => a + clampNonNegative(t.quantity || 0),
+      0
+    );
     const vipPersonsSold = vipTablesSold * VIP_UNIT_SIZE;
 
     // Configs de precios (general H/M)
@@ -127,13 +143,17 @@ export async function GET(_req: NextRequest) {
 
     // VIP en PERSONAS (fila con gender NULL)
     const cfgVip = findCfg(event, "vip", null);
-    const vipLimitPersons = cfgVip ? Number(cfgVip.stockLimit) : 0;
+    const vipLimitPersons = clampNonNegative(
+      cfgVip ? Number(cfgVip.stockLimit) : 0
+    );
     const vipRemainingPersons = Math.max(0, vipLimitPersons - vipPersonsSold);
     const vipRemainingTables = Math.floor(vipRemainingPersons / VIP_UNIT_SIZE);
 
     // TOTAL en PERSONAS (fila con gender NULL)
     const cfgTotal = findCfg(event, "total", null);
-    const totalLimitPersons = cfgTotal ? Number(cfgTotal.stockLimit) : 0;
+    const totalLimitPersons = clampNonNegative(
+      cfgTotal ? Number(cfgTotal.stockLimit) : 0
+    );
 
     const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
     const remainingTotalPersons = Math.max(
@@ -142,7 +162,8 @@ export async function GET(_req: NextRequest) {
     );
 
     const payload = {
-      eventId: event.code,
+      eventId: event.id, // UUID real
+      eventCode: event.code, // código humano
       eventName: event.name,
       eventDate: event.date.toISOString().slice(0, 10),
       isActive: event.isActive,
@@ -160,7 +181,7 @@ export async function GET(_req: NextRequest) {
             price: Number(cfgGenH?.price ?? 0),
             // MOSTRAMOS EL TOTAL porque no hay cupo por género
             limit: totalLimitPersons,
-            sold: soldGenH, // solo informativo
+            sold: soldGenH, // informativo (personas)
             remaining: remainingTotalPersons,
           },
           mujer: {
@@ -185,10 +206,13 @@ export async function GET(_req: NextRequest) {
       vipTables: event.vipConfigs.map((c: any) => ({
         location: c.location as "piscina" | "dj" | "general",
         price: Number(c.price),
-        limit: c.stockLimit,
-        sold: c.soldCount,
-        remaining: Math.max(0, c.stockLimit - c.soldCount),
-        capacityPerTable: c.capacityPerTable,
+        limit: clampNonNegative(c.stockLimit),
+        sold: clampNonNegative(c.soldCount),
+        remaining: Math.max(
+          0,
+          clampNonNegative(c.stockLimit) - clampNonNegative(c.soldCount)
+        ),
+        capacityPerTable: clampNonNegative(c.capacityPerTable),
       })),
     };
 
@@ -213,14 +237,19 @@ export async function PATCH(req: NextRequest) {
 
     // VIP (PERSONAS)
     const vipPrice = toNumber(body?.vip?.price);
-    const vipLimit = toNumber(body?.vip?.stockLimit);
+    const vipLimit = clampNonNegative(toNumber(body?.vip?.stockLimit));
 
     // TOTAL (PERSONAS)
-    const legacyGenHLimit = toNumber(body?.general?.hombre?.stockLimit);
-    const legacyGenMLimit = toNumber(body?.general?.mujer?.stockLimit);
-    const totalEntriesLimit =
+    const legacyGenHLimit = clampNonNegative(
+      toNumber(body?.general?.hombre?.stockLimit)
+    );
+    const legacyGenMLimit = clampNonNegative(
+      toNumber(body?.general?.mujer?.stockLimit)
+    );
+    const totalEntriesLimit = clampNonNegative(
       toNumber(body?.totalEntriesLimit) ??
-      (legacyGenHLimit ?? 0) + (legacyGenMLimit ?? 0);
+        (legacyGenHLimit ?? 0) + (legacyGenMLimit ?? 0)
+    );
 
     // ---- General Hombre (precio) ----
     if (genHPrice !== undefined) {

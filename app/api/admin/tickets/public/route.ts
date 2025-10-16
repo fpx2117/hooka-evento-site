@@ -1,11 +1,11 @@
-// app/api/tickets/public/route.ts
+// app/api/admin/tickets/public/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /**
- * GET /api/tickets/public?type=ticket|vip-table&id=XXXX[&requireApproved=1]
- * Devuelve info mínima para la pantalla de "success".
- * - NUNCA modifica la BD (modo read-only).
+ * GET /api/admin/tickets/public?type=ticket|vip-table&id=XXXX[&requireApproved=1]
+ * Lee info mínima para la pantalla de "success".
+ * - NUNCA escribe/crea nada en la BD (read-only).
  * - Por defecto exige approved, configurable por query o env.
  */
 
@@ -55,11 +55,9 @@ export async function GET(req: NextRequest) {
         },
       });
       if (!rec) return json({ ok: false, error: "Not found" }, 404);
-
       if (requireApproved && rec.paymentStatus !== "approved") {
         return json({ ok: false, error: "Pago no aprobado aún" }, 409);
       }
-
       return json({
         ok: true,
         type: "ticket",
@@ -85,11 +83,9 @@ export async function GET(req: NextRequest) {
       },
     });
     if (!rec) return json({ ok: false, error: "Not found" }, 404);
-
     if (requireApproved && rec.paymentStatus !== "approved") {
       return json({ ok: false, error: "Pago no aprobado aún" }, 409);
     }
-
     return json({
       ok: true,
       type: "vip-table",
@@ -101,7 +97,7 @@ export async function GET(req: NextRequest) {
       totalPrice: Number(rec.totalPrice || 0),
     });
   } catch (e) {
-    console.error("[tickets/public] error:", e);
+    console.error("[admin/tickets/public][GET] error:", e);
     return json({ ok: false, error: "internal" }, 500);
   }
 }

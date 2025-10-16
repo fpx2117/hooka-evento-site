@@ -28,7 +28,7 @@ function isApprovedStrongOrSandbox(opts: {
   const amountPaid = Number(
     payment?.transaction_amount ?? payment?.total_paid_amount ?? 0
   );
-  const refOk = payment?.external_reference === expectedRef;
+  const refOk = String(payment?.external_reference || "") === expectedRef;
 
   // Aprobación fuerte (con tolerancia al redondeo)
   const strong =
@@ -54,6 +54,11 @@ function isApprovedStrongOrSandbox(opts: {
 
 function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+// 6 dígitos. SOLO se usa si falta validationCode.
+function generateValidationCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 /* ========================= Fetchers MP ========================= */
@@ -196,7 +201,7 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
 
 /**
  * IMPORTANTE: No regenerar validationCode si ya existe.
- * - Si approved = true y no hay validationCode, se crea uno.
+ * - Si approved = true y NO hay validationCode, se crea uno.
  * - Si approved = true y YA hay validationCode, se conserva.
  * - Si approved = false, NO tocar validationCode.
  */
@@ -219,16 +224,13 @@ async function persistStatus(
       });
 
       if (approved) {
-        const finalCode =
-          current?.validationCode ??
-          Math.floor(100000 + Math.random() * 900000).toString();
+        const finalCode = current?.validationCode ?? generateValidationCode();
 
         await tx.tableReservation.update({
           where: { id: recordId },
           data: { ...baseUpdate, validationCode: finalCode },
         });
       } else {
-        // mantener validationCode
         await tx.tableReservation.update({
           where: { id: recordId },
           data: baseUpdate,
@@ -241,16 +243,13 @@ async function persistStatus(
       });
 
       if (approved) {
-        const finalCode =
-          current?.validationCode ??
-          Math.floor(100000 + Math.random() * 900000).toString();
+        const finalCode = current?.validationCode ?? generateValidationCode();
 
         await tx.ticket.update({
           where: { id: recordId },
           data: { ...baseUpdate, validationCode: finalCode },
         });
       } else {
-        // mantener validationCode
         await tx.ticket.update({
           where: { id: recordId },
           data: baseUpdate,
@@ -291,9 +290,6 @@ async function processPaymentById(paymentId: string) {
   await persistStatus(type, recordId, payment, approved);
 
   // ⚠️ No enviar correo acá. El mail lo maneja /api/send-confirmation.
-  // Si lo quisieras disparar automáticamente, hacelo desde el cliente
-  // luego de leer el estado aprobado, o con un job, pero no aquí.
-
   return {
     ok: true,
     approvedStrong: approved,

@@ -83,7 +83,7 @@ export function VIPTableModal({
       setCfgLoading(true);
       setCfgError(null);
 
-      const tryEndpoints = [configEndpoint, "/api/tickets/config"];
+      const tryEndpoints = [configEndpoint, "/api/admin/tickets/config"];
       for (const ep of tryEndpoints) {
         try {
           const r = await fetch(ep, { cache: "no-store" });
