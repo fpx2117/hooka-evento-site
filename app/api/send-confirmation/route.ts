@@ -17,12 +17,12 @@ const cap = (str?: string | null) =>
   !str ? "" : str.charAt(0).toUpperCase() + str.slice(1);
 
 const isHttpsPublicUrl = (url?: string | null) =>
-  !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
+  !!url && /^https:\/\/[^ ]+$/i.test((url || "").trim());
 
 function getPublicBaseUrl(req: NextRequest) {
-  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
-  if (isHttpsPublicUrl(envBase)) return envBase!;
-  const proto = req.headers.get("x-forwarded-proto") || "http";
+  const envBase = (process.env.NEXT_PUBLIC_BASE_URL || "").trim();
+  if (isHttpsPublicUrl(envBase)) return envBase;
+  const proto = (req.headers.get("x-forwarded-proto") || "http").toLowerCase();
   const host =
     req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   return `${proto}://${host}`.replace(/\/+$/, "");
@@ -37,6 +37,17 @@ function formatARS(n?: unknown) {
   const x = Number(n || 0);
   return x.toLocaleString("es-AR", { minimumFractionDigits: 0 });
 }
+
+const prettyLocation = (loc?: string | null) => {
+  switch ((loc || "").toLowerCase()) {
+    case "dj":
+      return "Sector DJ";
+    case "piscina":
+      return "Sector Piscina";
+    default:
+      return "Sector VIP";
+  }
+};
 
 /* -------------------------------------------------------------------------- */
 /*                              BRAND / PALETA                                 */
@@ -313,12 +324,11 @@ export async function POST(request: NextRequest) {
 
     const BASE = getPublicBaseUrl(request);
 
-    // Resend (en producción debe estar configurado)
+    // Resend
     const apiKey = s(process.env.RESEND_API_KEY);
     const from =
       s(process.env.RESEND_FROM) || "Hooka Party <info@hooka.com.ar>";
     if (!apiKey) {
-      // En producción: si falta, devolvemos 500
       return NextResponse.json(
         { error: "RESEND_API_KEY no configurado" },
         { status: 500 }
@@ -431,7 +441,6 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      // Idempotencia real de envío (sólo marcamos si realmente vamos a enviar)
       let reservedAt: Date | null = null;
       if (!force) {
         reservedAt = new Date();
@@ -454,7 +463,6 @@ export async function POST(request: NextRequest) {
           html,
         });
 
-        // Si fue force, recién ahora marcamos como enviado
         if (force) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -469,7 +477,6 @@ export async function POST(request: NextRequest) {
           ...result,
         });
       } catch (err) {
-        // liberar la reserva si falló el envío
         if (!force && reservedAt) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -480,7 +487,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    /* ----------------------------- MESA VIP (vip-table) ----------------------- */
+    /* ------------------------- MESA VIP (vip-table + location) ------------------------- */
     if (type === "vip-table") {
       const r = await prisma.tableReservation.findUnique({
         where: { id: recordId },
@@ -495,6 +502,15 @@ export async function POST(request: NextRequest) {
           totalPrice: true,
           paymentStatus: true,
           emailSentAt: true,
+          // 👇 ahora incluimos la ubicación y capacidad por mesa desde la config
+          location: true, // redundante, pero útil si lo guardás en la reserva
+          vipTableConfig: {
+            select: {
+              location: true,
+              capacityPerTable: true,
+              price: true,
+            },
+          },
           event: { select: { name: true, date: true } },
         },
       });
@@ -538,17 +554,36 @@ export async function POST(request: NextRequest) {
       }
 
       const brand = resolveBrand();
-      const typeLabel = "Mesa VIP";
       const title = `🫦 ${r.event?.name || brand.name} 🫦`;
       const dateStr = r.event?.date
         ? new Date(r.event.date).toLocaleDateString("es-AR")
         : "";
 
+      const locationRaw =
+        r.vipTableConfig?.location || (r as any).location || "general";
+      const locationLabel = prettyLocation(locationRaw);
+      const capPerTable = Math.max(
+        1,
+        Number(r.vipTableConfig?.capacityPerTable || 0)
+      );
+      // Si no viene capacidad por mesa desde config, inferimos como promedio:
+      const inferredCapPerTable =
+        capPerTable ||
+        (r.tables && r.capacity
+          ? Math.max(1, Math.floor(r.capacity / r.tables))
+          : 0);
+
       const detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
+        `<strong>Ubicación:</strong> ${locationLabel}<br/>` +
         `<strong>Mesas:</strong> ${r.tables || 1}<br/>` +
-        `<strong>Capacidad (ref):</strong> ${r.capacity || 0} personas<br/>` +
+        `${
+          inferredCapPerTable
+            ? `<strong>Capacidad por mesa (ref):</strong> ${inferredCapPerTable} personas<br/>`
+            : ""
+        }` +
+        `<strong>Capacidad total (ref):</strong> ${r.capacity || inferredCapPerTable * (r.tables || 1) || 0} personas<br/>` +
         `<strong>Total:</strong> $ ${formatARS(r.totalPrice)}<br/>` +
         `</div>`;
 
@@ -583,7 +618,7 @@ export async function POST(request: NextRequest) {
       try {
         const result = await enviar({
           to: r.customerEmail,
-          subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
+          subject: `🫦 Mesa VIP — ${locationLabel} — Código: ${normalizedCode}`,
           html,
         });
 

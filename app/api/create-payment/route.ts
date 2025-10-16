@@ -31,6 +31,7 @@ const n = (v: unknown, d = 0) => {
   const num = Number(v);
   return Number.isFinite(num) ? num : d;
 };
+const onlyDigits = (v?: string) => (v || "").replace(/\D+/g, "");
 
 // 1 mesa VIP = N personas (fallback si falta en BD)
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
@@ -177,15 +178,12 @@ export async function POST(req: NextRequest) {
         1,
         n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
       );
-      const location = (
+      const rawLoc = (
         s(body.payer?.additionalInfo?.location) || ""
-      ).toLowerCase() as "dj" | "piscina" | "general";
-      if (!["dj", "piscina", "general"].includes(location)) {
-        return NextResponse.json(
-          { error: "Ubicación VIP inválida (dj | piscina | general)" },
-          { status: 400 }
-        );
-      }
+      ).toLowerCase();
+      const location = (
+        ["dj", "piscina", "general"].includes(rawLoc) ? rawLoc : "general"
+      ) as "dj" | "piscina" | "general";
 
       // Config de la ubicación
       const cfg = await prisma.vipTableConfig.findFirst({
@@ -234,8 +232,8 @@ export async function POST(req: NextRequest) {
           totalPrice: total,
           customerName: s(body.payer?.name) ?? "",
           customerEmail: s(body.payer?.email) ?? "",
-          customerPhone: s(body.payer?.phone) ?? "",
-          customerDni: s(body.payer?.dni) ?? "",
+          customerPhone: onlyDigits(s(body.payer?.phone)),
+          customerDni: onlyDigits(s(body.payer?.dni)),
           reservationDate: new Date(),
           paymentStatus: "pending" as any,
           paymentMethod: "mercadopago" as any,
@@ -247,7 +245,9 @@ export async function POST(req: NextRequest) {
       const mpItems = [
         {
           id: createdRes.id,
-          title: `Mesa VIP - ${prettyLocation(location)} x${tables}`,
+          title:
+            body.items?.[0]?.title ||
+            `Mesa VIP - ${prettyLocation(location)} x${tables}`,
           description:
             body.items?.[0]?.description ||
             `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
@@ -262,11 +262,11 @@ export async function POST(req: NextRequest) {
         payer: {
           name: s(body.payer?.name),
           email: s(body.payer?.email),
-          phone: s(body.payer?.phone)
-            ? { number: String(body.payer?.phone) }
+          phone: onlyDigits(s(body.payer?.phone))
+            ? { number: onlyDigits(s(body.payer?.phone)) }
             : undefined,
-          identification: s(body.payer?.dni)
-            ? { type: "DNI", number: String(body.payer?.dni) }
+          identification: onlyDigits(s(body.payer?.dni))
+            ? { type: "DNI", number: onlyDigits(s(body.payer?.dni)) }
             : undefined,
         },
         back_urls: {
@@ -284,12 +284,13 @@ export async function POST(req: NextRequest) {
         },
         metadata: {
           type: "vip-table",
-          tableReservationId: createdRes.id,
+          tableReservationId: createdRes.id, // 👈 el webhook lo lee
           eventId: event.id,
           eventCode: event.code,
           location,
           tables,
           capacityPerTable: cap,
+          pricePerTable: unitPriceFromDB,
         },
       };
 
@@ -362,7 +363,9 @@ export async function POST(req: NextRequest) {
       | undefined;
     const qty = Math.max(
       1,
-      n(body.payer?.additionalInfo?.quantity, n(body.items?.[0]?.quantity, 1))
+      Math.floor(
+        n(body.payer?.additionalInfo?.quantity, n(body.items?.[0]?.quantity, 1))
+      )
     );
     if (!gender)
       return NextResponse.json({ error: "Género requerido" }, { status: 400 });
@@ -445,8 +448,8 @@ export async function POST(req: NextRequest) {
         totalPrice: total,
         customerName: s(body.payer?.name) ?? "",
         customerEmail: s(body.payer?.email) ?? "",
-        customerPhone: s(body.payer?.phone) ?? "",
-        customerDni: s(body.payer?.dni) ?? "",
+        customerPhone: onlyDigits(s(body.payer?.phone)),
+        customerDni: onlyDigits(s(body.payer?.dni)),
         paymentStatus: "pending" as any,
         paymentMethod: "mercadopago" as any,
         ticketConfigId: cfgGen.id,
@@ -457,7 +460,9 @@ export async function POST(req: NextRequest) {
     const mpItems = [
       {
         id: created.id,
-        title: `Entrada General - ${gender === "hombre" ? "Hombre" : "Mujer"} x${qty}`,
+        title:
+          body.items?.[0]?.title ||
+          `Entrada General - ${gender === "hombre" ? "Hombre" : "Mujer"} x${qty}`,
         description: body.items?.[0]?.description,
         quantity: 1,
         unit_price: Number(created.totalPrice) || 0,
@@ -470,11 +475,11 @@ export async function POST(req: NextRequest) {
       payer: {
         name: s(body.payer?.name),
         email: s(body.payer?.email),
-        phone: s(body.payer?.phone)
-          ? { number: String(body.payer?.phone) }
+        phone: onlyDigits(s(body.payer?.phone))
+          ? { number: onlyDigits(s(body.payer?.phone)) }
           : undefined,
-        identification: s(body.payer?.dni)
-          ? { type: "DNI", number: String(body.payer?.dni) }
+        identification: onlyDigits(s(body.payer?.dni))
+          ? { type: "DNI", number: onlyDigits(s(body.payer?.dni)) }
           : undefined,
       },
       back_urls: {
