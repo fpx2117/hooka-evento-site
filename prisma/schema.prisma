@@ -86,7 +86,7 @@ model Event {
   discountRules DiscountRule[]
 
   createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now()) @updatedAt
+  updatedAt     DateTime @updatedAt
 }
 
 // ========================= Tickets =========================
@@ -138,7 +138,7 @@ model Ticket {
   emailSentAt        DateTime?
 
   createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @default(now()) @updatedAt
+  updatedAt          DateTime       @updatedAt
 
   @@index([eventId])
   @@index([customerEmail])
@@ -185,7 +185,7 @@ model TableReservation {
   validatedAt      DateTime?
 
   createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @default(now()) @updatedAt
+  updatedAt        DateTime       @updatedAt
   expiresAt        DateTime?
 
   vipTableConfigId String?
@@ -209,6 +209,8 @@ model TableReservation {
 
 // ========================= Reglas de descuento =========================
 // Por cantidad y tipo de ticket. Para VIP gender = null.
+// ⚠️ Para compatibilidad con datos existentes, usamos String en ticketType
+// (valores esperados: "general" | "vip").
 
 model DiscountRule {
   id         String        @id @default(cuid())
@@ -216,7 +218,7 @@ model DiscountRule {
   eventId    String
   event      Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  ticketType TicketType
+  ticketType String        // "general" | "vip"  (String para no romper filas antiguas NULL)
   gender     Gender?
 
   minQty     Int
@@ -226,7 +228,7 @@ model DiscountRule {
   priority   Int           @default(0)   // desempate
 
   createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @default(now()) @updatedAt
+  updatedAt  DateTime      @updatedAt
 
   @@unique([eventId, ticketType, gender, minQty])
   @@index([eventId, ticketType, gender, isActive])
@@ -255,7 +257,7 @@ model TicketConfig {
   tickets    Ticket[]
 
   createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @default(now()) @updatedAt
+  updatedAt  DateTime      @updatedAt
 
   @@unique([eventId, ticketType, gender], name: "eventId_ticketType_gender")
   @@index([eventId, ticketType, gender])
@@ -282,7 +284,7 @@ model VipTableConfig {
   tableRes         TableReservation[]
 
   createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @default(now()) @updatedAt
+  updatedAt        DateTime      @updatedAt
 
   @@unique([eventId, location])
   @@index([eventId, location])

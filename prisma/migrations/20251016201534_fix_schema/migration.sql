@@ -2,8 +2,11 @@
   Warnings:
 
   - The `packageType` column on the `TableReservation` table would be dropped and recreated. This will lead to data loss if there is data in the column.
-  - Changed the type of `ticketType` on the `DiscountRule` table. No cast exists, the column would be dropped and recreated, which cannot be done if there is data, since the column is required.
+  - Added the required column `updatedAt` to the `TableReservation` table without a default value. This is not possible if the table is not empty.
+  - Added the required column `updatedAt` to the `Ticket` table without a default value. This is not possible if the table is not empty.
   - Changed the type of `ticketType` on the `Ticket` table. No cast exists, the column would be dropped and recreated, which cannot be done if there is data, since the column is required.
+  - Added the required column `updatedAt` to the `TicketConfig` table without a default value. This is not possible if the table is not empty.
+  - Added the required column `updatedAt` to the `VipTableConfig` table without a default value. This is not possible if the table is not empty.
 
 */
 -- CreateEnum
@@ -25,15 +28,7 @@ ALTER TABLE "TicketConfig" DROP CONSTRAINT "TicketConfig_eventId_fkey";
 ALTER TABLE "VipTableConfig" DROP CONSTRAINT "VipTableConfig_eventId_fkey";
 
 -- AlterTable
-ALTER TABLE "DiscountRule" DROP COLUMN "ticketType",
-ADD COLUMN     "ticketType" "TicketType" NOT NULL,
-ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
-
--- AlterTable
-ALTER TABLE "Event" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
-
--- AlterTable
-ALTER TABLE "TableReservation" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ALTER TABLE "TableReservation" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
 DROP COLUMN "packageType",
 ADD COLUMN     "packageType" "PackageType" NOT NULL DEFAULT 'mesa',
 ALTER COLUMN "guests" SET DEFAULT 0;
@@ -42,23 +37,17 @@ ALTER COLUMN "guests" SET DEFAULT 0;
 ALTER TABLE "Ticket" ADD COLUMN     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 ADD COLUMN     "location" "TableLocation",
 ADD COLUMN     "tableReservationId" TEXT,
-ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL,
 DROP COLUMN "ticketType",
 ADD COLUMN     "ticketType" "TicketType" NOT NULL;
 
 -- AlterTable
 ALTER TABLE "TicketConfig" ADD COLUMN     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL;
 
 -- AlterTable
 ALTER TABLE "VipTableConfig" ADD COLUMN     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
-
--- CreateIndex
-CREATE INDEX "DiscountRule_eventId_ticketType_gender_isActive_idx" ON "DiscountRule"("eventId", "ticketType", "gender", "isActive");
-
--- CreateIndex
-CREATE UNIQUE INDEX "DiscountRule_eventId_ticketType_gender_minQty_key" ON "DiscountRule"("eventId", "ticketType", "gender", "minQty");
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL;
 
 -- CreateIndex
 CREATE INDEX "Ticket_ticketType_gender_idx" ON "Ticket"("ticketType", "gender");
