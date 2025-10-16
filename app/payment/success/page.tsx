@@ -8,6 +8,9 @@ import {
   Home,
   Download,
   Copy,
+  MapPin,
+  Users,
+  Grid3X3,
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -18,6 +21,8 @@ import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 /* =========================
    Tipos de las APIs usadas
 ========================= */
+type TableLocation = "piscina" | "dj" | "general";
+
 type PublicTicketOk = {
   ok: true;
   type: "ticket" | "vip-table";
@@ -27,6 +32,12 @@ type PublicTicketOk = {
   qrCode: string | null;
   validationCode: string | null;
   totalPrice: number;
+
+  // ⬇️ NUEVO: cuando es VIP (TableReservation)
+  location?: TableLocation | null;
+  tables?: number | null;
+  capacity?: number | null;
+  guests?: number | null;
 };
 type PublicTicketErr = { ok: false; error: string };
 type PublicTicketResp = PublicTicketOk | PublicTicketErr;
@@ -39,7 +50,6 @@ type ConfirmOk = {
   id?: string;
   type?: "ticket" | "vip-table";
   recordId?: string;
-  // ⬇️ campos extra que tu /api/payments/confirm ya expone
   hasValidCode?: boolean;
   validationCode?: string | null;
 };
@@ -76,6 +86,19 @@ function buildValidateUrl(code: string) {
   return `${prefix}/validate?code=${encodeURIComponent(normalizeCode(code))}`;
 }
 
+function prettyLoc(loc?: TableLocation | null) {
+  switch (loc) {
+    case "dj":
+      return "DJ";
+    case "piscina":
+      return "Piscina";
+    case "general":
+      return "General";
+    default:
+      return "";
+  }
+}
+
 /* =========================
    Componente
 ========================= */
@@ -83,7 +106,7 @@ export default function PaymentSuccessPage() {
   const searchParams = useSearchParams();
 
   const [qrCodeImg, setQrCodeImg] = useState<string>("");
-  const [validationCode, setValidationCode] = useState<string>(""); // guardamos ya normalizado
+  const [validationCode, setValidationCode] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
   // Estado de confirmación del pago (solo para UI)
@@ -92,6 +115,12 @@ export default function PaymentSuccessPage() {
 
   const [type, setType] = useState<"ticket" | "vip-table" | null>(null);
   const [recordId, setRecordId] = useState<string | null>(null);
+
+  // ⬇️ NUEVO: estado de VIP
+  const [vipLocation, setVipLocation] = useState<TableLocation | null>(null);
+  const [vipTables, setVipTables] = useState<number | null>(null);
+  const [vipCapacity, setVipCapacity] = useState<number | null>(null);
+  const [vipGuests, setVipGuests] = useState<number | null>(null);
 
   const renderQr = async (text: string) => {
     const img = await QRCode.toDataURL(buildValidateUrl(text), {
@@ -108,7 +137,7 @@ export default function PaymentSuccessPage() {
     approved: boolean;
     type?: "ticket" | "vip-table";
     recordId?: string;
-    validationCode?: string; // si viene, lo devolvemos
+    validationCode?: string;
   }> {
     const tries = opts.tries ?? 7;
     const baseDelayMs = opts.baseDelayMs ?? 800;
@@ -160,7 +189,7 @@ export default function PaymentSuccessPage() {
         const approvedFromParams =
           (statusParam || "").toLowerCase() === "approved";
 
-        // 3) endpoints de confirmación (✅ ruta correcta)
+        // 3) endpoints de confirmación
         const confirmUrls: string[] = [];
         if (paymentId)
           confirmUrls.push(
@@ -202,7 +231,7 @@ export default function PaymentSuccessPage() {
                   : (data.status || "").toLowerCase() === "approved";
               setConfirmed(true);
 
-              // 👉 si ya trae un validationCode válido, úsalo inmediatamente
+              // si ya trae validationCode válido
               const codeFromConfirm = normalizeCode(data.validationCode);
               if (codeFromConfirm) {
                 setValidationCode(codeFromConfirm);
@@ -247,9 +276,8 @@ export default function PaymentSuccessPage() {
         if (localType) setType(localType);
         if (localRecordId) setRecordId(localRecordId);
 
-        // 8) consultar info pública y generar QR como respaldo
-        //    (si aún no tenemos código de confirmación)
-        if (localType && localRecordId && !validationCode) {
+        // 8) consultar info pública (agrega location/tables para VIP)
+        if (localType && localRecordId) {
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
             `/api/admin/tickets/public?type=${encodeURIComponent(
@@ -265,14 +293,19 @@ export default function PaymentSuccessPage() {
               setApproved(true);
             }
 
+            // Guardar code si faltaba
             const code = normalizeCode(info.validationCode);
-            if (code) {
+            if (code && !validationCode) {
               setValidationCode(code);
-              if (approvedNow) {
-                await renderQr(code);
-              }
-            } else {
-              setQrCodeImg("");
+              if (approvedNow) await renderQr(code);
+            }
+
+            // ⬇️ NUEVO: si es VIP, guardamos location/tables/capacity/guests
+            if (info.type === "vip-table") {
+              setVipLocation((info.location as TableLocation) ?? null);
+              setVipTables(info.tables ?? null);
+              setVipCapacity(info.capacity ?? null);
+              setVipGuests(info.guests ?? null);
             }
           }
         }
@@ -330,7 +363,13 @@ export default function PaymentSuccessPage() {
 
   const Title = () => {
     if (approved === true)
-      return <h1 className="text-3xl font-display">¡Pago acreditado!</h1>;
+      return (
+        <h1 className="text-3xl font-display">
+          {type === "vip-table"
+            ? "¡Reserva VIP acreditada!"
+            : "¡Pago acreditado!"}
+        </h1>
+      );
     if (approved === false)
       return <h1 className="text-3xl font-display">Pago no acreditado</h1>;
     return <h1 className="text-3xl font-display">Validando tu pago…</h1>;
@@ -359,8 +398,9 @@ export default function PaymentSuccessPage() {
             <StatusBadge />
             <Title />
             <p className="text-sm text-white/80">
-              Te enviamos un email con tu entrada. Guardá el <b>código</b> o{" "}
-              <b>QR</b> para el ingreso.
+              Te enviamos un email con tu{" "}
+              {type === "vip-table" ? "reserva" : "entrada"}. Guardá el{" "}
+              <b>código</b> o <b>QR</b> para el ingreso.
             </p>
           </div>
 
@@ -372,6 +412,38 @@ export default function PaymentSuccessPage() {
               </div>
             ) : approved ? (
               <>
+                {/* ⬇️ NUEVO: Detalle VIP si corresponde */}
+                {type === "vip-table" && (
+                  <div className="rounded-xl bg-white/8 border border-white/15 p-4 text-sm">
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {vipLocation && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
+                          <MapPin className="w-4 h-4" />
+                          Ubicación: <b>{prettyLoc(vipLocation)}</b>
+                        </span>
+                      )}
+                      {vipTables != null && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
+                          <Grid3X3 className="w-4 h-4" />
+                          Mesas: <b>{vipTables}</b>
+                        </span>
+                      )}
+                      {vipCapacity != null && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
+                          <Users className="w-4 h-4" />
+                          Capacidad/mesa: <b>{vipCapacity}</b>
+                        </span>
+                      )}
+                      {vipTables != null && vipCapacity != null && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
+                          <Users className="w-4 h-4" />
+                          Total personas: <b>{vipTables * vipCapacity}</b>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {codeLooksReady && (
                   <div className="rounded-xl bg-[#5b0d0d]/70 border border-white/10 p-5 text-center space-y-2">
                     <p className="text-xs uppercase tracking-wide text-white/80">
