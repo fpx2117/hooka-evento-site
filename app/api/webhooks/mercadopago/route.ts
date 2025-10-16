@@ -1,4 +1,3 @@
-// app/api/webhooks/mercadopago/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
@@ -477,3 +476,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+// ========================= Fin =========================
