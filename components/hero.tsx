@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Waves } from "lucide-react";
+import { Ticket } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TicketSalesModal } from "./ticket-sales-modal";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
@@ -46,36 +46,38 @@ export function Hero() {
         fontMobile="clamp(2.6rem, 21vw, 9rem)"
         opacity={0.65}
         gap="clamp(0px, 1vh, 10px)"
-        navTopPx={72} // <<--- importante
+        navTopPx={72}
       />
 
-      {/* Grilla maestra (usar backticks para evitar strings rotos) */}
-      <div
-        className={`relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4`}
-      >
+      {/* Grilla maestra */}
+      <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4">
         {/* LOGO / LABIOS con animación y offsets responsive */}
-        <div
-          className={`row-start-2 translate-y-[clamp(10px,3.5vh,40px)] md:translate-y-[clamp(56px,10vh,160px)]`}
-        >
+        <div className="row-start-2 translate-y-[clamp(18px,5.2vh,56px)] md:translate-y-[clamp(64px,10.5vh,170px)]">
           <div className="relative lip-wrap">
             <span aria-hidden className="lip-shine" />
             <Image
-              src="/logov2.png" /* cambia si tu asset es otro */
+              src="/logov2.png"
               alt="Labios rojos"
               width={860}
               height={860}
               priority
-              className={`pointer-events-none select-none w-[70vw] max-w-[780px] min-w-[240px] drop-shadow-[0_10px_45px_rgba(0,0,0,0.55)] lip-float md:hover:lip-pop`}
+              className="
+                pointer-events-none select-none
+                w-[70vw] max-w-[780px] min-w-[240px]
+                drop-shadow-[0_10px_45px_rgba(0,0,0,0.55)]
+                lip-float md:hover:lip-pop
+                translate-x-[2px] md:translate-x-0
+              "
             />
           </div>
         </div>
 
         {/* CONTENIDO (sin título) */}
         <div className="row-start-3 w-full text-center">
-          {/* espacio para no tocar la gota */}
-          <div className="mt-[clamp(10px,3.2vh,42px)]" />
+          {/* aire para que no toque la gota */}
+          <div className="mt-[clamp(14px,3.8vh,48px)]" />
 
-          {/* Countdown con halo sutil (sin card) */}
+          {/* Countdown con halo sutil */}
           <div className="relative inline-flex items-end justify-center gap-3 sm:gap-4 md:gap-6">
             <span
               aria-hidden
@@ -105,17 +107,15 @@ export function Hero() {
               size="lg"
               onClick={() => setShowTicketModal(true)}
               className="
-      w-full sm:w-auto
-      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
-      bg-white text-[#5b0d0d] font-bold tracking-wide
-      hover:bg-[#5b0d0d] hover:text-white        /* ⬅️ swap en hover */
-      transition-colors duration-200            /* suaviza el cambio */
-      hover:scale-105 transition-transform
-      shadow-2xl
-      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
-    "
+                w-full sm:w-auto
+                text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+                bg-white text-[#5b0d0d] font-bold tracking-wide
+                transition-colors duration-200 hover:scale-105 shadow-2xl
+                hover:bg-[#5b0d0d] hover:text-white
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+              "
             >
-              <Waves className="w-5 h-5 mr-2" />
+              <Ticket className="w-5 h-5 mr-2" />
               ¡Reservá Ahora!
             </Button>
           </div>
@@ -130,7 +130,7 @@ export function Hero() {
         onOpenChange={setShowTicketModal}
       />
 
-      {/* Animaciones locales (Styled-JSX OK) */}
+      {/* Animaciones locales */}
       <style jsx>{`
         @keyframes lipFloat {
           0% {
@@ -211,7 +211,7 @@ export function Hero() {
   );
 }
 
-/* Countdown: alto contraste sin “card” */
+/* Countdown */
 function TimeBox({ value, label }: { value: string; label: string }) {
   return (
     <div className="text-center">
