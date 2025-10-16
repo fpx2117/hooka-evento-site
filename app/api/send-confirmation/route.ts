@@ -18,7 +18,7 @@ const cap = (str?: string | null) =>
 const isHttpsPublicUrl = (url?: string | null) =>
   !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
 
-// Normaliza códigos para evitar mismatches (espacios/copypega/minúsculas)
+// Normaliza códigos (trim, quita espacios) y pasa a MAYÚSCULAS
 const normalizeCode = (v?: string | null) =>
   (v ?? "").toString().trim().replace(/\s+/g, "").toUpperCase();
 
@@ -301,7 +301,7 @@ function emailTemplate({
 type Payload = {
   type?: "ticket" | "vip-table";
   recordId?: string;
-  force?: boolean; // para reenviar aunque exista emailSentAt
+  force?: boolean; // reenviar aunque exista emailSentAt (omite lock)
 };
 
 export async function POST(request: NextRequest) {
@@ -381,18 +381,18 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (t.emailSentAt && !force) {
-        return NextResponse.json(
-          { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
-          { status: 200 }
-        );
-      }
-
       const normalizedCode = normalizeCode(t.validationCode);
       if (!normalizedCode) {
         return NextResponse.json(
           { error: "El ticket aprobado no posee validationCode" },
           { status: 409 }
+        );
+      }
+
+      if (t.emailSentAt && !force) {
+        return NextResponse.json(
+          { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
+          { status: 200 }
         );
       }
 
@@ -429,23 +429,54 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      const result = await enviar({
-        to: t.customerEmail || "",
-        subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
-        html,
-      });
+      // ----- Idempotencia: reservar envío ANTES de enviar (salvo force) -----
+      let reservedAt: Date | null = null;
+      if (!force) {
+        reservedAt = new Date();
+        const lock = await prisma.ticket.updateMany({
+          where: { id: t.id, emailSentAt: null, paymentStatus: PS.approved },
+          data: { emailSentAt: reservedAt },
+        });
+        if (lock.count === 0) {
+          // otro proceso ya lo reservó/enviará
+          return NextResponse.json(
+            { ok: true, alreadySent: true },
+            { status: 200 }
+          );
+        }
+      }
 
-      await prisma.ticket.update({
-        where: { id: t.id },
-        data: { emailSentAt: new Date() },
-      });
+      try {
+        const result = await enviar({
+          to: t.customerEmail || "",
+          subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
+          html,
+        });
 
-      return NextResponse.json({
-        success: true,
-        validateUrl,
-        emailMarkedAt: new Date().toISOString(),
-        ...result,
-      });
+        // éxito: si fue force, marcamos ahora; si no, ya está reservado
+        if (force) {
+          await prisma.ticket.update({
+            where: { id: t.id },
+            data: { emailSentAt: new Date() },
+          });
+        }
+
+        return NextResponse.json({
+          success: true,
+          validateUrl,
+          emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
+          ...result,
+        });
+      } catch (err) {
+        // si falló y habíamos reservado, liberamos la reserva
+        if (!force && reservedAt) {
+          await prisma.ticket.update({
+            where: { id: t.id },
+            data: { emailSentAt: null },
+          });
+        }
+        throw err;
+      }
     }
 
     /* ----------------------------- MESA VIP (vip-table) ----------------------- */
@@ -487,18 +518,18 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (r.emailSentAt && !force) {
-        return NextResponse.json(
-          { ok: true, alreadySent: true, emailSentAt: r.emailSentAt },
-          { status: 200 }
-        );
-      }
-
       const normalizedCode = normalizeCode(r.validationCode);
       if (!normalizedCode) {
         return NextResponse.json(
           { error: "La reserva aprobada no posee validationCode" },
           { status: 409 }
+        );
+      }
+
+      if (r.emailSentAt && !force) {
+        return NextResponse.json(
+          { ok: true, alreadySent: true, emailSentAt: r.emailSentAt },
+          { status: 200 }
         );
       }
 
@@ -530,23 +561,51 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      const result = await enviar({
-        to: r.customerEmail || "",
-        subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
-        html,
-      });
+      // ----- Idempotencia: reservar envío ANTES de enviar (salvo force) -----
+      let reservedAt: Date | null = null;
+      if (!force) {
+        reservedAt = new Date();
+        const lock = await prisma.tableReservation.updateMany({
+          where: { id: r.id, emailSentAt: null, paymentStatus: PS.approved },
+          data: { emailSentAt: reservedAt },
+        });
+        if (lock.count === 0) {
+          return NextResponse.json(
+            { ok: true, alreadySent: true },
+            { status: 200 }
+          );
+        }
+      }
 
-      await prisma.tableReservation.update({
-        where: { id: r.id },
-        data: { emailSentAt: new Date() },
-      });
+      try {
+        const result = await enviar({
+          to: r.customerEmail || "",
+          subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
+          html,
+        });
 
-      return NextResponse.json({
-        success: true,
-        validateUrl,
-        emailMarkedAt: new Date().toISOString(),
-        ...result,
-      });
+        if (force) {
+          await prisma.tableReservation.update({
+            where: { id: r.id },
+            data: { emailSentAt: new Date() },
+          });
+        }
+
+        return NextResponse.json({
+          success: true,
+          validateUrl,
+          emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
+          ...result,
+        });
+      } catch (err) {
+        if (!force && reservedAt) {
+          await prisma.tableReservation.update({
+            where: { id: r.id },
+            data: { emailSentAt: null },
+          });
+        }
+        throw err;
+      }
     }
 
     return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });

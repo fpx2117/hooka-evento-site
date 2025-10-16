@@ -11,12 +11,19 @@ function json(body: unknown, status = 200) {
   });
 }
 
+/**
+ * Normaliza y valida SOLO códigos de 6 dígitos:
+ * - trim
+ * - quita zero-width
+ * - quita espacios y guiones
+ * - debe cumplir /^\d{6}$/
+ */
 function normalizeCode(raw: unknown): string | null {
   if (raw == null) return null;
-  let s = String(raw)
+  const s = String(raw)
     .trim()
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .replace(/[\s-]/g, "");
+    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width
+    .replace(/[\s-]/g, ""); // espacios y guiones
   return /^\d{6}$/.test(s) ? s : null;
 }
 
@@ -72,7 +79,7 @@ export async function POST(req: NextRequest) {
   if (!code) return json({ ok: false, error: "code_required" }, 400);
   if (isDev) console.log("[validate][POST] code:", code);
 
-  // 1) Buscamos el ticket (solo con los campos necesarios para decidir)
+  // 1) Buscamos el ticket (con lo mínimo necesario)
   const ticket = await prisma.ticket.findUnique({
     where: { validationCode: code },
     select: {
@@ -106,7 +113,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Intento atómico de marcar como validado (solo si aún no lo está)
+  // 3) Intento atómico de marcar como validado (si aún no lo está)
   const now = new Date();
   const result = await prisma.ticket.updateMany({
     where: { id: ticket.id, validated: false },
@@ -115,7 +122,6 @@ export async function POST(req: NextRequest) {
 
   // Si count = 0, alguien lo validó “entre medio” → ya utilizado
   if (result.count === 0) {
-    // refrescamos para devolver el estado actual
     const latest = await prisma.ticket.findUnique({ where: { id: ticket.id } });
     return json(
       {

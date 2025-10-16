@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
@@ -48,7 +48,7 @@ const isConfirmOk = (x: ConfirmResp): x is ConfirmOk =>
 /* =========================
    Helpers
 ========================= */
-// NEW: normalizar código de validación (espacios fuera + mayúsculas)
+// normalizar código de validación (espacios fuera + mayúsculas)
 const normalizeCode = (v?: string | null) =>
   (v ?? "").toString().replace(/\s+/g, "").toUpperCase();
 
@@ -64,7 +64,7 @@ function getPublicBaseUrl(): string {
   return "";
 }
 
-// NEW: build con código ya normalizado
+// build con código ya normalizado
 function buildValidateUrl(code: string) {
   const base = getPublicBaseUrl();
   const prefix = base ? `${base}` : "";
@@ -88,43 +88,8 @@ export default function PaymentSuccessPage() {
   const [type, setType] = useState<"ticket" | "vip-table" | null>(null);
   const [recordId, setRecordId] = useState<string | null>(null);
 
-  // Control de envío de email (evitar duplicados)
-  const emailSentRef = useRef(false);
-  const LS_EMAIL_SENT_PREFIX = "emailSent:";
-
-  const markEmailSentIfNot = (t: "ticket" | "vip-table", id: string) => {
-    try {
-      const key = `${LS_EMAIL_SENT_PREFIX}${t}:${id}`;
-      if (localStorage.getItem(key) === "1") return true;
-      localStorage.setItem(key, "1");
-      return false;
-    } catch {
-      return false;
-    }
-  };
-
-  const sendEmailOnce = async (t: "ticket" | "vip-table", id: string) => {
-    if (emailSentRef.current) return;
-    const already = markEmailSentIfNot(t, id);
-    if (already) {
-      emailSentRef.current = true;
-      return;
-    }
-    try {
-      const r = await fetch("/api/send-confirmation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        body: JSON.stringify({ type: t, recordId: id }),
-      });
-      if (r.ok) emailSentRef.current = true;
-    } catch {
-      /* no bloquear UX */
-    }
-  };
-
   const renderQr = async (text: string) => {
-    // NEW: generamos QR SIEMPRE con la URL que usa el código normalizado
+    // generamos QR SIEMPRE con la URL que usa el código normalizado
     const img = await QRCode.toDataURL(buildValidateUrl(text), {
       width: 360,
       margin: 2,
@@ -197,7 +162,9 @@ export default function PaymentSuccessPage() {
           );
         if (merchantOrderId)
           confirmUrls.push(
-            `/api/admin/payments/confirm?merchant_order_id=${encodeURIComponent(merchantOrderId)}`
+            `/api/admin/payments/confirm?merchant_order_id=${encodeURIComponent(
+              merchantOrderId
+            )}`
           );
 
         // 4) type/record desde external_reference
@@ -265,9 +232,9 @@ export default function PaymentSuccessPage() {
         if (localType && localRecordId) {
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
-            `/api/admin/tickets/public?type=${encodeURIComponent(localType)}&id=${encodeURIComponent(
-              localRecordId
-            )}${require}`,
+            `/api/admin/tickets/public?type=${encodeURIComponent(
+              localType
+            )}&id=${encodeURIComponent(localRecordId)}${require}`,
             { cache: "no-store" }
           );
           const info: PublicTicketResp = await r.json();
@@ -278,7 +245,7 @@ export default function PaymentSuccessPage() {
               setApproved(true);
             }
 
-            // NEW: normalizamos SIEMPRE lo que viene del backend
+            // normalizamos SIEMPRE lo que viene del backend
             const code = normalizeCode(info.validationCode);
             if (code) {
               setValidationCode(code);
@@ -287,11 +254,6 @@ export default function PaymentSuccessPage() {
               }
             } else {
               setQrCodeImg("");
-            }
-
-            // Envío de email UNA SOLA VEZ
-            if (approvedNow && localType && localRecordId) {
-              await sendEmailOnce(localType, localRecordId);
             }
           }
         }
@@ -313,7 +275,7 @@ export default function PaymentSuccessPage() {
     if (!qrCodeImg) return;
     const link = document.createElement("a");
     link.href = qrCodeImg;
-    // NEW: nombre de archivo con código normalizado
+    // nombre de archivo con código normalizado
     link.download = `hooka-qr-${validationCode || "codigo"}.png`;
     link.click();
   };
@@ -321,7 +283,7 @@ export default function PaymentSuccessPage() {
   const copyCode = async () => {
     if (!validationCode) return;
     try {
-      // NEW: copiado con código normalizado
+      // copiado con código normalizado
       await navigator.clipboard.writeText(validationCode);
     } catch {}
   };
@@ -360,7 +322,7 @@ export default function PaymentSuccessPage() {
   /* =========================
      Render
   ========================= */
-  // NEW: heurística simple de “código listo” (evita mostrar basura parcial)
+  // heurística simple de “código listo”
   const codeLooksReady = validationCode && validationCode.length >= 6;
 
   return (
