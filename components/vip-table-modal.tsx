@@ -265,20 +265,19 @@ export function VIPTableModal({
           phone: cleanDigits(customer.phone),
           dni: cleanDigits(customer.dni),
           additionalInfo: {
-            ticketType: "vip", // ✅ clave para no caer como "general"
+            ticketType: "vip", // 👈 necesario para que el backend lo trate como VIP
             tables: 1,
             unitSize: capacity,
-            tableLocation: selectedLocation ?? undefined, // ✅ nombre de campo esperado por el dashboard
+            location: selectedLocation ?? undefined, // 👈 el backend lee "location"
             gender: customer.gender || undefined,
           },
         },
-        // Usamos el mismo "type" que General para el flujo de pago;
-        // la clasificación VIP la hace el backend leyendo additionalInfo.ticketType === "vip"
+        // Usamos el mismo "type" que General; el backend distingue por ticketType
         type: "ticket" as const,
-        // opcional: duplicamos en meta
+        // opcional: duplicamos en meta (no usado por backend, pero útil para debug)
         meta: {
           ticketType: "vip",
-          tableLocation: selectedLocation ?? undefined,
+          location: selectedLocation ?? undefined,
           gender: customer.gender || undefined,
         },
       };
@@ -341,7 +340,11 @@ export function VIPTableModal({
             <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Mesa VIP
               {selectedLocation
-                ? ` — ${selectedLocation === "dj" ? "Cerca del DJ" : "Cerca de la PISCINA"}`
+                ? ` — ${
+                    selectedLocation === "dj"
+                      ? "Cerca del DJ"
+                      : "Cerca de la PISCINA"
+                  }`
                 : ""}
             </h3>
 
@@ -361,7 +364,9 @@ export function VIPTableModal({
               >
                 {/* Precio por mesa */}
                 <div
-                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
+                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                    soldOut ? "opacity-70" : ""
+                  }`}
                 >
                   <p className="text-sm font-bold text-black mb-1">
                     Precio por mesa
@@ -407,7 +412,9 @@ export function VIPTableModal({
                 {/* Equivalencia */}
                 {unitSize !== null && (
                   <div
-                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
+                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                      soldOut ? "opacity-70" : ""
+                    }`}
                   >
                     <p className="text-sm font-bold text-black mb-1">
                       Equivalencia
@@ -595,7 +602,11 @@ export function VIPTableModal({
                 variant={selectedLocation === "dj" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("dj")}
                 disabled={!hasDJ}
-                className={`justify-start h-12 ${selectedLocation === "dj" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
+                className={`justify-start h-12 ${
+                  selectedLocation === "dj"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
               >
                 <Music className="w-4 h-4 mr-2" />
                 Cerca del DJ
@@ -607,7 +618,11 @@ export function VIPTableModal({
                 variant={selectedLocation === "piscina" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("piscina")}
                 disabled={!hasPiscina}
-                className={`justify-start h-12 ${selectedLocation === "piscina" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
+                className={`justify-start h-12 ${
+                  selectedLocation === "piscina"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
               >
                 <Waves className="w-4 h-4 mr-2" />
                 Cerca de la PISCINA
