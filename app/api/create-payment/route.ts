@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MercadoPagoConfig, Preference } from "mercadopago";
 
 /** ========= Helpers ========= */
 function isHttps(url?: string | null) {
@@ -32,6 +33,7 @@ const n = (v: unknown, d = 0) => {
 
 // 1 mesa VIP = N personas (config)
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
+const DEFAULT_CURRENCY = "ARS";
 
 type CreateBody = {
   type: "ticket" | "vip-table";
@@ -104,7 +106,8 @@ function pickBestDiscount(qty: number, unit: number, rules: RuleRow[]) {
 /** ========= Handler ========= */
 export async function POST(req: NextRequest) {
   try {
-    const MP_TOKEN = process.env.MERCADO_PAGO_ACCESS_TOKEN;
+    const MP_TOKEN =
+      process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
     if (!MP_TOKEN)
       return NextResponse.json(
         { error: "Mercado Pago no configurado" },
@@ -218,15 +221,16 @@ export async function POST(req: NextRequest) {
       // MP: 1 ítem con total
       const mpItems = [
         {
+          id: recordId, // recomendado por MP
           title: `Mesa VIP x${tables}`,
           description: body.items?.[0]?.description,
           quantity: 1,
           unit_price: Number(created.totalPrice) || 0,
-          currency_id: "ARS" as const,
+          currency_id: DEFAULT_CURRENCY,
         },
       ];
 
-      const payload = {
+      const preferenceBody = {
         items: mpItems,
         payer: {
           name: s(body.payer?.name),
@@ -259,56 +263,41 @@ export async function POST(req: NextRequest) {
         },
       };
 
-      const mpRes = await fetch(
-        "https://api.mercadopago.com/checkout/preferences",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${MP_TOKEN}`,
-          },
-          body: JSON.stringify(payload),
-          cache: "no-store",
-        }
-      );
-      const txt = await mpRes.text();
-      let data: any = {};
-      try {
-        data = txt ? JSON.parse(txt) : {};
-      } catch {
-        data = {};
-      }
+      // === SDK + Idempotency
+      const mp = new MercadoPagoConfig({
+        accessToken: MP_TOKEN,
+        options: { timeout: 5000 },
+      });
+      const pref = new Preference(mp);
+      const createdPref = await pref.create({
+        body: preferenceBody,
+        requestOptions: { idempotencyKey: `pref:vip-table:${recordId}` },
+      });
 
-      if (!mpRes.ok) {
-        await prisma.ticket.update({
-          where: { id: recordId },
-          data: { paymentStatus: "failed_preference" as any },
-        });
-        return NextResponse.json(
-          { error: "Error creando preferencia MP", details: data },
-          { status: 502 }
-        );
-      }
       const redirect_url =
-        data.sandbox_init_point ||
-        data.init_point ||
-        (data.id
-          ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(String(data.id))}`
+        createdPref.sandbox_init_point ||
+        createdPref.init_point ||
+        (createdPref.id
+          ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
+              String(createdPref.id)
+            )}`
           : undefined);
+
       if (!redirect_url) {
         await prisma.ticket.update({
           where: { id: recordId },
           data: { paymentStatus: "failed_preference" as any },
         });
         return NextResponse.json(
-          { error: "Preferencia sin URL utilizable", details: data },
+          { error: "Preferencia sin URL utilizable", details: createdPref },
           { status: 502 }
         );
       }
+
       return NextResponse.json({
-        id: data.id,
-        init_point: data.init_point,
-        sandbox_init_point: data.sandbox_init_point,
+        id: createdPref.id,
+        init_point: createdPref.init_point,
+        sandbox_init_point: createdPref.sandbox_init_point,
         redirect_url,
       });
     }
@@ -415,15 +404,16 @@ export async function POST(req: NextRequest) {
 
     const mpItems = [
       {
+        id: recordId,
         title: `Entrada General - ${gender === "hombre" ? "Hombre" : "Mujer"} x${qty}`,
         description: body.items?.[0]?.description,
         quantity: 1,
         unit_price: Number(created.totalPrice) || 0,
-        currency_id: "ARS" as const,
+        currency_id: DEFAULT_CURRENCY,
       },
     ];
 
-    const payload = {
+    const preferenceBody = {
       items: mpItems,
       payer: {
         name: s(body.payer?.name),
@@ -456,56 +446,41 @@ export async function POST(req: NextRequest) {
       },
     };
 
-    const mpRes = await fetch(
-      "https://api.mercadopago.com/checkout/preferences",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${MP_TOKEN}`,
-        },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      }
-    );
-    const txt = await mpRes.text();
-    let data: any = {};
-    try {
-      data = txt ? JSON.parse(txt) : {};
-    } catch {
-      data = {};
-    }
+    // === SDK + Idempotency
+    const mp = new MercadoPagoConfig({
+      accessToken: MP_TOKEN,
+      options: { timeout: 5000 },
+    });
+    const pref = new Preference(mp);
+    const createdPref = await pref.create({
+      body: preferenceBody,
+      requestOptions: { idempotencyKey: `pref:ticket:${recordId}` },
+    });
 
-    if (!mpRes.ok) {
-      await prisma.ticket.update({
-        where: { id: recordId },
-        data: { paymentStatus: "failed_preference" as any },
-      });
-      return NextResponse.json(
-        { error: "Error creando preferencia MP", details: data },
-        { status: 502 }
-      );
-    }
     const redirect_url =
-      data.sandbox_init_point ||
-      data.init_point ||
-      (data.id
-        ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(String(data.id))}`
+      createdPref.sandbox_init_point ||
+      createdPref.init_point ||
+      (createdPref.id
+        ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
+            String(createdPref.id)
+          )}`
         : undefined);
+
     if (!redirect_url) {
       await prisma.ticket.update({
         where: { id: recordId },
         data: { paymentStatus: "failed_preference" as any },
       });
       return NextResponse.json(
-        { error: "Preferencia sin URL utilizable", details: data },
+        { error: "Preferencia sin URL utilizable", details: createdPref },
         { status: 502 }
       );
     }
+
     return NextResponse.json({
-      id: data.id,
-      init_point: data.init_point,
-      sandbox_init_point: data.sandbox_init_point,
+      id: createdPref.id,
+      init_point: createdPref.init_point,
+      sandbox_init_point: createdPref.sandbox_init_point,
       redirect_url,
     });
   } catch (e) {

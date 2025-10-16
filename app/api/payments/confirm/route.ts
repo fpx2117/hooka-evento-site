@@ -4,6 +4,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+// 👇 usamos sólo la normalización (lectura); NO generamos nada aquí
+import { normalizeSixDigitCode } from "@/lib/validation-code";
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -255,21 +257,23 @@ async function processPaymentById(paymentId: string) {
   const prevStatus = await getPrevStatus(type, recordId);
   await persistStatus(type, recordId, payment, approved);
 
-  // Leer (solo lectura) el validationCode para informar (no se genera ni modifica aquí)
-  let validationCode: string | null = null;
+  // Leer (solo lectura) el validationCode y normalizar (NO se genera ni modifica aquí)
+  let rawCode: string | null = null;
   if (type === "ticket") {
     const t = await prisma.ticket.findUnique({
       where: { id: recordId },
       select: { validationCode: true },
     });
-    validationCode = t?.validationCode ?? null;
+    rawCode = t?.validationCode ?? null;
   } else {
     const r = await prisma.tableReservation.findUnique({
       where: { id: recordId },
       select: { validationCode: true },
     });
-    validationCode = r?.validationCode ?? null;
+    rawCode = r?.validationCode ?? null;
   }
+  const validationCode = normalizeSixDigitCode(rawCode);
+  const hasValidCode = !!validationCode;
 
   return {
     ok: true,
@@ -280,7 +284,8 @@ async function processPaymentById(paymentId: string) {
     type,
     recordId,
     prevStatus,
-    validationCode, // solo lectura
+    hasValidCode,
+    validationCode, // normalizado a 6 dígitos o null
   };
 }
 

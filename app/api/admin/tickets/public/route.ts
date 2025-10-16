@@ -23,7 +23,26 @@ function json(payload: any, init?: number | ResponseInit) {
   );
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
+  headers.set("Content-Type", "application/json; charset=utf-8");
   return NextResponse.json(payload, { ...initObj, headers });
+}
+
+// Normalización mínima y filtro estricto (solo 6 dígitos)
+const SIX = /^\d{6}$/;
+function normalizeCode(v?: string | null) {
+  if (v == null) return null;
+  const s = String(v)
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "");
+  return s;
+}
+function isSixDigits(v?: string | null) {
+  return !!v && SIX.test(v);
+}
+function safeValidationCode(v?: string | null) {
+  const n = normalizeCode(v);
+  return isSixDigits(n) ? n! : null;
 }
 
 export async function GET(req: NextRequest) {
@@ -58,14 +77,15 @@ export async function GET(req: NextRequest) {
       if (requireApproved && rec.paymentStatus !== "approved") {
         return json({ ok: false, error: "Pago no aprobado aún" }, 409);
       }
+
       return json({
         ok: true,
-        type: "ticket",
+        type: "ticket" as const,
         recordId: rec.id,
         customerName: rec.customerName,
         paymentStatus: rec.paymentStatus,
-        qrCode: rec.qrCode,
-        validationCode: rec.validationCode,
+        qrCode: rec.qrCode || null,
+        validationCode: safeValidationCode(rec.validationCode), // <— solo 6 dígitos
         totalPrice: Number(rec.totalPrice || 0),
       });
     }
@@ -86,14 +106,15 @@ export async function GET(req: NextRequest) {
     if (requireApproved && rec.paymentStatus !== "approved") {
       return json({ ok: false, error: "Pago no aprobado aún" }, 409);
     }
+
     return json({
       ok: true,
-      type: "vip-table",
+      type: "vip-table" as const,
       recordId: rec.id,
       customerName: rec.customerName,
       paymentStatus: rec.paymentStatus,
-      qrCode: rec.qrCode,
-      validationCode: rec.validationCode,
+      qrCode: rec.qrCode || null,
+      validationCode: safeValidationCode(rec.validationCode), // <— solo 6 dígitos
       totalPrice: Number(rec.totalPrice || 0),
     });
   } catch (e) {

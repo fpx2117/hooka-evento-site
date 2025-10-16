@@ -39,6 +39,9 @@ type ConfirmOk = {
   id?: string;
   type?: "ticket" | "vip-table";
   recordId?: string;
+  // ⬇️ campos extra que tu /api/payments/confirm ya expone
+  hasValidCode?: boolean;
+  validationCode?: string | null;
 };
 type ConfirmErr = { ok: false; error: string; retry_later?: boolean };
 type ConfirmResp = ConfirmOk | ConfirmErr;
@@ -48,9 +51,11 @@ const isConfirmOk = (x: ConfirmResp): x is ConfirmOk =>
 /* =========================
    Helpers
 ========================= */
-// normalizar código de validación (espacios fuera + mayúsculas)
-const normalizeCode = (v?: string | null) =>
-  (v ?? "").toString().replace(/\s+/g, "").toUpperCase();
+// normalizar a 6 dígitos estrictos (quita todo salvo [0-9])
+const normalizeCode = (v?: string | null) => {
+  const digits = (v ?? "").replace(/\D+/g, "");
+  return /^\d{6}$/.test(digits) ? digits : "";
+};
 
 const isHttpsPublicUrl = (url?: string | null) =>
   !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
@@ -89,7 +94,6 @@ export default function PaymentSuccessPage() {
   const [recordId, setRecordId] = useState<string | null>(null);
 
   const renderQr = async (text: string) => {
-    // generamos QR SIEMPRE con la URL que usa el código normalizado
     const img = await QRCode.toDataURL(buildValidateUrl(text), {
       width: 360,
       margin: 2,
@@ -104,6 +108,7 @@ export default function PaymentSuccessPage() {
     approved: boolean;
     type?: "ticket" | "vip-table";
     recordId?: string;
+    validationCode?: string; // si viene, lo devolvemos
   }> {
     const tries = opts.tries ?? 7;
     const baseDelayMs = opts.baseDelayMs ?? 800;
@@ -123,6 +128,7 @@ export default function PaymentSuccessPage() {
                 approved: true,
                 type: data.type,
                 recordId: data.recordId,
+                validationCode: normalizeCode(data.validationCode),
               };
             }
           }
@@ -154,15 +160,15 @@ export default function PaymentSuccessPage() {
         const approvedFromParams =
           (statusParam || "").toLowerCase() === "approved";
 
-        // 3) endpoints de confirmación
+        // 3) endpoints de confirmación (✅ ruta correcta)
         const confirmUrls: string[] = [];
         if (paymentId)
           confirmUrls.push(
-            `/api/admin/payments/confirm?payment_id=${encodeURIComponent(paymentId)}`
+            `/api/payments/confirm?payment_id=${encodeURIComponent(paymentId)}`
           );
         if (merchantOrderId)
           confirmUrls.push(
-            `/api/admin/payments/confirm?merchant_order_id=${encodeURIComponent(
+            `/api/payments/confirm?merchant_order_id=${encodeURIComponent(
               merchantOrderId
             )}`
           );
@@ -195,6 +201,15 @@ export default function PaymentSuccessPage() {
                   ? data.approvedStrong
                   : (data.status || "").toLowerCase() === "approved";
               setConfirmed(true);
+
+              // 👉 si ya trae un validationCode válido, úsalo inmediatamente
+              const codeFromConfirm = normalizeCode(data.validationCode);
+              if (codeFromConfirm) {
+                setValidationCode(codeFromConfirm);
+                if (confirmedApproved) {
+                  await renderQr(codeFromConfirm);
+                }
+              }
             } else {
               setConfirmed(false);
             }
@@ -216,6 +231,10 @@ export default function PaymentSuccessPage() {
             approvedNow = true;
             if (polled.type) localType = polled.type;
             if (polled.recordId) localRecordId = polled.recordId;
+            if (polled.validationCode) {
+              setValidationCode(polled.validationCode);
+              await renderQr(polled.validationCode);
+            }
           }
         }
 
@@ -228,8 +247,9 @@ export default function PaymentSuccessPage() {
         if (localType) setType(localType);
         if (localRecordId) setRecordId(localRecordId);
 
-        // 8) consultar info pública y generar QR SOLO con /validate?code=...
-        if (localType && localRecordId) {
+        // 8) consultar info pública y generar QR como respaldo
+        //    (si aún no tenemos código de confirmación)
+        if (localType && localRecordId && !validationCode) {
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
             `/api/admin/tickets/public?type=${encodeURIComponent(
@@ -245,12 +265,11 @@ export default function PaymentSuccessPage() {
               setApproved(true);
             }
 
-            // normalizamos SIEMPRE lo que viene del backend
             const code = normalizeCode(info.validationCode);
             if (code) {
               setValidationCode(code);
               if (approvedNow) {
-                await renderQr(code); // renderQr ya construye la URL con code normalizado
+                await renderQr(code);
               }
             } else {
               setQrCodeImg("");
@@ -275,7 +294,6 @@ export default function PaymentSuccessPage() {
     if (!qrCodeImg) return;
     const link = document.createElement("a");
     link.href = qrCodeImg;
-    // nombre de archivo con código normalizado
     link.download = `hooka-qr-${validationCode || "codigo"}.png`;
     link.click();
   };
@@ -283,7 +301,6 @@ export default function PaymentSuccessPage() {
   const copyCode = async () => {
     if (!validationCode) return;
     try {
-      // copiado con código normalizado
       await navigator.clipboard.writeText(validationCode);
     } catch {}
   };
@@ -322,12 +339,10 @@ export default function PaymentSuccessPage() {
   /* =========================
      Render
   ========================= */
-  // heurística simple de “código listo”
   const codeLooksReady = validationCode && validationCode.length >= 6;
 
   return (
     <main className="relative min-h-[100svh] overflow-hidden text-white">
-      {/* Fondo con HOOKA */}
       <HeroBackgroundEasy
         mobile={{ rows: 4, cols: 1 }}
         desktop={{ rows: 4, cols: 3 }}
@@ -336,13 +351,10 @@ export default function PaymentSuccessPage() {
         gap="clamp(0px, 1vh, 10px)"
         navTopPx={0}
       />
-      {/* Velo para contraste */}
       <div aria-hidden className="absolute inset-0 bg-black/55" />
 
-      {/* Contenido */}
       <section className="relative z-10 grid min-h-[100svh] place-items-center p-4">
         <div className="w-full max-w-md rounded-2xl border border-white/15 bg-white/5 backdrop-blur-xl shadow-2xl">
-          {/* Header */}
           <div className="px-6 pt-6 text-center space-y-2">
             <StatusBadge />
             <Title />
@@ -352,7 +364,6 @@ export default function PaymentSuccessPage() {
             </p>
           </div>
 
-          {/* Skeleton / Content */}
           <div className="p-6 space-y-6">
             {loading ? (
               <div className="space-y-4">
@@ -361,7 +372,6 @@ export default function PaymentSuccessPage() {
               </div>
             ) : approved ? (
               <>
-                {/* Código de validación */}
                 {codeLooksReady && (
                   <div className="rounded-xl bg-[#5b0d0d]/70 border border-white/10 p-5 text-center space-y-2">
                     <p className="text-xs uppercase tracking-wide text-white/80">
@@ -387,7 +397,6 @@ export default function PaymentSuccessPage() {
                   </div>
                 )}
 
-                {/* QR */}
                 {qrCodeImg && (
                   <div className="rounded-xl bg-black/30 border border-white/10 p-5 text-center space-y-4">
                     <p className="text-sm text-white/85">Tu Código QR</p>
@@ -417,15 +426,13 @@ export default function PaymentSuccessPage() {
                 )}
               </>
             ) : (
-              // No approved aún
               <div className="rounded-xl border border-yellow-300/20 bg-yellow-500/15 p-4 text-yellow-50 text-sm">
                 Estamos validando tu compra. Si no ves tu QR en unos segundos,
                 revisá tu email (incluido spam).
               </div>
             )}
 
-            {/* Nota inferior */}
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-[12px] text-white/80">
+            <div className="rounded-xl border border-white/10 bg:white/5 p-4 text-[12px] text-white/80">
               Te enviamos toda la info para disfrutar de HOOKA. Si tenés dudas,
               respondé el email de confirmación.
               {confirmed === true && approved === false && (
@@ -436,7 +443,6 @@ export default function PaymentSuccessPage() {
               )}
             </div>
 
-            {/* CTA Volver */}
             <Button
               asChild
               size="lg"

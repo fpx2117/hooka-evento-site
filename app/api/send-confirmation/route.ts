@@ -4,12 +4,13 @@ import { prisma } from "@/lib/prisma";
 import QRCode from "qrcode";
 import { Resend } from "resend";
 import { PaymentStatus as PS } from "@prisma/client";
+import { normalizeSixDigitCode } from "@/lib/validation-code";
 
 /* -------------------------------------------------------------------------- */
 /*                                   UTILS                                    */
 /* -------------------------------------------------------------------------- */
 
-const s = (v: any) =>
+const s = (v: unknown) =>
   v === undefined || v === null ? undefined : String(v).trim();
 
 const cap = (str?: string | null) =>
@@ -17,10 +18,6 @@ const cap = (str?: string | null) =>
 
 const isHttpsPublicUrl = (url?: string | null) =>
   !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
-
-// Normaliza códigos (trim, quita espacios) y pasa a MAYÚSCULAS
-const normalizeCode = (v?: string | null) =>
-  (v ?? "").toString().trim().replace(/\s+/g, "").toUpperCase();
 
 function getPublicBaseUrl(req: NextRequest) {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
@@ -33,11 +30,10 @@ function getPublicBaseUrl(req: NextRequest) {
 
 function buildValidateUrl(base: string, code: string) {
   const origin = base.replace(/\/+$/, "");
-  const normalized = normalizeCode(code);
-  return `${origin}/validate?code=${encodeURIComponent(normalized)}`;
+  return `${origin}/validate?code=${encodeURIComponent(code)}`;
 }
 
-function formatARS(n?: any) {
+function formatARS(n?: unknown) {
   const x = Number(n || 0);
   return x.toLocaleString("es-AR", { minimumFractionDigits: 0 });
 }
@@ -86,8 +82,9 @@ function resolveBrand(input?: Partial<Brand> | null): Brand {
   };
 }
 
-async function makeQrDataUrl(url: string, brand: Brand) {
+async function makeQrDataUrl(url: string | null, brand: Brand) {
   try {
+    if (!url) return null;
     return await QRCode.toDataURL(url, {
       width: 280,
       margin: 2,
@@ -333,7 +330,7 @@ export async function POST(request: NextRequest) {
     }) {
       if (!resend) {
         console.warn("[send-confirmation] RESEND_API_KEY ausente — simulación");
-        return { simulated: true };
+        return { simulated: true as const };
       }
       const res = await resend.emails.send({ from, to, subject, html });
       if ((res as any)?.error) {
@@ -361,7 +358,6 @@ export async function POST(request: NextRequest) {
             select: {
               name: true,
               date: true,
-              // brandJson: true as any,
             },
           },
         },
@@ -381,10 +377,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const normalizedCode = normalizeCode(t.validationCode);
+      const normalizedCode = normalizeSixDigitCode(t.validationCode);
       if (!normalizedCode) {
         return NextResponse.json(
-          { error: "El ticket aprobado no posee validationCode" },
+          {
+            error: "El ticket aprobado no posee un validationCode de 6 dígitos",
+          },
           { status: 409 }
         );
       }
@@ -396,7 +394,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const brand = resolveBrand(/* t.event?.brandJson */ undefined);
+      const brand = resolveBrand();
       const typeLabel =
         t.ticketType === "vip" ? "Entrada VIP" : "Entrada General";
       const title = `🫦 ${t.event?.name || brand.name} 🫦`;
@@ -429,7 +427,7 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      // ----- Idempotencia: reservar envío ANTES de enviar (salvo force) -----
+      // Idempotencia: reservar envío ANTES de enviar (salvo force)
       let reservedAt: Date | null = null;
       if (!force) {
         reservedAt = new Date();
@@ -438,7 +436,6 @@ export async function POST(request: NextRequest) {
           data: { emailSentAt: reservedAt },
         });
         if (lock.count === 0) {
-          // otro proceso ya lo reservó/enviará
           return NextResponse.json(
             { ok: true, alreadySent: true },
             { status: 200 }
@@ -453,7 +450,6 @@ export async function POST(request: NextRequest) {
           html,
         });
 
-        // éxito: si fue force, marcamos ahora; si no, ya está reservado
         if (force) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -468,7 +464,6 @@ export async function POST(request: NextRequest) {
           ...result,
         });
       } catch (err) {
-        // si falló y habíamos reservado, liberamos la reserva
         if (!force && reservedAt) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -498,7 +493,6 @@ export async function POST(request: NextRequest) {
             select: {
               name: true,
               date: true,
-              // brandJson: true as any,
             },
           },
         },
@@ -518,10 +512,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const normalizedCode = normalizeCode(r.validationCode);
+      const normalizedCode = normalizeSixDigitCode(r.validationCode);
       if (!normalizedCode) {
         return NextResponse.json(
-          { error: "La reserva aprobada no posee validationCode" },
+          {
+            error:
+              "La reserva aprobada no posee un validationCode de 6 dígitos",
+          },
           { status: 409 }
         );
       }
@@ -533,7 +530,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const brand = resolveBrand(/* r.event?.brandJson */ undefined);
+      const brand = resolveBrand();
       const typeLabel = "Mesa VIP";
       const title = `🫦 ${r.event?.name || brand.name} 🫦`;
       const dateStr = r.event?.date
@@ -561,7 +558,7 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      // ----- Idempotencia: reservar envío ANTES de enviar (salvo force) -----
+      // Idempotencia: reservar envío ANTES de enviar (salvo force)
       let reservedAt: Date | null = null;
       if (!force) {
         reservedAt = new Date();

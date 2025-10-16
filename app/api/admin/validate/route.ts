@@ -1,30 +1,21 @@
-// app/api/validate/route.ts
+// app/api/admin/validate/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { normalizeSixDigitCode } from "@/lib/validation-code"; // 👈 usa el helper compartido
 
 const isDev = process.env.NODE_ENV !== "production";
 
+/** Respuesta JSON con no-cache */
 function json(body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    },
   });
-}
-
-/**
- * Normaliza y valida SOLO códigos de 6 dígitos:
- * - trim
- * - quita zero-width
- * - quita espacios y guiones
- * - debe cumplir /^\d{6}$/
- */
-function normalizeCode(raw: unknown): string | null {
-  if (raw == null) return null;
-  const s = String(raw)
-    .trim()
-    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width
-    .replace(/[\s-]/g, ""); // espacios y guiones
-  return /^\d{6}$/.test(s) ? s : null;
 }
 
 function serialize(t: any) {
@@ -43,14 +34,17 @@ function serialize(t: any) {
   };
 }
 
-/** GET /api/validate?code=XXXXXX */
+/**
+ * GET /api/admin/validate?code=XXXXXX
+ * Solo acepta códigos de 6 dígitos
+ */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const raw = searchParams.get("code") ?? searchParams.get("validationCode");
-  const code = normalizeCode(raw);
+  const code = normalizeSixDigitCode(raw);
 
   if (!code) return json({ ok: false, error: "code_required" }, 400);
-  if (isDev) console.log("[validate][GET] code:", code);
+  if (isDev) console.log("[admin/validate][GET] code:", code);
 
   const ticket = await prisma.ticket.findUnique({
     where: { validationCode: code },
@@ -60,7 +54,11 @@ export async function GET(req: NextRequest) {
   return json({ ok: true, ticket: serialize(ticket) });
 }
 
-/** POST /api/validate  body: { code } o { validationCode } */
+/**
+ * POST /api/admin/validate
+ * body: { code } o { validationCode }
+ * Marca validado atómicamente si el pago está approved.
+ */
 export async function POST(req: NextRequest) {
   // Soporta JSON y x-www-form-urlencoded
   let body: any = {};
@@ -74,10 +72,10 @@ export async function POST(req: NextRequest) {
   } catch {}
 
   const raw = body?.code ?? body?.validationCode;
-  const code = normalizeCode(raw);
+  const code = normalizeSixDigitCode(raw);
 
   if (!code) return json({ ok: false, error: "code_required" }, 400);
-  if (isDev) console.log("[validate][POST] code:", code);
+  if (isDev) console.log("[admin/validate][POST] code:", code);
 
   // 1) Buscamos el ticket (con lo mínimo necesario)
   const ticket = await prisma.ticket.findUnique({

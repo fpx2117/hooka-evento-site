@@ -8,6 +8,12 @@ import {
   PaymentStatus as PS,
 } from "@prisma/client";
 
+// 👇 Helpers centralizados para el validationCode
+import {
+  ensureSixDigitCode,
+  normalizeSixDigitCode,
+} from "@/lib/validation-code";
+
 /* =========================
    Auth
 ========================= */
@@ -61,11 +67,6 @@ function extractCustomerDni(obj: any): string | undefined {
 
 function generateQr(): string {
   return `TICKET-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
-/** 6 dígitos */
-function generateValidationCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 /* =========================
@@ -176,6 +177,8 @@ export async function GET(request: NextRequest) {
 
 /* =========================
    POST /api/admin/tickets
+   - Genera SIEMPRE qrCode
+   - El validationCode de 6 dígitos se asegura con ensureSixDigitCode()
 ========================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -199,7 +202,6 @@ export async function POST(request: NextRequest) {
 
     const ticketType = (normString(body.ticketType) || "general").toLowerCase(); // "general" | "vip"
     const rawGender = normString(body.gender);
-    // Solo para general; VIP no tiene género
     const gender: "hombre" | "mujer" | undefined =
       ticketType === "general"
         ? rawGender === "mujer"
@@ -267,7 +269,6 @@ export async function POST(request: NextRequest) {
     let ticketConfigId: string | undefined;
 
     if (forceOverride && overrideTotal !== undefined) {
-      // Respeta el total calculado manualmente
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
       if (cfg) ticketConfigId = cfg.id;
     } else if (cfg) {
@@ -275,7 +276,6 @@ export async function POST(request: NextRequest) {
       totalPriceDecimal = unit.mul(quantity);
       ticketConfigId = cfg.id;
     } else {
-      // Sin config: requiere totalPrice
       if (overrideTotal === undefined) {
         return NextResponse.json(
           {
@@ -288,14 +288,13 @@ export async function POST(request: NextRequest) {
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
     }
 
-    // Crear ticket con códigos iniciales
+    // Crear ticket con qrCode; validationCode se asegura luego con el helper
     let attempts = 0;
-    while (attempts < 3) {
+    while (attempts < 5) {
       const qrCode = generateQr();
-      const validationCode = generateValidationCode();
 
       try {
-        const ticket = await prisma.ticket.create({
+        const created = await prisma.ticket.create({
           data: {
             eventId: event.id,
             eventDate: event.date,
@@ -312,13 +311,30 @@ export async function POST(request: NextRequest) {
             paymentMethod: paymentMethodEnum,
             paymentStatus: paymentStatusEnum,
             qrCode,
-            validationCode,
+            // 👉 NO seteamos validationCode acá: lo asegura ensureSixDigitCode
             ...(ticketConfigId ? { ticketConfigId } : {}),
           },
+          select: { id: true },
         });
-        return NextResponse.json({ ok: true, ticket });
+
+        // Asegurar código de 6 dígitos de forma idempotente y sin carreras
+        const code = await ensureSixDigitCode(prisma, {
+          type: "ticket",
+          id: created.id,
+        });
+
+        // Devolver ticket completo ya con el validationCode
+        const ticket = await prisma.ticket.findUnique({
+          where: { id: created.id },
+        });
+
+        return NextResponse.json({
+          ok: true,
+          ticket: { ...ticket, validationCode: code },
+        });
       } catch (e: any) {
         if (e?.code === "P2002") {
+          // Colisión en índice único (p.ej. qrCode)
           attempts++;
           continue;
         }
@@ -353,10 +369,15 @@ export async function PUT(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    // ⚠️ Leemos el ticket actual para decidir el tratamiento de gender
+    // Leer ticket actual para decidir tratamiento de gender / status
     const current = await prisma.ticket.findUnique({
       where: { id },
-      select: { ticketType: true },
+      select: {
+        ticketType: true,
+        paymentStatus: true,
+        validationCode: true,
+        qrCode: true,
+      },
     });
     if (!current)
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -375,7 +396,6 @@ export async function PUT(request: NextRequest) {
         if (g === "hombre" || g === "mujer") dataToUpdate.gender = g;
         else dataToUpdate.gender = null;
       } else {
-        // Si el tipo efectivo es VIP, forzamos null
         dataToUpdate.gender = null;
       }
     }
@@ -407,15 +427,23 @@ export async function PUT(request: NextRequest) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }
 
-    // (Opcional) permitir actualizar paymentStatus por PUT
     const nextPs = toPaymentStatus(normString(body.paymentStatus));
     if (nextPs) dataToUpdate.paymentStatus = nextPs;
 
-    const ticket = await prisma.ticket.update({
+    // Guardar cambios básicos
+    await prisma.ticket.update({
       where: { id },
       data: dataToUpdate,
     });
 
+    // Si queda aprobado y NO tiene un code de 6 dígitos, asegurarlo
+    const finalPs = nextPs ?? current.paymentStatus;
+    const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
+    if (finalPs === PS.approved && !hasValidCode) {
+      await ensureSixDigitCode(prisma, { type: "ticket", id });
+    }
+
+    const ticket = await prisma.ticket.findUnique({ where: { id } });
     return NextResponse.json({ ok: true, ticket });
   } catch (error) {
     console.error("[tickets][PUT] Error:", error);
@@ -506,41 +534,19 @@ export async function PATCH(request: NextRequest) {
     }
     dataToUpdate.paymentStatus = nextStatus;
 
-    // ⚠️ Sólo generar códigos si se pasa a approved y faltan
-    const needsCodes =
-      nextStatus === PS.approved &&
-      (!current.qrCode || !current.validationCode);
-
-    if (needsCodes) {
-      let attempts = 0;
-      while (attempts < 3) {
-        try {
-          if (!current.qrCode) dataToUpdate.qrCode = generateQr();
-          if (!current.validationCode)
-            dataToUpdate.validationCode = generateValidationCode();
-          const ticket = await prisma.ticket.update({
-            where: { id },
-            data: dataToUpdate,
-          });
-          return NextResponse.json({ ok: true, ticket });
-        } catch (e: any) {
-          if (e?.code === "P2002") {
-            attempts++;
-            continue;
-          }
-          throw e;
-        }
-      }
-      return NextResponse.json(
-        { error: "No se pudo actualizar (colisiones de unicidad)." },
-        { status: 500 }
-      );
-    }
-
-    const ticket = await prisma.ticket.update({
+    // Guardar cambios
+    await prisma.ticket.update({
       where: { id },
       data: dataToUpdate,
     });
+
+    // Si queda approved y el code NO es válido, asegurarlo
+    const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
+    if (nextStatus === PS.approved && !hasValidCode) {
+      await ensureSixDigitCode(prisma, { type: "ticket", id });
+    }
+
+    const ticket = await prisma.ticket.findUnique({ where: { id } });
     return NextResponse.json({ ok: true, ticket });
   } catch (error) {
     console.error("[tickets][PATCH] Error:", error);
