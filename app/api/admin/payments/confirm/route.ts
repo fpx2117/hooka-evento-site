@@ -1,4 +1,7 @@
 // app/api/payments/confirm/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
@@ -7,6 +10,10 @@ const SEND_MAIL_ON_CONFIRM =
   (process.env.CONFIRM_SEND_EMAIL || "").toLowerCase() === "true";
 
 /* ========================= Helpers ========================= */
+
+function nearlyEqual(a: number, b: number, eps = 0.01) {
+  return Math.abs(a - b) <= eps;
+}
 
 function isApprovedStrongOrSandbox(opts: {
   payment: any;
@@ -25,21 +32,21 @@ function isApprovedStrongOrSandbox(opts: {
   );
   const refOk = payment?.external_reference === expectedRef;
 
-  // Aprobación fuerte
+  // Aprobación fuerte (con tolerancia al redondeo)
   const strong =
     status === "approved" &&
     statusDetail === "accredited" &&
     currencyId === expectedCurrency &&
-    amountPaid === expectedAmount &&
+    nearlyEqual(amountPaid, expectedAmount) &&
     refOk;
   if (strong) return true;
 
-  // Relaja criterios en sandbox: approved + monto + moneda + ref ok
+  // Relaja criterios en sandbox: approved + monto + moneda + ref ok (con tolerancia)
   if (!liveMode) {
     const relaxed =
       status === "approved" &&
       currencyId === expectedCurrency &&
-      amountPaid === expectedAmount &&
+      nearlyEqual(amountPaid, expectedAmount) &&
       refOk;
     return relaxed;
   }
@@ -51,12 +58,10 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-/* ========================= Fetchers MP con retry ========================= */
+/* ========================= Fetchers MP ========================= */
 
 async function fetchPaymentWithRetry(paymentId: string, token: string) {
   const url = `https://api.mercadopago.com/v1/payments/${paymentId}`;
-
-  // Más tolerante (sandbox): hasta 10 intentos con backoff exponencial + jitter
   const attempts = 10;
   for (let i = 0; i < attempts; i++) {
     const r = await fetch(url, {
@@ -65,7 +70,6 @@ async function fetchPaymentWithRetry(paymentId: string, token: string) {
     });
     if (r.ok) {
       const p = await r.json();
-      // Logs clave para diagnosticar mismatches de cuenta
       console.log("[payments/confirm] payment fetched:", {
         id: p?.id,
         status: p?.status,
@@ -79,7 +83,6 @@ async function fetchPaymentWithRetry(paymentId: string, token: string) {
       return p;
     }
     const text = await r.text().catch(() => "");
-    // 404 (propagación) y 5xx: reintentar; 4xx distintos: cortar
     if (r.status === 404 || r.status >= 500) {
       const wait =
         Math.min(1000 * Math.pow(1.25, i), 2000) + Math.random() * 150;
@@ -117,6 +120,27 @@ async function fetchMerchantOrder(orderId: string, token: string) {
     })),
   });
   return order;
+}
+
+// Útil cuando sólo tenemos preference_id
+async function fetchMerchantOrderByPreferenceId(
+  preferenceId: string,
+  token: string
+) {
+  const url = `https://api.mercadopago.com/merchant_orders?preference_id=${encodeURIComponent(
+    preferenceId
+  )}`;
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`merchant_orders_by_pref_${r.status}:${t}`);
+  }
+  const data = await r.json();
+  const results = Array.isArray(data?.elements) ? data.elements : [];
+  return results[0] || null;
 }
 
 /* ========================= Persistencia ========================= */
@@ -287,7 +311,7 @@ export async function GET(req: NextRequest) {
 
     const sp = req.nextUrl.searchParams;
 
-    // 1) Confirmación directa por payment_id (o aliases típicos)
+    // 1) payment_id (o aliases)
     const paymentId =
       sp.get("payment_id") || sp.get("id") || sp.get("collection_id");
     if (paymentId) {
@@ -297,7 +321,6 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(out, { status });
       } catch (e: any) {
         if (String(e?.message) === "payment_not_found_after_retries") {
-          // No lo encontramos aún (propagación sandbox): devolvemos 202 y texto de pista
           return NextResponse.json(
             {
               ok: false,
@@ -311,7 +334,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 2) Confirmación vía merchant_order_id
+    // 2) merchant_order_id
     const merchantOrderId = sp.get("merchant_order_id") || sp.get("order_id");
     if (merchantOrderId) {
       const order = await fetchMerchantOrder(String(merchantOrderId), mpToken);
@@ -334,9 +357,43 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 3) Nada para confirmar
+    // 3) preference_id -> merchant_orders?preference_id=...
+    const preferenceId = sp.get("preference_id");
+    if (preferenceId) {
+      const order = await fetchMerchantOrderByPreferenceId(
+        String(preferenceId),
+        mpToken
+      );
+      if (!order) {
+        return NextResponse.json(
+          { ok: false, error: "Orden no encontrada para preference_id" },
+          { status: 404 }
+        );
+      }
+      const payments: Array<{ id: number }> = order?.payments || [];
+      if (!payments.length) {
+        return NextResponse.json({
+          ok: true,
+          payments: 0,
+          note: "Orden sin pagos aún (por preference_id)",
+        });
+      }
+      const results = [];
+      for (const p of payments) {
+        results.push(await processPaymentById(String(p.id)));
+      }
+      return NextResponse.json({
+        ok: true,
+        from: "preference_id",
+        payments: results,
+      });
+    }
+
     return NextResponse.json(
-      { ok: false, error: "Proveé payment_id o merchant_order_id" },
+      {
+        ok: false,
+        error: "Proveé payment_id, merchant_order_id o preference_id",
+      },
       { status: 400 }
     );
   } catch (e: any) {
