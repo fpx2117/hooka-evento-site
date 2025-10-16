@@ -1078,7 +1078,7 @@ export default function AdminDashboard() {
             <div className="hidden sm:flex items-center gap-3">
               <Button
                 variant="outline"
-                onClick={() => router.push("/admin/validate")}
+                onClick={() => router.push("/validate")}
                 className="border-border/50 hover:bg-accent"
               >
                 <QrCode className="w-4 h-4 mr-2" />

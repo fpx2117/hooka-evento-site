@@ -4,8 +4,11 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-// 👇 usamos sólo la normalización (lectura); NO generamos nada aquí
-import { normalizeSixDigitCode } from "@/lib/validation-code";
+// 👇 usamos normalización para lectura y el generador idempotente
+import {
+  normalizeSixDigitCode,
+  ensureSixDigitCode,
+} from "@/lib/validation-code";
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -143,7 +146,7 @@ async function fetchMerchantOrderByPreferenceId(
   return results[0] || null;
 }
 
-/* ========================= Persistencia ========================= */
+/* ========================= Utilidades de dominio ========================= */
 
 function extractRecordRef(payment: any): {
   type?: "vip-table" | "ticket";
@@ -196,37 +199,6 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   }
 }
 
-/**
- * Persistir estado de pago SIN tocar validationCode.
- * - Actualiza paymentId y paymentStatus.
- * - NUNCA crea ni modifica validationCode.
- */
-async function persistStatus(
-  type: "vip-table" | "ticket",
-  recordId: string,
-  payment: any,
-  approved: boolean
-) {
-  await prisma.$transaction(async (tx) => {
-    const baseUpdate = {
-      paymentId: String(payment?.id ?? ""),
-      paymentStatus: String(payment?.status ?? "pending") as any,
-    };
-
-    if (type === "vip-table") {
-      await tx.tableReservation.update({
-        where: { id: recordId },
-        data: baseUpdate,
-      });
-    } else {
-      await tx.ticket.update({
-        where: { id: recordId },
-        data: baseUpdate,
-      });
-    }
-  });
-}
-
 /* ========================= Core ========================= */
 
 async function processPaymentById(paymentId: string) {
@@ -255,24 +227,51 @@ async function processPaymentById(paymentId: string) {
   });
 
   const prevStatus = await getPrevStatus(type, recordId);
-  await persistStatus(type, recordId, payment, approved);
 
-  // Leer (solo lectura) el validationCode y normalizar (NO se genera ni modifica aquí)
-  let rawCode: string | null = null;
-  if (type === "ticket") {
-    const t = await prisma.ticket.findUnique({
-      where: { id: recordId },
-      select: { validationCode: true },
-    });
-    rawCode = t?.validationCode ?? null;
-  } else {
-    const r = await prisma.tableReservation.findUnique({
-      where: { id: recordId },
-      select: { validationCode: true },
-    });
-    rawCode = r?.validationCode ?? null;
-  }
-  const validationCode = normalizeSixDigitCode(rawCode);
+  // === Transacción única:
+  // 1) Actualiza paymentId/status
+  // 2) Si approved -> garantiza validationCode (6 dígitos) idempotente
+  // 3) Lee el validationCode resultante
+  const result = await prisma.$transaction(async (tx) => {
+    const baseUpdate = {
+      paymentId: String(payment?.id ?? ""),
+      paymentStatus: String(payment?.status ?? "pending") as any,
+    };
+
+    if (type === "vip-table") {
+      await tx.tableReservation.update({
+        where: { id: recordId },
+        data: baseUpdate,
+      });
+
+      if (approved) {
+        await ensureSixDigitCode(tx, { type: "vip-table", id: recordId });
+      }
+
+      const r = await tx.tableReservation.findUnique({
+        where: { id: recordId },
+        select: { validationCode: true },
+      });
+      return r?.validationCode ?? null;
+    } else {
+      await tx.ticket.update({
+        where: { id: recordId },
+        data: baseUpdate,
+      });
+
+      if (approved) {
+        await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
+      }
+
+      const t = await tx.ticket.findUnique({
+        where: { id: recordId },
+        select: { validationCode: true },
+      });
+      return t?.validationCode ?? null;
+    }
+  });
+
+  const validationCode = normalizeSixDigitCode(result);
   const hasValidCode = !!validationCode;
 
   return {

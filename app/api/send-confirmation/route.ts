@@ -313,11 +313,18 @@ export async function POST(request: NextRequest) {
 
     const BASE = getPublicBaseUrl(request);
 
-    // Resend
+    // Resend (en producción debe estar configurado)
     const apiKey = s(process.env.RESEND_API_KEY);
     const from =
       s(process.env.RESEND_FROM) || "Hooka Party <info@hooka.com.ar>";
-    const resend = apiKey ? new Resend(apiKey) : null;
+    if (!apiKey) {
+      // En producción: si falta, devolvemos 500
+      return NextResponse.json(
+        { error: "RESEND_API_KEY no configurado" },
+        { status: 500 }
+      );
+    }
+    const resend = new Resend(apiKey);
 
     async function enviar({
       to,
@@ -328,10 +335,6 @@ export async function POST(request: NextRequest) {
       subject: string;
       html: string;
     }) {
-      if (!resend) {
-        console.warn("[send-confirmation] RESEND_API_KEY ausente — simulación");
-        return { simulated: true as const };
-      }
       const res = await resend.emails.send({ from, to, subject, html });
       if ((res as any)?.error) {
         console.error("[send-confirmation] Resend error:", (res as any).error);
@@ -354,12 +357,7 @@ export async function POST(request: NextRequest) {
           totalPrice: true,
           paymentStatus: true,
           emailSentAt: true,
-          event: {
-            select: {
-              name: true,
-              date: true,
-            },
-          },
+          event: { select: { name: true, date: true } },
         },
       });
 
@@ -369,7 +367,6 @@ export async function POST(request: NextRequest) {
           { status: 404 }
         );
       }
-
       if (t.paymentStatus !== PS.approved) {
         return NextResponse.json(
           { error: "El pago no está aprobado para este ticket" },
@@ -384,6 +381,13 @@ export async function POST(request: NextRequest) {
             error: "El ticket aprobado no posee un validationCode de 6 dígitos",
           },
           { status: 409 }
+        );
+      }
+
+      if (!t.customerEmail) {
+        return NextResponse.json(
+          { error: "customerEmail vacío" },
+          { status: 400 }
         );
       }
 
@@ -427,7 +431,7 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      // Idempotencia: reservar envío ANTES de enviar (salvo force)
+      // Idempotencia real de envío (sólo marcamos si realmente vamos a enviar)
       let reservedAt: Date | null = null;
       if (!force) {
         reservedAt = new Date();
@@ -445,11 +449,12 @@ export async function POST(request: NextRequest) {
 
       try {
         const result = await enviar({
-          to: t.customerEmail || "",
+          to: t.customerEmail,
           subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
           html,
         });
 
+        // Si fue force, recién ahora marcamos como enviado
         if (force) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -464,6 +469,7 @@ export async function POST(request: NextRequest) {
           ...result,
         });
       } catch (err) {
+        // liberar la reserva si falló el envío
         if (!force && reservedAt) {
           await prisma.ticket.update({
             where: { id: t.id },
@@ -489,12 +495,7 @@ export async function POST(request: NextRequest) {
           totalPrice: true,
           paymentStatus: true,
           emailSentAt: true,
-          event: {
-            select: {
-              name: true,
-              date: true,
-            },
-          },
+          event: { select: { name: true, date: true } },
         },
       });
 
@@ -504,7 +505,6 @@ export async function POST(request: NextRequest) {
           { status: 404 }
         );
       }
-
       if (r.paymentStatus !== PS.approved) {
         return NextResponse.json(
           { error: "El pago no está aprobado para esta reserva" },
@@ -520,6 +520,13 @@ export async function POST(request: NextRequest) {
               "La reserva aprobada no posee un validationCode de 6 dígitos",
           },
           { status: 409 }
+        );
+      }
+
+      if (!r.customerEmail) {
+        return NextResponse.json(
+          { error: "customerEmail vacío" },
+          { status: 400 }
         );
       }
 
@@ -558,7 +565,6 @@ export async function POST(request: NextRequest) {
         qrCodeImage: qrImage || undefined,
       });
 
-      // Idempotencia: reservar envío ANTES de enviar (salvo force)
       let reservedAt: Date | null = null;
       if (!force) {
         reservedAt = new Date();
@@ -576,7 +582,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const result = await enviar({
-          to: r.customerEmail || "",
+          to: r.customerEmail,
           subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
           html,
         });

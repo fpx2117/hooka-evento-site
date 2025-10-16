@@ -1,4 +1,4 @@
-// app/admin/validate/page.tsx
+// app/validate/page.tsx
 
 // UI (shadcn)
 import { Card } from "@/components/ui/card";
