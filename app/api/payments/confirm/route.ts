@@ -11,8 +11,10 @@ import {
 } from "@/lib/validation-code";
 import { PaymentStatus } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 
-type Tx = Prisma.TransactionClient;
+/* ========================= Tipos DB compatibles ========================= */
+type DB = Prisma.TransactionClient | PrismaClient;
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -211,14 +213,14 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
  * - Garantiza que no supere stockLimit ni baje de 0.
  */
 async function adjustVipTableSoldCount(
-  tx: Tx,
+  db: DB,
   recordId: string,
   opts: { delta: number }
 ) {
   const { delta } = opts;
 
   // Traer datos mínimos para resolver el config y el delta (tables)
-  const res = await tx.tableReservation.findUnique({
+  const res = await db.tableReservation.findUnique({
     where: { id: recordId },
     select: {
       eventId: true,
@@ -238,13 +240,13 @@ async function adjustVipTableSoldCount(
     null;
 
   if (res.vipTableConfigId) {
-    config = await tx.vipTableConfig.findUnique({
+    config = await db.vipTableConfig.findUnique({
       where: { id: res.vipTableConfigId },
       select: { id: true, soldCount: true, stockLimit: true },
     });
   } else {
     // Resolver por eventId + location (usa TableLocation)
-    config = await tx.vipTableConfig.findUnique({
+    config = await db.vipTableConfig.findUnique({
       where: {
         eventId_location: { eventId: res.eventId, location: res.location },
       },
@@ -263,7 +265,7 @@ async function adjustVipTableSoldCount(
   // Si no cambia, evitamos escribir
   if (next === config.soldCount) return;
 
-  await tx.vipTableConfig.update({
+  await db.vipTableConfig.update({
     where: { id: config.id },
     data: { soldCount: next },
   });
@@ -304,7 +306,8 @@ async function processPaymentById(paymentId: string) {
   // 2) Ajusta soldCount de VipTableConfig por TableLocation si corresponde
   // 3) Si approved -> garantiza validationCode (6 dígitos) idempotente
   // 4) Lee el validationCode resultante
-  const result = await prisma.$transaction(async (tx: Tx) => {
+  const result = await prisma.$transaction(async (tx) => {
+    const db = tx as DB; // alias compatible
     const baseUpdate = {
       paymentId: String(payment?.id ?? ""),
       paymentStatus: newStatus as any,
@@ -322,7 +325,7 @@ async function processPaymentById(paymentId: string) {
 
       if (!wasApproved && nowApproved) {
         // de NO aprobado -> aprobado : +tables
-        await adjustVipTableSoldCount(tx, recordId, { delta: +1 });
+        await adjustVipTableSoldCount(db, recordId, { delta: +1 });
       } else if (
         wasApproved &&
         (newStatus === "refunded" ||
@@ -330,12 +333,16 @@ async function processPaymentById(paymentId: string) {
           newStatus === "charged_back")
       ) {
         // de aprobado -> revertido : -tables
-        await adjustVipTableSoldCount(tx, recordId, { delta: -1 });
+        await adjustVipTableSoldCount(db, recordId, { delta: -1 });
       }
 
       // Generar código de validación solo si quedó aprobado
       if (nowApproved) {
-        await ensureSixDigitCode(tx, { type: "vip-table", id: recordId });
+        // ensureSixDigitCode acepta PrismaClient o TransactionClient según lo actualizamos
+        await ensureSixDigitCode(db as any, {
+          type: "vip-table",
+          id: recordId,
+        });
       }
 
       const r = await tx.tableReservation.findUnique({
@@ -344,14 +351,15 @@ async function processPaymentById(paymentId: string) {
       });
       return r?.validationCode ?? null;
     } else {
-      // === ticket (entradas individuales)
+      // === ticket (entradas individuales / general)
       await tx.ticket.update({
         where: { id: recordId },
         data: baseUpdate,
       });
 
-      if (approvedStrong && newStatus === "approved") {
-        await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
+      const nowApproved = approvedStrong && newStatus === "approved";
+      if (nowApproved) {
+        await ensureSixDigitCode(db as any, { type: "ticket", id: recordId });
       }
 
       const t = await tx.ticket.findUnique({

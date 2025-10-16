@@ -33,10 +33,12 @@ type PublicTicketOk = {
   validationCode: string | null;
   totalPrice: number;
 
-  // ⬇️ NUEVO: cuando es VIP (TableReservation)
+  // VIP (TableReservation)
   location?: TableLocation | null;
   tables?: number | null;
-  capacity?: number | null;
+  capacity?: number | null; // puede ser TOTAL
+  // 👇 algunos endpoints ya devuelven esto; si no, lo inferimos
+  capacityPerTable?: number | null;
   guests?: number | null;
 };
 type PublicTicketErr = { ok: false; error: string };
@@ -116,10 +118,10 @@ export default function PaymentSuccessPage() {
   const [type, setType] = useState<"ticket" | "vip-table" | null>(null);
   const [recordId, setRecordId] = useState<string | null>(null);
 
-  // ⬇️ NUEVO: estado de VIP
+  // VIP state
   const [vipLocation, setVipLocation] = useState<TableLocation | null>(null);
   const [vipTables, setVipTables] = useState<number | null>(null);
-  const [vipCapacity, setVipCapacity] = useState<number | null>(null);
+  const [vipCapPerTable, setVipCapPerTable] = useState<number | null>(null);
   const [vipGuests, setVipGuests] = useState<number | null>(null);
 
   const renderQr = async (text: string) => {
@@ -161,7 +163,9 @@ export default function PaymentSuccessPage() {
               };
             }
           }
-        } catch {}
+        } catch {
+          // ignore this try
+        }
       }
       const wait =
         Math.min(baseDelayMs * Math.pow(1.35, i), 2500) + Math.random() * 150;
@@ -288,7 +292,7 @@ export default function PaymentSuccessPage() {
           const info: PublicTicketResp = await r.json();
 
           if (info.ok) {
-            if (info.paymentStatus === "approved") {
+            if ((info.paymentStatus || "").toLowerCase() === "approved") {
               approvedNow = true;
               setApproved(true);
             }
@@ -300,11 +304,22 @@ export default function PaymentSuccessPage() {
               if (approvedNow) await renderQr(code);
             }
 
-            // ⬇️ NUEVO: si es VIP, guardamos location/tables/capacity/guests
             if (info.type === "vip-table") {
               setVipLocation((info.location as TableLocation) ?? null);
               setVipTables(info.tables ?? null);
-              setVipCapacity(info.capacity ?? null);
+
+              // capacityPerTable puede venir directo o la inferimos
+              const capPerTableFromApi = (info as any).capacityPerTable ?? null;
+              const inferred =
+                capPerTableFromApi ??
+                (info.capacity && info.tables
+                  ? Math.max(
+                      1,
+                      Math.floor((info.capacity || 0) / (info.tables || 1))
+                    )
+                  : null);
+
+              setVipCapPerTable(inferred);
               setVipGuests(info.guests ?? null);
             }
           }
@@ -335,7 +350,9 @@ export default function PaymentSuccessPage() {
     if (!validationCode) return;
     try {
       await navigator.clipboard.writeText(validationCode);
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   const StatusBadge = () => {
@@ -380,6 +397,11 @@ export default function PaymentSuccessPage() {
   ========================= */
   const codeLooksReady = validationCode && validationCode.length >= 6;
 
+  const totalVipPersons =
+    vipTables != null && vipCapPerTable != null
+      ? vipTables * vipCapPerTable
+      : null;
+
   return (
     <main className="relative min-h-[100svh] overflow-hidden text-white">
       <HeroBackgroundEasy
@@ -412,7 +434,7 @@ export default function PaymentSuccessPage() {
               </div>
             ) : approved ? (
               <>
-                {/* ⬇️ NUEVO: Detalle VIP si corresponde */}
+                {/* Detalle VIP si corresponde */}
                 {type === "vip-table" && (
                   <div className="rounded-xl bg-white/8 border border-white/15 p-4 text-sm">
                     <div className="flex flex-wrap gap-2 items-center">
@@ -428,16 +450,16 @@ export default function PaymentSuccessPage() {
                           Mesas: <b>{vipTables}</b>
                         </span>
                       )}
-                      {vipCapacity != null && (
+                      {vipCapPerTable != null && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
                           <Users className="w-4 h-4" />
-                          Capacidad/mesa: <b>{vipCapacity}</b>
+                          Capacidad/mesa: <b>{vipCapPerTable}</b>
                         </span>
                       )}
-                      {vipTables != null && vipCapacity != null && (
+                      {totalVipPersons != null && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
                           <Users className="w-4 h-4" />
-                          Total personas: <b>{vipTables * vipCapacity}</b>
+                          Total personas: <b>{totalVipPersons}</b>
                         </span>
                       )}
                     </div>

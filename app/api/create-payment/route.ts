@@ -6,7 +6,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { MercadoPagoConfig, Preference } from "mercadopago";
 
-/** ========= Helpers ========= */
+/* ========================= Helpers ========================= */
 function isHttps(url?: string | null) {
   return !!url && /^https:\/\/[^ ]+$/i.test((url || "").trim());
 }
@@ -25,6 +25,7 @@ function getBaseUrl(req: NextRequest) {
   const guessed = `${proto}://${host}`;
   return isHttps(guessed) || isLocalHttp(guessed) ? guessed : "";
 }
+
 const s = (v: unknown) =>
   v === undefined || v === null ? undefined : String(v).trim();
 const n = (v: unknown, d = 0) => {
@@ -37,9 +38,10 @@ const onlyDigits = (v?: string) => (v || "").replace(/\D+/g, "");
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 const DEFAULT_CURRENCY = "ARS";
 
+/* ========================= Tipos de request ========================= */
 type CreateBody = {
   type: "ticket" | "vip-table";
-  items: Array<{
+  items?: Array<{
     title?: string;
     description?: string;
     quantity?: number;
@@ -56,12 +58,12 @@ type CreateBody = {
       gender?: "hombre" | "mujer";
       quantity?: number; // entradas (general)
       tables?: number; // mesas (vip)
-      location?: "dj" | "piscina" | "general"; // ✅ ubicación VIP
+      location?: "dj" | "piscina" | "general"; // ubicación VIP
     };
   };
 };
 
-// ====== Reglas de descuento (nivel orden) ======
+/* ========================= Descuentos ========================= */
 type RuleRow = {
   id: string;
   minQty: number;
@@ -106,7 +108,7 @@ function pickBestDiscount(qty: number, unit: number, rules: RuleRow[]) {
   return { discount: best, subtotal, total: subtotal - best, ruleId: bestId };
 }
 
-function prettyLocation(loc: string | undefined) {
+function prettyLocation(loc?: string) {
   switch ((loc || "").toLowerCase()) {
     case "dj":
       return "Cerca del DJ";
@@ -117,27 +119,30 @@ function prettyLocation(loc: string | undefined) {
   }
 }
 
-/** ========= Handler ========= */
+/* ========================= Handler ========================= */
 export async function POST(req: NextRequest) {
   try {
     const MP_TOKEN =
       process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
-    if (!MP_TOKEN)
+    if (!MP_TOKEN) {
       return NextResponse.json(
         { error: "Mercado Pago no configurado" },
         { status: 500 }
       );
+    }
 
     const base = getBaseUrl(req);
-    if (!base)
+    if (!base) {
       return NextResponse.json(
         { error: "Base URL inválida (NEXT_PUBLIC_BASE_URL)" },
         { status: 500 }
       );
+    }
 
     const body: CreateBody = await req.json();
-    if (body.type !== "ticket" && body.type !== "vip-table")
+    if (body.type !== "ticket" && body.type !== "vip-table") {
       return NextResponse.json({ error: "type inválido" }, { status: 400 });
+    }
 
     // === Evento activo por code/id o último activo ===
     const codeOrId =
@@ -162,18 +167,23 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
 
-    /** ------- VARIABLES COMUNES ------- */
-    let unitPriceFromDB = 0; // SIEMPRE desde DB
-
-    // Construcción robusta de back_urls por adelantado
+    // URLs
     const successUrl = new URL("/payment/success", base).toString();
     const failureUrl = new URL("/payment/failure", base).toString();
     const pendingUrl = new URL("/payment/pending", base).toString();
-    // 👇 Solo activamos auto_return si ES HTTPS (prod). Localhost queda desactivado.
     const canAutoReturn = isHttps(successUrl);
 
+    // Cliente
+    const payerName = s(body.payer?.name) ?? "";
+    const payerEmail = s(body.payer?.email) ?? "";
+    const payerPhone = onlyDigits(s(body.payer?.phone));
+    const payerDni = onlyDigits(s(body.payer?.dni));
+
+    /* ======================================================================
+       VIP por ubicación -> crea TableReservation (paymentStatus=pending) y
+       Preference de MP por el total de mesas (1 ítem)
+    ====================================================================== */
     if (body.type === "vip-table") {
-      // ===== VIP por UBICACIÓN =====
       const tables = Math.max(
         1,
         n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
@@ -185,7 +195,7 @@ export async function POST(req: NextRequest) {
         ["dj", "piscina", "general"].includes(rawLoc) ? rawLoc : "general"
       ) as "dj" | "piscina" | "general";
 
-      // Config de la ubicación
+      // Config por ubicación
       const cfg = await prisma.vipTableConfig.findFirst({
         where: { eventId: event.id, location },
         select: {
@@ -203,23 +213,24 @@ export async function POST(req: NextRequest) {
         );
 
       const cap = Math.max(1, Number(cfg.capacityPerTable ?? VIP_UNIT_SIZE));
-      const limitTables = Math.max(0, Number(cfg.stockLimit || 0));
-      const soldTables = Math.max(0, Number(cfg.soldCount || 0));
-      const remainingTables = Math.max(0, limitTables - soldTables);
-
-      if (remainingTables < tables)
+      const remainingTables = Math.max(
+        0,
+        Number(cfg.stockLimit || 0) - Number(cfg.soldCount || 0)
+      );
+      if (remainingTables < tables) {
         return NextResponse.json(
           { error: "Sin mesas disponibles en esa ubicación" },
           { status: 409 }
         );
+      }
 
-      unitPriceFromDB = Number(cfg.price) || 0;
+      const unitPriceFromDB = Number(cfg.price) || 0;
 
-      // Descuentos (por mesa) — usan reglas 'vip'
+      // Descuento por mesa (usa reglas 'vip')
       const rules = await getActiveRulesFor(event.id, "vip");
       const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
-      // Crear TableReservation (pendiente)
+      // Crear reserva PENDING
       const createdRes = await prisma.tableReservation.create({
         data: {
           eventId: event.id,
@@ -230,10 +241,10 @@ export async function POST(req: NextRequest) {
           capacity: tables * cap,
           guests: 0,
           totalPrice: total,
-          customerName: s(body.payer?.name) ?? "",
-          customerEmail: s(body.payer?.email) ?? "",
-          customerPhone: onlyDigits(s(body.payer?.phone)),
-          customerDni: onlyDigits(s(body.payer?.dni)),
+          customerName: payerName,
+          customerEmail: payerEmail,
+          customerPhone: payerPhone,
+          customerDni: payerDni,
           reservationDate: new Date(),
           paymentStatus: "pending" as any,
           paymentMethod: "mercadopago" as any,
@@ -241,7 +252,7 @@ export async function POST(req: NextRequest) {
         select: { id: true, totalPrice: true },
       });
 
-      // MP: 1 ítem con total
+      // Preferencia (1 ítem = total de mesas)
       const mpItems = [
         {
           id: createdRes.id,
@@ -260,13 +271,11 @@ export async function POST(req: NextRequest) {
       const preferenceBody = {
         items: mpItems,
         payer: {
-          name: s(body.payer?.name),
-          email: s(body.payer?.email),
-          phone: onlyDigits(s(body.payer?.phone))
-            ? { number: onlyDigits(s(body.payer?.phone)) }
-            : undefined,
-          identification: onlyDigits(s(body.payer?.dni))
-            ? { type: "DNI", number: onlyDigits(s(body.payer?.dni)) }
+          name: payerName,
+          email: payerEmail,
+          phone: payerPhone ? { number: payerPhone } : undefined,
+          identification: payerDni
+            ? { type: "DNI", number: payerDni }
             : undefined,
         },
         back_urls: {
@@ -294,7 +303,6 @@ export async function POST(req: NextRequest) {
         },
       };
 
-      // === SDK + Idempotency
       const mp = new MercadoPagoConfig({
         accessToken: MP_TOKEN,
         options: { timeout: 5000 },
@@ -356,7 +364,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ===== ENTRADA GENERAL =====
+    /* ======================================================================
+       ENTRADA GENERAL -> crea Ticket (paymentStatus=pending) y Preference
+       Se respeta stock global: TOTAL(personas) - aprobadas(general+vip)
+    ====================================================================== */
     const gender = s(body.payer?.additionalInfo?.gender) as
       | "hombre"
       | "mujer"
@@ -388,9 +399,7 @@ export async function POST(req: NextRequest) {
     });
     const totalLimit = Number(cfgTotal?.stockLimit ?? 0);
 
-    // ✅ Personas vendidas aprobadas:
-    // - GENERAL por género = SUM(quantity)
-    // - VIP por ubicación = SUM(soldCount * capacityPerTable)
+    // Vendidas aprobadas (GENERAL por género + VIP convertidas a personas)
     const [soldGenHAggr, soldGenMAggr, vipCfgs] = await Promise.all([
       prisma.ticket.aggregate({
         where: {
@@ -425,19 +434,20 @@ export async function POST(req: NextRequest) {
 
     const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
     const remainingTotal = Math.max(0, totalLimit - soldTotalPersons);
-
-    if (remainingTotal < qty)
+    if (remainingTotal < qty) {
       return NextResponse.json(
         { error: "No hay cupo disponible en el evento" },
         { status: 409 }
       );
+    }
 
-    unitPriceFromDB = Number(cfgGen.price) || 0;
+    const unitPriceFromDB = Number(cfgGen.price) || 0;
 
-    // Descuentos (por entrada)
+    // Descuento por entrada (usa reglas 'general')
     const rules = await getActiveRulesFor(event.id, "general");
     const { total } = pickBestDiscount(qty, unitPriceFromDB, rules);
 
+    // Crear Ticket PENDING
     const created = await prisma.ticket.create({
       data: {
         eventId: event.id,
@@ -446,10 +456,10 @@ export async function POST(req: NextRequest) {
         gender,
         quantity: qty,
         totalPrice: total,
-        customerName: s(body.payer?.name) ?? "",
-        customerEmail: s(body.payer?.email) ?? "",
-        customerPhone: onlyDigits(s(body.payer?.phone)),
-        customerDni: onlyDigits(s(body.payer?.dni)),
+        customerName: payerName,
+        customerEmail: payerEmail,
+        customerPhone: payerPhone,
+        customerDni: payerDni,
         paymentStatus: "pending" as any,
         paymentMethod: "mercadopago" as any,
         ticketConfigId: cfgGen.id,
@@ -473,13 +483,11 @@ export async function POST(req: NextRequest) {
     const preferenceBody = {
       items: mpItems,
       payer: {
-        name: s(body.payer?.name),
-        email: s(body.payer?.email),
-        phone: onlyDigits(s(body.payer?.phone))
-          ? { number: onlyDigits(s(body.payer?.phone)) }
-          : undefined,
-        identification: onlyDigits(s(body.payer?.dni))
-          ? { type: "DNI", number: onlyDigits(s(body.payer?.dni)) }
+        name: payerName,
+        email: payerEmail,
+        phone: payerPhone ? { number: payerPhone } : undefined,
+        identification: payerDni
+          ? { type: "DNI", number: payerDni }
           : undefined,
       },
       back_urls: {
@@ -503,7 +511,6 @@ export async function POST(req: NextRequest) {
       },
     };
 
-    // === SDK + Idempotency
     const mp = new MercadoPagoConfig({
       accessToken: MP_TOKEN,
       options: { timeout: 5000 },

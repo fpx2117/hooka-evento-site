@@ -21,7 +21,7 @@ const isHttpsPublicUrl = (url?: string | null) =>
 
 function getPublicBaseUrl(req: NextRequest) {
   const envBase = (process.env.NEXT_PUBLIC_BASE_URL || "").trim();
-  if (isHttpsPublicUrl(envBase)) return envBase;
+  if (isHttpsPublicUrl(envBase)) return envBase.replace(/\/+$/, "");
   const proto = (req.headers.get("x-forwarded-proto") || "http").toLowerCase();
   const host =
     req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
@@ -35,7 +35,10 @@ function buildValidateUrl(base: string, code: string) {
 
 function formatARS(n?: unknown) {
   const x = Number(n || 0);
-  return x.toLocaleString("es-AR", { minimumFractionDigits: 0 });
+  return x.toLocaleString("es-AR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
 }
 
 const prettyLocation = (loc?: string | null) => {
@@ -50,7 +53,7 @@ const prettyLocation = (loc?: string | null) => {
 };
 
 /* -------------------------------------------------------------------------- */
-/*                              BRAND / PALETA                                 */
+/*                              BRAND / PALETA                                */
 /* -------------------------------------------------------------------------- */
 
 type Brand = {
@@ -110,7 +113,7 @@ async function makeQrDataUrl(url: string | null, brand: Brand) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                 TEMPLATE                                    */
+/*                                 TEMPLATE                                   */
 /* -------------------------------------------------------------------------- */
 
 function emailTemplate({
@@ -263,19 +266,6 @@ function emailTemplate({
             </ol>
           </div>
 
-          <div style="margin-top:20px; background:linear-gradient(135deg, rgba(255,0,110,0.15) 0%, rgba(255,190,11,0.15) 100%);
-                      border:2px solid ${colors.gradientFrom};
-                      border-radius:16px; padding:20px 24px;">
-            <div style="display:flex; align-items:center; margin-bottom:8px;">
-              <span style="font-size:24px; margin-right:12px;">⚠️</span>
-              <strong style="font-size:17px;">Aclaración Importante</strong>
-            </div>
-            <p style="margin:8px 0 0 0; color:rgba(255,255,255,0.9); line-height:1.6; font-size:14px;">
-              En <strong>el evento</strong> no se aceptan bebidas de afuera. Si traés bebidas, se
-              guardarán y se devolverán al final del evento. 🍹
-            </p>
-          </div>
-
           <div style="text-align:center; margin:32px 0 0 0; padding:24px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%); border-radius:16px;">
             <p style="margin:0; font-size:22px; font-weight:900; color:#FFFFFF;">
               ¡Nos vemos en la fiesta! 🎉🔥
@@ -303,7 +293,7 @@ function emailTemplate({
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                  HANDLER                                    */
+/*                                  HANDLER                                   */
 /* -------------------------------------------------------------------------- */
 
 type Payload = {
@@ -311,6 +301,9 @@ type Payload = {
   recordId?: string;
   force?: boolean; // reenviar aunque exista emailSentAt (omite lock)
 };
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
@@ -353,7 +346,7 @@ export async function POST(request: NextRequest) {
       return res;
     }
 
-    /* ----------------------------- ENTRADA (ticket) ---------------------------- */
+    /* ----------------------------- ENTRADA (ticket GENERAL) ---------------------------- */
     if (type === "ticket") {
       const t = await prisma.ticket.findUnique({
         where: { id: recordId },
@@ -361,7 +354,7 @@ export async function POST(request: NextRequest) {
           id: true,
           customerName: true,
           customerEmail: true,
-          ticketType: true, // "general" | "vip"
+          ticketType: true, // en nuestro modelo actual es "general"
           gender: true, // "hombre" | "mujer" | null
           validationCode: true,
           totalPrice: true,
@@ -409,21 +402,19 @@ export async function POST(request: NextRequest) {
       }
 
       const brand = resolveBrand();
-      const typeLabel =
-        t.ticketType === "vip" ? "Entrada VIP" : "Entrada General";
+      const typeLabel = "Entrada General";
       const title = `🫦 ${t.event?.name || brand.name} 🫦`;
       const dateStr = t.event?.date
         ? new Date(t.event.date).toLocaleDateString("es-AR")
         : "";
-      const genreLabel =
-        t.ticketType === "general" && t.gender
-          ? `<strong>Género:</strong> ${cap(t.gender)}<br/>`
-          : "";
+      const genderLine = t.gender
+        ? `<strong>Género:</strong> ${cap(t.gender)}<br/>`
+        : "";
 
       const detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `<strong>Tipo:</strong> ${typeLabel}<br/>` +
-        `${genreLabel}` +
+        `${genderLine}` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
@@ -502,7 +493,6 @@ export async function POST(request: NextRequest) {
           totalPrice: true,
           paymentStatus: true,
           emailSentAt: true,
-          // 👇 ahora incluimos la ubicación y capacidad por mesa desde la config
           location: true, // redundante, pero útil si lo guardás en la reserva
           vipTableConfig: {
             select: {
@@ -566,7 +556,6 @@ export async function POST(request: NextRequest) {
         1,
         Number(r.vipTableConfig?.capacityPerTable || 0)
       );
-      // Si no viene capacidad por mesa desde config, inferimos como promedio:
       const inferredCapPerTable =
         capPerTable ||
         (r.tables && r.capacity
@@ -583,7 +572,9 @@ export async function POST(request: NextRequest) {
             ? `<strong>Capacidad por mesa (ref):</strong> ${inferredCapPerTable} personas<br/>`
             : ""
         }` +
-        `<strong>Capacidad total (ref):</strong> ${r.capacity || inferredCapPerTable * (r.tables || 1) || 0} personas<br/>` +
+        `<strong>Capacidad total (ref):</strong> ${
+          r.capacity || inferredCapPerTable * (r.tables || 1) || 0
+        } personas<br/>` +
         `<strong>Total:</strong> $ ${formatARS(r.totalPrice)}<br/>` +
         `</div>`;
 
