@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { MercadoPagoConfig, Payment, MerchantOrder } from "mercadopago";
 import { Prisma } from "@prisma/client";
-import { ensureSixDigitCode } from "@/lib/validation-code"; // 👈 idempotente para 6 dígitos
+import { ensureSixDigitCode } from "@/lib/validation-code"; // genera/asegura código (6 dígitos)
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -11,7 +11,6 @@ const EXPECTED_CURRENCY = "ARS";
 const MP_TOKEN =
   process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
 if (!MP_TOKEN) {
-  // No tiramos error en import-time para no romper el build; validamos en runtime
   console.warn("[webhook] Falta MERCADO_PAGO_ACCESS_TOKEN");
 }
 const mpClient = MP_TOKEN
@@ -82,12 +81,21 @@ function extractRecordRef(payment: any): {
 } {
   const md = payment?.metadata || {};
   let type: any = md.type;
-  let recordId: string | undefined = md.recordId || md.record_id;
+  // admitir diferentes nombres por compat
+  let recordId: string | undefined =
+    md.recordId || md.record_id || md.tableReservationId;
+
+  // fallback: parsear external_reference "X:<id>"
   if ((!type || !recordId) && typeof payment?.external_reference === "string") {
     const [t, id] = String(payment.external_reference).split(":");
     if (!type && t) type = t;
     if (!recordId && id) recordId = id;
   }
+
+  // normalización para VIP por ubicación
+  if (type === "vip-table-res") type = "vip-table";
+
+  if (type !== "vip-table" && type !== "ticket") return {};
   return { type, recordId };
 }
 
@@ -201,27 +209,6 @@ async function fetchMerchantOrder(orderId: string) {
   return order as any;
 }
 
-/* ====== Diagnóstico opcional (dueño del token) ====== */
-let cachedTokenOwner: any | null = null;
-async function getTokenOwner() {
-  if (cachedTokenOwner || !MP_TOKEN) return cachedTokenOwner;
-  try {
-    const r = await fetch("https://api.mercadolibre.com/users/me", {
-      headers: { Authorization: `Bearer ${MP_TOKEN}` },
-      cache: "no-store",
-    });
-    if (r.ok) {
-      cachedTokenOwner = await r.json();
-      console.log("[webhook] token owner:", {
-        id: cachedTokenOwner?.id,
-        nickname: cachedTokenOwner?.nickname,
-        site_id: cachedTokenOwner?.site_id,
-      });
-    }
-  } catch {}
-  return cachedTokenOwner;
-}
-
 /* ========================= Persistencia ========================= */
 async function getExpectedAmount(
   type: "vip-table" | "ticket",
@@ -241,6 +228,7 @@ async function getExpectedAmount(
     return Number(rec?.totalPrice ?? 0);
   }
 }
+
 async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   if (type === "vip-table") {
     const prev = await prisma.tableReservation.findUnique({
@@ -257,22 +245,39 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   }
 }
 
+/** idempotencia por paymentId ya asignado */
+async function alreadyProcessed(paymentId: string) {
+  const t = await prisma.ticket.findFirst({
+    where: { paymentId },
+    select: { id: true },
+  });
+  if (t) return true;
+  const r = await prisma.tableReservation.findFirst({
+    where: { paymentId },
+    select: { id: true },
+  });
+  return !!r;
+}
+
 /**
  * Persistir estado de pago.
- * - Actualiza paymentId y paymentStatus.
+ * - Actualiza paymentId, paymentStatus y paymentMethod="mercadopago".
  * - Si queda aprobado, asegura (idempotente) que haya validationCode de 6 dígitos usando ensureSixDigitCode.
  * - NUNCA sobreescribe un código existente.
+ * - Para VIP approved (paso de non-approved a approved): incrementa VipTableConfig.soldCount según mesas.
  */
 async function persistStatus(
   type: "vip-table" | "ticket",
   recordId: string,
   data: any,
-  approvedStrong: boolean
+  approvedStrong: boolean,
+  wasApprovedBefore: boolean
 ) {
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const baseUpdate = {
       paymentId: String(data?.id ?? ""),
       paymentStatus: String(data?.status ?? "pending") as any,
+      paymentMethod: "mercadopago" as const,
     };
 
     if (type === "vip-table") {
@@ -280,8 +285,23 @@ async function persistStatus(
         where: { id: recordId },
         data: baseUpdate,
       });
+
       if (approvedStrong) {
         await ensureSixDigitCode(tx, { type: "vip-table", id: recordId });
+      }
+
+      // Si recién pasó a approved, incrementamos soldCount en la ubicación
+      if (approvedStrong && !wasApprovedBefore) {
+        const res = await tx.tableReservation.findUnique({
+          where: { id: recordId },
+          select: { vipTableConfigId: true, tables: true },
+        });
+        if (res?.vipTableConfigId && (res.tables || 0) > 0) {
+          await tx.vipTableConfig.update({
+            where: { id: res.vipTableConfigId },
+            data: { soldCount: { increment: res.tables } },
+          });
+        }
       }
     } else {
       await tx.ticket.update({ where: { id: recordId }, data: baseUpdate });
@@ -313,8 +333,9 @@ async function sendConfirmation(
 async function processPaymentById(paymentId: string) {
   if (!MP_TOKEN || !mpClient) throw new Error("missing_token");
 
-  // Info opcional del dueño del token
-  getTokenOwner().catch(() => {});
+  if (await alreadyProcessed(paymentId)) {
+    return { ok: true, alreadyProcessed: true };
+  }
 
   const payment = await fetchPaymentWithRetry(paymentId);
 
@@ -324,10 +345,6 @@ async function processPaymentById(paymentId: string) {
       external_reference: payment?.external_reference,
       metadata: payment?.metadata,
     });
-    return { ok: true, ignored: true };
-  }
-  if (type !== "vip-table" && type !== "ticket") {
-    console.warn("[webhook] tipo no soportado:", type);
     return { ok: true, ignored: true };
   }
 
@@ -340,9 +357,17 @@ async function processPaymentById(paymentId: string) {
   });
 
   const prevStatus = await getPrevStatus(type, recordId);
-  await persistStatus(type, recordId, payment, approvedStrong);
+  const wasApprovedBefore = prevStatus === "approved";
 
-  if (approvedStrong && prevStatus !== "approved") {
+  await persistStatus(
+    type,
+    recordId,
+    payment,
+    approvedStrong,
+    wasApprovedBefore
+  );
+
+  if (approvedStrong && !wasApprovedBefore) {
     await sendConfirmation(type, recordId);
   }
 
@@ -401,7 +426,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false }, { status: 401 });
     }
 
-    // Formato nuevo
+    // Formato nuevo (data.id de payment)
     if (body?.type === "payment" && body?.data?.id) {
       try {
         const out = await processPaymentById(String(body.data.id));
