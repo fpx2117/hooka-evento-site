@@ -954,7 +954,8 @@ export default function AdminDashboard() {
         paymentMethod: formVip.paymentMethod,
         totalPrice: vipTotalInfo.total,
         forceTotalPrice: true,
-        tableLocation: formVip.tableLocation, // <<< ubicación elegida
+
+        location: formVip.tableLocation, // <<< ubicación elegida
       };
       const r = await fetch("/api/admin/tickets", {
         method: "POST",
