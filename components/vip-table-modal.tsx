@@ -37,14 +37,13 @@ type TicketsConfig = {
       unitSize?: number; // (fallback global: personas/mesa)
     };
   };
-  // NUEVO: soporte por ubicación
   vipTables?: Array<{
-    location: TableLoc; // "piscina" | "dj" | "general"
-    price: number; // precio por mesa en esa ubicación
+    location: TableLoc;
+    price: number;
     limit: number; // MESAS totales
     sold: number; // MESAS vendidas
     remaining: number; // MESAS disponibles
-    capacityPerTable: number; // personas por mesa para esa ubicación
+    capacityPerTable: number; // personas por mesa
   }>;
 };
 
@@ -134,8 +133,7 @@ export function VIPTableModal({
           const tables = Array.isArray(data?.vipTables) ? data.vipTables : [];
           setVipTablesCfg(tables);
 
-          // elegir ubicación por defecto:
-          // 1) dj si existe, 2) piscina si existe, 3) la primera con stock, 4) primera disponible
+          // elegir ubicación por defecto
           let defaultLoc: TableLoc | null = null;
           const hasDJ = tables.find((t) => t.location === "dj");
           const hasPiscina = tables.find((t) => t.location === "piscina");
@@ -172,25 +170,25 @@ export function VIPTableModal({
     };
   }, [open, configEndpoint]);
 
-  // ======= Config actual según ubicación seleccionada (si hay vipTables) =======
+  // ======= Config actual según ubicación seleccionada =======
   const currentLocCfg = useMemo(() => {
     if (!selectedLocation) return null;
     return vipTablesCfg?.find((t) => t.location === selectedLocation) || null;
   }, [vipTablesCfg, selectedLocation]);
 
   // ======= Derivados mostrados =======
-  const vipPrice = useMemo(() => {
-    return currentLocCfg?.price ?? vipPriceGlobal ?? 0;
-  }, [currentLocCfg, vipPriceGlobal]);
-
-  const remainingTables = useMemo(() => {
-    return currentLocCfg?.remaining ?? remainingTablesGlobal ?? 0;
-  }, [currentLocCfg, remainingTablesGlobal]);
-
-  // Para la equivalencia, si hay por ubicación, usamos esa
-  const unitSize = useMemo(() => {
-    return currentLocCfg?.capacityPerTable ?? unitSizeGlobal ?? null;
-  }, [currentLocCfg, unitSizeGlobal]);
+  const vipPrice = useMemo(
+    () => currentLocCfg?.price ?? vipPriceGlobal ?? 0,
+    [currentLocCfg, vipPriceGlobal]
+  );
+  const remainingTables = useMemo(
+    () => currentLocCfg?.remaining ?? remainingTablesGlobal ?? 0,
+    [currentLocCfg, remainingTablesGlobal]
+  );
+  const unitSize = useMemo(
+    () => currentLocCfg?.capacityPerTable ?? unitSizeGlobal ?? null,
+    [currentLocCfg, unitSizeGlobal]
+  );
 
   // ======= Total (siempre 1 mesa) =======
   const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
@@ -224,7 +222,7 @@ export function VIPTableModal({
     if (!phoneDigits) e.phone = "Ingresá tu celular";
     else if (phoneDigits.length < 8) e.phone = "Celular inválido";
 
-    // ✅ Género requerido (idéntico criterio al de TicketSalesModal)
+    // ✅ Género requerido
     if (!customer.gender) e.gender = "Elegí tu género";
 
     setErrors(e);
@@ -258,7 +256,7 @@ export function VIPTableModal({
               ? `1 mesa = ${capacity} personas`
               : "Reserva de Mesa VIP",
             quantity: 1,
-            unit_price: vipPrice, // ✅ precio de la ubicación o fallback
+            unit_price: vipPrice,
           },
         ],
         payer: {
@@ -267,17 +265,20 @@ export function VIPTableModal({
           phone: cleanDigits(customer.phone),
           dni: cleanDigits(customer.dni),
           additionalInfo: {
-            type: "vip-table",
-            tables: 1, // siempre 1 mesa por compra
+            ticketType: "vip", // ✅ clave para no caer como "general"
+            tables: 1,
             unitSize: capacity,
-            location: selectedLocation ?? undefined, // ✅ enviar ubicación
-            gender: customer.gender || undefined, // ✅ enviamos género
+            tableLocation: selectedLocation ?? undefined, // ✅ nombre de campo esperado por el dashboard
+            gender: customer.gender || undefined,
           },
         },
-        type: "vip-table" as const,
-        // opcional: podés enviar un campo `meta` si tu backend lo soporta
+        // Usamos el mismo "type" que General para el flujo de pago;
+        // la clasificación VIP la hace el backend leyendo additionalInfo.ticketType === "vip"
+        type: "ticket" as const,
+        // opcional: duplicamos en meta
         meta: {
-          location: selectedLocation ?? undefined,
+          ticketType: "vip",
+          tableLocation: selectedLocation ?? undefined,
           gender: customer.gender || undefined,
         },
       };
@@ -335,7 +336,7 @@ export function VIPTableModal({
         </DialogHeader>
 
         <div className="space-y-6 py-2 sm:py-4">
-          {/* Price/Stock Display — MISMOS COLORES QUE tickets */}
+          {/* Price/Stock Display */}
           <div className="relative bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
             <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Mesa VIP
@@ -360,9 +361,7 @@ export function VIPTableModal({
               >
                 {/* Precio por mesa */}
                 <div
-                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
-                    soldOut ? "opacity-70" : ""
-                  }`}
+                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
                 >
                   <p className="text-sm font-bold text-black mb-1">
                     Precio por mesa
@@ -408,9 +407,7 @@ export function VIPTableModal({
                 {/* Equivalencia */}
                 {unitSize !== null && (
                   <div
-                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
-                      soldOut ? "opacity-70" : ""
-                    }`}
+                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
                   >
                     <p className="text-sm font-bold text-black mb-1">
                       Equivalencia
@@ -502,7 +499,7 @@ export function VIPTableModal({
               )}
             </div>
 
-            {/* GÉNERO - EXACTAMENTE como en TicketSalesModal */}
+            {/* GÉNERO - EXACTO al de tickets */}
             <div className="space-y-3">
               <Label className="flex items-center gap-2">
                 <User className="w-4 h-4" />
@@ -588,37 +585,29 @@ export function VIPTableModal({
             </div>
           </div>
 
-          {/* NUEVO: Selector de ubicación */}
+          {/* Selector de ubicación */}
           <div className="rounded-xl border p-3 sm:p-4 bg-white/60">
             <p className="text-sm font-semibold mb-3">Elegí la ubicación</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {/* Botón DJ (si existe config) */}
+              {/* DJ */}
               <Button
                 type="button"
                 variant={selectedLocation === "dj" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("dj")}
                 disabled={!hasDJ}
-                className={`justify-start h-12 ${
-                  selectedLocation === "dj"
-                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
-                    : ""
-                }`}
+                className={`justify-start h-12 ${selectedLocation === "dj" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
               >
                 <Music className="w-4 h-4 mr-2" />
                 Cerca del DJ
               </Button>
 
-              {/* Botón Piscina (si existe config) */}
+              {/* Piscina */}
               <Button
                 type="button"
                 variant={selectedLocation === "piscina" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("piscina")}
                 disabled={!hasPiscina}
-                className={`justify-start h-12 ${
-                  selectedLocation === "piscina"
-                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
-                    : ""
-                }`}
+                className={`justify-start h-12 ${selectedLocation === "piscina" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
               >
                 <Waves className="w-4 h-4 mr-2" />
                 Cerca de la PISCINA
@@ -635,7 +624,7 @@ export function VIPTableModal({
             )}
           </div>
 
-          {/* Summary + Pay — mismos colores que tickets */}
+          {/* Summary + Pay */}
           <div className="rounded-xl p-4 sm:p-6 space-y-4 border-2 bg-gradient-to-r from-[#4a0a0a]/10 to-[#7a0a0a]/10 border-[#5b0d0d]/20">
             <div className="flex justify-between items-center text-xl sm:text-2xl">
               <span className="font-bold">Total a pagar:</span>
@@ -651,10 +640,10 @@ export function VIPTableModal({
                 cfgLoading ||
                 !!cfgError ||
                 !vipPrice ||
-                (!remainingTables && remainingTables !== 0) || // null/undefined
+                (!remainingTables && remainingTables !== 0) ||
                 soldOut ||
                 !selectedLocation ||
-                !customer.gender // ✅ requerimos género
+                !customer.gender
               }
               aria-disabled={soldOut || undefined}
               className="
@@ -687,7 +676,7 @@ export function VIPTableModal({
   );
 }
 
-/* Tailwind util (animación del texto gradiente de los precios) 
+/* Tailwind util (animación del texto gradiente de los precios)
    Asegurate de tener en globals.css:
    @keyframes gradient-move { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
 */
