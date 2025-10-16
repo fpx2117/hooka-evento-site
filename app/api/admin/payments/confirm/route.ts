@@ -120,7 +120,7 @@ async function fetchMerchantOrder(orderId: string, token: string) {
   return order;
 }
 
-// Cuando sólo tenemos preference_id
+// preference_id -> merchant_orders
 async function fetchMerchantOrderByPreferenceId(
   preferenceId: string,
   token: string
@@ -195,9 +195,10 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
 }
 
 /**
- * Persistencia:
- * - Siempre actualiza paymentId y paymentStatus.
- * - Si approved=true, **solo** setea validationCode si NO existe (evita desincronización).
+ * IMPORTANTE: No regenerar validationCode si ya existe.
+ * - Si approved = true y no hay validationCode, se crea uno.
+ * - Si approved = true y YA hay validationCode, se conserva.
+ * - Si approved = false, NO tocar validationCode.
  */
 async function persistStatus(
   type: "vip-table" | "ticket",
@@ -217,34 +218,44 @@ async function persistStatus(
         select: { validationCode: true },
       });
 
-      const updateData: any = { ...baseUpdate };
-      if (approved && !current?.validationCode) {
-        updateData.validationCode = Math.floor(
-          100000 + Math.random() * 900000
-        ).toString();
-      }
+      if (approved) {
+        const finalCode =
+          current?.validationCode ??
+          Math.floor(100000 + Math.random() * 900000).toString();
 
-      await tx.tableReservation.update({
-        where: { id: recordId },
-        data: updateData,
-      });
+        await tx.tableReservation.update({
+          where: { id: recordId },
+          data: { ...baseUpdate, validationCode: finalCode },
+        });
+      } else {
+        // mantener validationCode
+        await tx.tableReservation.update({
+          where: { id: recordId },
+          data: baseUpdate,
+        });
+      }
     } else {
       const current = await tx.ticket.findUnique({
         where: { id: recordId },
         select: { validationCode: true },
       });
 
-      const updateData: any = { ...baseUpdate };
-      if (approved && !current?.validationCode) {
-        updateData.validationCode = Math.floor(
-          100000 + Math.random() * 900000
-        ).toString();
-      }
+      if (approved) {
+        const finalCode =
+          current?.validationCode ??
+          Math.floor(100000 + Math.random() * 900000).toString();
 
-      await tx.ticket.update({
-        where: { id: recordId },
-        data: updateData,
-      });
+        await tx.ticket.update({
+          where: { id: recordId },
+          data: { ...baseUpdate, validationCode: finalCode },
+        });
+      } else {
+        // mantener validationCode
+        await tx.ticket.update({
+          where: { id: recordId },
+          data: baseUpdate,
+        });
+      }
     }
   });
 }
@@ -279,8 +290,9 @@ async function processPaymentById(paymentId: string) {
   const prevStatus = await getPrevStatus(type, recordId);
   await persistStatus(type, recordId, payment, approved);
 
-  // 👇 IMPORTANTE: no enviar correo desde confirm. Lo maneja /api/send-confirmation.
-  // (Si querés dispararlo desde el frontend success, hacelo allá. Si preferís webhook, hacelo desde el webhook.)
+  // ⚠️ No enviar correo acá. El mail lo maneja /api/send-confirmation.
+  // Si lo quisieras disparar automáticamente, hacelo desde el cliente
+  // luego de leer el estado aprobado, o con un job, pero no aquí.
 
   return {
     ok: true,

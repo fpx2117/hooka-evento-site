@@ -2,26 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// ✅ Si querés evitar "any", definimos tipos mínimos para los updates idempotentes
-type TicketCodesUpdate = Partial<{
-  qrCode: string;
-  validationCode: string;
-}>;
-type TableCodesUpdate = Partial<{
-  qrCode: string;
-  validationCode: string;
-}>;
-
 /**
  * GET /api/tickets/public?type=ticket|vip-table&id=XXXX[&requireApproved=1]
- * Devuelve qrCode y validationCode (y algunos metadatos mínimos) para la pantalla de "success".
- *
- * Seguridad:
- *  - Por defecto requiere approved si PUBLIC_TICKETS_REQUIRE_APPROVED=true (recomendado).
- *  - También podés forzarlo por query: requireApproved=1.
- *
- * Auto-heal:
- *  - Si el registro está en approved y le faltan qrCode/validationCode, los genera con reintentos de unicidad.
+ * Devuelve info mínima para la pantalla de "success".
+ * - NUNCA modifica la BD (modo read-only).
+ * - Por defecto exige approved, configurable por query o env.
  */
 
 const REQUIRE_APPROVED_DEFAULT =
@@ -32,7 +17,6 @@ function json(payload: any, init?: number | ResponseInit) {
   const initObj: ResponseInit =
     typeof init === "number" ? { status: init } : init || {};
   const headers = new Headers(initObj.headers || {});
-  // Evitamos caches intermedios
   headers.set(
     "Cache-Control",
     "no-store, no-cache, must-revalidate, proxy-revalidate"
@@ -40,14 +24,6 @@ function json(payload: any, init?: number | ResponseInit) {
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
   return NextResponse.json(payload, { ...initObj, headers });
-}
-
-function generateQr(): string {
-  return `TICKET-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
-function generateValidationCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 export async function GET(req: NextRequest) {
@@ -67,7 +43,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (type === "ticket") {
-      let rec = await prisma.ticket.findUnique({
+      const rec = await prisma.ticket.findUnique({
         where: { id },
         select: {
           id: true,
@@ -75,53 +51,13 @@ export async function GET(req: NextRequest) {
           paymentStatus: true,
           qrCode: true,
           validationCode: true,
-          totalPrice: true, // Decimal en BD -> casteamos abajo
-          // opcionalmente podrías exponer:
-          // ticketType: true,
-          // gender: true,
+          totalPrice: true,
         },
       });
       if (!rec) return json({ ok: false, error: "Not found" }, 404);
 
       if (requireApproved && rec.paymentStatus !== "approved") {
         return json({ ok: false, error: "Pago no aprobado aún" }, 409);
-      }
-
-      // Auto-heal: generar códigos si falta alguno y el pago está aprobado
-      if (
-        rec.paymentStatus === "approved" &&
-        (!rec.qrCode || !rec.validationCode)
-      ) {
-        let attempts = 0;
-        while (attempts < 3) {
-          try {
-            const dataToUpdate: TicketCodesUpdate = {};
-            if (!rec.qrCode) dataToUpdate.qrCode = generateQr();
-            if (!rec.validationCode)
-              dataToUpdate.validationCode = generateValidationCode();
-
-            rec = await prisma.ticket.update({
-              where: { id },
-              data: dataToUpdate,
-              select: {
-                id: true,
-                customerName: true,
-                paymentStatus: true,
-                qrCode: true,
-                validationCode: true,
-                totalPrice: true,
-              },
-            });
-            break;
-          } catch (e: any) {
-            // P2002 = unique constraint violation -> reintenta
-            if (e?.code === "P2002") {
-              attempts++;
-              continue;
-            }
-            throw e;
-          }
-        }
       }
 
       return json({
@@ -137,7 +73,7 @@ export async function GET(req: NextRequest) {
     }
 
     // vip-table
-    let rec = await prisma.tableReservation.findUnique({
+    const rec = await prisma.tableReservation.findUnique({
       where: { id },
       select: {
         id: true,
@@ -145,51 +81,13 @@ export async function GET(req: NextRequest) {
         paymentStatus: true,
         qrCode: true,
         validationCode: true,
-        totalPrice: true, // Decimal -> casteamos abajo
-        // opcionalmente podrías exponer:
-        // location: true,
-        // tables: true,
+        totalPrice: true,
       },
     });
     if (!rec) return json({ ok: false, error: "Not found" }, 404);
 
     if (requireApproved && rec.paymentStatus !== "approved") {
       return json({ ok: false, error: "Pago no aprobado aún" }, 409);
-    }
-
-    if (
-      rec.paymentStatus === "approved" &&
-      (!rec.qrCode || !rec.validationCode)
-    ) {
-      let attempts = 0;
-      while (attempts < 3) {
-        try {
-          const dataToUpdate: TableCodesUpdate = {};
-          if (!rec.qrCode) dataToUpdate.qrCode = generateQr();
-          if (!rec.validationCode)
-            dataToUpdate.validationCode = generateValidationCode();
-
-          rec = await prisma.tableReservation.update({
-            where: { id },
-            data: dataToUpdate,
-            select: {
-              id: true,
-              customerName: true,
-              paymentStatus: true,
-              qrCode: true,
-              validationCode: true,
-              totalPrice: true,
-            },
-          });
-          break;
-        } catch (e: any) {
-          if (e?.code === "P2002") {
-            attempts++;
-            continue;
-          }
-          throw e;
-        }
-      }
     }
 
     return json({
