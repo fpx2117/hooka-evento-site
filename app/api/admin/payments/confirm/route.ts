@@ -271,7 +271,6 @@ async function processPaymentById(paymentId: string) {
     validationCode = r?.validationCode ?? null;
   }
 
-  // ⚠️ No enviar correo acá. El mail lo maneja /api/send-confirmation.
   return {
     ok: true,
     approvedStrong: approved,

@@ -10,7 +10,6 @@ const EXPECTED_CURRENCY = "ARS";
 const MP_TOKEN =
   process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
 if (!MP_TOKEN) {
-  // No tiramos error en import-time para no romper el build; validamos en runtime
   console.warn("[webhook] Falta MERCADO_PAGO_ACCESS_TOKEN");
 }
 const mpClient = MP_TOKEN
@@ -75,9 +74,12 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
 }
 
 // ========================= Utilidades =========================
-function extractRecordRef(payment: any): { type?: string; recordId?: string } {
+function extractRecordRef(payment: any): {
+  type?: "vip-table" | "ticket";
+  recordId?: string;
+} {
   const md = payment?.metadata || {};
-  let type: string | undefined = md.type;
+  let type: any = md.type;
   let recordId: string | undefined = md.recordId || md.record_id;
   if ((!type || !recordId) && typeof payment?.external_reference === "string") {
     const [t, id] = String(payment.external_reference).split(":");
@@ -129,6 +131,9 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+const isSixDigit = (s?: string | null) =>
+  !!s && /^\d{6}$/.test(String(s).trim());
+
 // ========================= MP fetchers con retry (SDK) =========================
 async function sdkGetPayment(paymentId: string) {
   if (!mpClient) throw new Error("missing_token");
@@ -137,12 +142,10 @@ async function sdkGetPayment(paymentId: string) {
 }
 
 async function fetchPaymentWithRetry(paymentId: string) {
-  // Hasta 10 intentos ~10s total (exponencial + jitter) para sandbox
   const attempts = 10;
   for (let i = 0; i < attempts; i++) {
     try {
       const p = await sdkGetPayment(paymentId);
-
       console.log("[webhook] payment fetched:", {
         id: p?.id,
         status: p?.status,
@@ -158,8 +161,6 @@ async function fetchPaymentWithRetry(paymentId: string) {
       const msg = String(e?.message || e);
       const wait =
         Math.min(1000 * Math.pow(1.25, i), 2000) + Math.random() * 150;
-
-      // El SDK mapea 404 como error; reintentamos
       if (
         msg.includes("404") ||
         msg.includes("Not Found") ||
@@ -171,7 +172,6 @@ async function fetchPaymentWithRetry(paymentId: string) {
         await sleep(wait);
         continue;
       }
-
       console.error("[webhook] Payment.get fallo no-retriable:", msg);
       throw e;
     }
@@ -182,7 +182,6 @@ async function fetchPaymentWithRetry(paymentId: string) {
 async function fetchMerchantOrder(orderId: string) {
   if (!mpClient) throw new Error("missing_token");
   const mo = new MerchantOrder(mpClient);
-  // El SDK recibe { merchantOrderId: number }
   const order = await mo.get({ merchantOrderId: Number(orderId) });
   console.log("[webhook] merchant_order fetched:", {
     id: order?.id,
@@ -197,7 +196,7 @@ async function fetchMerchantOrder(orderId: string) {
   return order as any;
 }
 
-/* ====== Diagnóstico opcional: dueño del token (útil si el 404 es por token equivocado) ====== */
+/* ====== Diagnóstico opcional: dueño del token ====== */
 let cachedTokenOwner: any | null = null;
 async function getTokenOwner() {
   if (cachedTokenOwner || !MP_TOKEN) return cachedTokenOwner;
@@ -237,6 +236,7 @@ async function getExpectedAmount(
     return Number(rec?.totalPrice ?? 0);
   }
 }
+
 async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   if (type === "vip-table") {
     const prev = await prisma.tableReservation.findUnique({
@@ -252,55 +252,61 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
     return (prev?.paymentStatus as string) ?? null;
   }
 }
-async function persistStatus(
+
+/** NO genera validationCode. Solo persiste estado/id de pago. */
+async function persistStatusOnly(
   type: "vip-table" | "ticket",
   recordId: string,
-  data: any,
-  approvedStrong: boolean
+  data: any
 ) {
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const baseUpdate = {
-      paymentId: String(data?.id ?? ""),
-      paymentStatus: String(data?.status ?? "pending") as any,
-    };
-    if (approvedStrong) {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      if (type === "vip-table") {
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: code },
-        });
-      } else {
-        await tx.ticket.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: code },
-        });
-      }
-    } else {
-      if (type === "vip-table") {
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: baseUpdate,
-        });
-      } else {
-        await tx.ticket.update({ where: { id: recordId }, data: baseUpdate });
-      }
-    }
-  });
+  const baseUpdate = {
+    paymentId: String(data?.id ?? ""),
+    paymentStatus: String(data?.status ?? "pending") as any,
+  };
+  if (type === "vip-table") {
+    await prisma.tableReservation.update({
+      where: { id: recordId },
+      data: baseUpdate,
+    });
+  } else {
+    await prisma.ticket.update({
+      where: { id: recordId },
+      data: baseUpdate,
+    });
+  }
 }
+
+async function getValidationCode(
+  type: "vip-table" | "ticket",
+  recordId: string
+): Promise<string | null> {
+  if (type === "vip-table") {
+    const r = await prisma.tableReservation.findUnique({
+      where: { id: recordId },
+      select: { validationCode: true },
+    });
+    return r?.validationCode ?? null;
+  } else {
+    const t = await prisma.ticket.findUnique({
+      where: { id: recordId },
+      select: { validationCode: true },
+    });
+    return t?.validationCode ?? null;
+  }
+}
+
 async function sendConfirmation(
   type: "vip-table" | "ticket",
   recordId: string
 ) {
   try {
-    await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/send-confirmation`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, recordId }),
-      }
-    );
+    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+    await fetch(`${base}/api/send-confirmation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ type, recordId }),
+    });
   } catch (e) {
     console.error("[webhook] Error enviando email/QR:", e);
   }
@@ -309,8 +315,6 @@ async function sendConfirmation(
 // ========================= Núcleo: procesar pago =========================
 async function processPaymentById(paymentId: string) {
   if (!MP_TOKEN || !mpClient) throw new Error("missing_token");
-
-  // Info opcional del dueño del token (ayuda con 404 por token/cuenta equivocada)
   getTokenOwner().catch(() => {});
 
   const payment = await fetchPaymentWithRetry(paymentId);
@@ -337,10 +341,19 @@ async function processPaymentById(paymentId: string) {
   });
 
   const prevStatus = await getPrevStatus(type, recordId);
-  await persistStatus(type, recordId, payment, approvedStrong);
+  await persistStatusOnly(type, recordId, payment);
 
+  // Solo si transitó a approved y YA existe un validationCode de 6 dígitos
   if (approvedStrong && prevStatus !== "approved") {
-    await sendConfirmation(type, recordId);
+    const code = await getValidationCode(type, recordId);
+    if (isSixDigit(code)) {
+      await sendConfirmation(type, recordId);
+    } else {
+      console.warn(
+        "[webhook] Pago aprobado pero no hay validationCode válido (6 dígitos). No envío mail.",
+        { type, recordId, code }
+      );
+    }
   }
 
   return { ok: true, approvedStrong, status: payment?.status, id: payment?.id };
@@ -389,7 +402,6 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     console.log("[webhook] MP recibido:", body);
 
-    // Firma opcional (desactivada si no seteás MP_WEBHOOK_SECRET)
     const trusted = await isValidFromMercadoPago(req, body);
     if (!trusted) {
       console.warn(
