@@ -32,14 +32,19 @@ type TicketsConfig = {
     general: {
       hombre?: {
         price: number;
+        remaining: number; // personas para ese género
+        limit: number;
+        sold: number;
+      };
+      mujer?: {
+        price: number;
         remaining: number;
         limit: number;
         sold: number;
       };
-      mujer?: { price: number; remaining: number; limit: number; sold: number };
     };
   };
-  totals?: { remainingPersons?: number };
+  totals?: { remainingPersons?: number }; // stock global de personas
 };
 
 type DiscountRule = {
@@ -75,10 +80,13 @@ export function TicketSalesModal({
   onOpenChange,
   configEndpoint = "/api/admin/tickets/config",
 }: TicketSalesModalProps) {
-  // ======= State de precios desde BD =======
+  // ======= State de precios/stock =======
   const [priceH, setPriceH] = useState<number | null>(null);
   const [priceM, setPriceM] = useState<number | null>(null);
-  const [remaining, setRemaining] = useState<number | null>(null);
+  const [remainingH, setRemainingH] = useState<number | null>(null);
+  const [remainingM, setRemainingM] = useState<number | null>(null);
+  const [totalRemaining, setTotalRemaining] = useState<number | null>(null);
+
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgError, setCfgError] = useState<string | null>(null);
 
@@ -99,7 +107,7 @@ export function TicketSalesModal({
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<{ [k: string]: string }>({});
 
-  // ======= Traer precios desde la API =======
+  // ======= Traer config/stock =======
   useEffect(() => {
     let cancelled = false;
 
@@ -115,16 +123,30 @@ export function TicketSalesModal({
           const data: TicketsConfig = await r.json();
           if (cancelled) return;
 
-          setPriceH(data?.tickets?.general?.hombre?.price ?? 0);
-          setPriceM(data?.tickets?.general?.mujer?.price ?? 0);
-          const rem =
-            data?.totals?.remainingPersons ??
-            data?.tickets?.general?.hombre?.remaining ??
-            data?.tickets?.general?.mujer?.remaining ??
-            null;
-          setRemaining(
-            typeof rem === "number" && Number.isFinite(rem) ? rem : null
+          const h = data?.tickets?.general?.hombre;
+          const m = data?.tickets?.general?.mujer;
+          const totals = data?.totals?.remainingPersons;
+
+          setPriceH(h?.price ?? null);
+          setPriceM(m?.price ?? null);
+          setRemainingH(
+            typeof h?.remaining === "number" ? Math.max(0, h.remaining) : null
           );
+          setRemainingM(
+            typeof m?.remaining === "number" ? Math.max(0, m.remaining) : null
+          );
+
+          // total: si API trae "totals", usamos eso; si no, intenta sumar por-género (si están ambos)
+          let totalCalc: number | null = null;
+          if (typeof totals === "number") {
+            totalCalc = Math.max(0, totals);
+          } else if (
+            typeof h?.remaining === "number" &&
+            typeof m?.remaining === "number"
+          ) {
+            totalCalc = Math.max(0, h.remaining) + Math.max(0, m.remaining);
+          }
+          setTotalRemaining(totalCalc);
 
           setCfgLoading(false);
           return;
@@ -174,11 +196,37 @@ export function TicketSalesModal({
     };
   }, [open, configEndpoint]);
 
-  // ======= Precio unitario según género elegido =======
+  // ======= Flags SOLD OUT =======
+  const isSoldOutH =
+    remainingH !== null && Number.isFinite(remainingH) && remainingH <= 0;
+  const isSoldOutM =
+    remainingM !== null && Number.isFinite(remainingM) && remainingM <= 0;
+  const isSoldOutAll =
+    totalRemaining !== null &&
+    Number.isFinite(totalRemaining) &&
+    totalRemaining <= 0;
+
+  // ======= Precio unitario según género =======
   const unitPrice = useMemo(() => {
     if (!customerInfo.gender) return 0;
     return customerInfo.gender === "hombre" ? priceH || 0 : priceM || 0;
   }, [customerInfo.gender, priceH, priceM]);
+
+  // ======= Límite de cantidad permitido =======
+  const remainingForChosen =
+    customerInfo.gender === "hombre"
+      ? remainingH
+      : customerInfo.gender === "mujer"
+        ? remainingM
+        : null;
+
+  // si hay dato por género, ese manda; si no, usa total; si no hay ninguno, no limitamos desde UI
+  const purchaseCap =
+    typeof remainingForChosen === "number"
+      ? remainingForChosen
+      : typeof totalRemaining === "number"
+        ? totalRemaining
+        : Infinity;
 
   // ======= Descuento sobre TOTAL =======
   const { subtotal, bestRule, discountAmount, totalToPay } = useMemo(() => {
@@ -224,8 +272,14 @@ export function TicketSalesModal({
   const validate = () => {
     const e: { [k: string]: string } = {};
 
-    if (!customerInfo.name.trim()) e.name = "Ingresá tu nombre completo";
+    if (isSoldOutAll) e.soldout = "No hay más entradas disponibles.";
     if (!customerInfo.gender) e.gender = "Seleccioná tu género";
+    if (customerInfo.gender === "hombre" && isSoldOutH)
+      e.gender = "Entradas de Hombre agotadas.";
+    if (customerInfo.gender === "mujer" && isSoldOutM)
+      e.gender = "Entradas de Mujer agotadas.";
+
+    if (!customerInfo.name.trim()) e.name = "Ingresá tu nombre completo";
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerInfo.email))
       e.email = "Ingresá un email válido";
@@ -241,8 +295,10 @@ export function TicketSalesModal({
 
     if (!unitPrice) e.price = "Precio no disponible, intentá nuevamente.";
     if (quantity < 1) e.quantity = "La cantidad debe ser al menos 1";
-    if (typeof remaining === "number" && quantity > remaining)
-      e.quantity = `Solo hay ${remaining} disponibles`;
+
+    if (Number.isFinite(purchaseCap) && quantity > (purchaseCap as number)) {
+      e.quantity = `Solo hay ${purchaseCap} disponibles para tu selección.`;
+    }
 
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -258,7 +314,9 @@ export function TicketSalesModal({
       const body = {
         items: [
           {
-            title: `Entrada General - ${customerInfo.gender === "hombre" ? "Hombre" : "Mujer"}`,
+            title: `Entrada General - ${
+              customerInfo.gender === "hombre" ? "Hombre" : "Mujer"
+            }`,
             description: "Entrada General",
             quantity,
             unit_price: unitPrice,
@@ -317,8 +375,13 @@ export function TicketSalesModal({
   const decQty = () => setQuantity((q) => Math.max(1, q - 1));
   const incQty = () =>
     setQuantity((q) =>
-      typeof remaining === "number" ? Math.min(remaining, q + 1) : q + 1
+      Number.isFinite(purchaseCap)
+        ? Math.min(purchaseCap as number, q + 1)
+        : q + 1
     );
+
+  // ======= Deshabilitar toda la UI si no hay stock global =======
+  const allDisabled = isSoldOutAll;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -336,7 +399,16 @@ export function TicketSalesModal({
 
         <div className="space-y-6 py-2 sm:py-4">
           {/* Price Display */}
-          <div className="bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
+          <div className="bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white relative">
+            {/* BADGE SOLD OUT GLOBAL */}
+            {isSoldOutAll && (
+              <div className="absolute right-3 top-3">
+                <span className="inline-flex items-center rounded-full bg-white text-[#5b0d0d] px-3 py-1 text-xs font-extrabold tracking-wide">
+                  SOLD OUT
+                </span>
+              </div>
+            )}
+
             <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Entrada General
             </h3>
@@ -350,7 +422,16 @@ export function TicketSalesModal({
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 {/* Hombres */}
-                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                <div
+                  className={`relative text-center p-4 rounded-lg bg-white text-black border border-black/10 shadow-sm ${
+                    isSoldOutH ? "opacity-70" : ""
+                  }`}
+                >
+                  {isSoldOutH && (
+                    <span className="absolute right-2 top-2 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#5b0d0d] text-white">
+                      SOLD OUT
+                    </span>
+                  )}
                   <p className="text-sm font-bold text-black mb-1">Hombres</p>
                   <p
                     className="
@@ -360,11 +441,26 @@ export function TicketSalesModal({
                       bg-[length:200%_200%] animate-[gradient-move_6s_ease-in-out_infinite]
                     "
                   >
-                    ${formatMoney(priceM ?? 0)}
+                    ${formatMoney(priceH ?? 0)}
                   </p>
+                  {Number.isFinite(remainingH) && (
+                    <p className="mt-1 text-xs text-black/60">
+                      {remainingH! <= 0 ? "Agotadas" : `Quedan: ${remainingH}`}
+                    </p>
+                  )}
                 </div>
+
                 {/* Mujeres */}
-                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                <div
+                  className={`relative text-center p-4 rounded-lg bg-white text-black border border-black/10 shadow-sm ${
+                    isSoldOutM ? "opacity-70" : ""
+                  }`}
+                >
+                  {isSoldOutM && (
+                    <span className="absolute right-2 top-2 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#5b0d0d] text-white">
+                      SOLD OUT
+                    </span>
+                  )}
                   <p className="text-sm font-bold text-black mb-1">Mujeres</p>
                   <p
                     className="
@@ -376,19 +472,35 @@ export function TicketSalesModal({
                   >
                     ${formatMoney(priceM ?? 0)}
                   </p>
+                  {Number.isFinite(remainingM) && (
+                    <p className="mt-1 text-xs text-black/60">
+                      {remainingM! <= 0 ? "Agotadas" : `Quedan: ${remainingM}`}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
 
-            {typeof remaining === "number" && (
-              <p className="text-center text-xs sm:text-sm text-white/85">
-                Disponibles: <b className="text-white">{remaining}</b>
+            {Number.isFinite(totalRemaining) && (
+              <p
+                className={`text-center text-xs sm:text-sm ${
+                  isSoldOutAll ? "text-red-200 font-semibold" : "text-white/85"
+                }`}
+              >
+                {isSoldOutAll ? (
+                  "AGOTADAS"
+                ) : (
+                  <>
+                    Disponibles totales:{" "}
+                    <b className="text-white">{totalRemaining}</b>
+                  </>
+                )}
               </p>
             )}
           </div>
 
-          {/* Customer Information Form */}
-          <div className="space-y-4">
+          {/* Datos del cliente */}
+          <div className="space-y-4" aria-disabled={allDisabled}>
             <h3 className="font-semibold text-base sm:text-lg">Tus datos</h3>
 
             <div className="space-y-2">
@@ -404,6 +516,7 @@ export function TicketSalesModal({
                   setCustomerInfo({ ...customerInfo, name: e.target.value })
                 }
                 className="h-12"
+                disabled={allDisabled}
               />
               {errors.name && (
                 <p className="text-sm text-red-600">{errors.name}</p>
@@ -424,6 +537,7 @@ export function TicketSalesModal({
                 }
                 className="h-12"
                 inputMode="numeric"
+                disabled={allDisabled}
               />
               {errors.dni && (
                 <p className="text-sm text-red-600">{errors.dni}</p>
@@ -444,6 +558,7 @@ export function TicketSalesModal({
                   setCustomerInfo({ ...customerInfo, email: e.target.value })
                 }
                 className="h-12"
+                disabled={allDisabled}
               />
               {errors.email && (
                 <p className="text-sm text-red-600">{errors.email}</p>
@@ -464,36 +579,52 @@ export function TicketSalesModal({
                   })
                 }
                 className="grid grid-cols-2 gap-3 sm:gap-4"
+                disabled={allDisabled}
               >
+                {/* Hombre */}
                 <div>
                   <RadioGroupItem
                     value="hombre"
                     id="hombre"
                     className="peer sr-only"
+                    disabled={allDisabled || isSoldOutH}
                   />
                   <Label
                     htmlFor="hombre"
-                    className="flex flex-col items-center justify-center rounded-lg border-2 border-[#e5e5e5] bg-white p-3 sm:p-4 hover:bg-[#fff2f2] hover:text-[#2a0606] peer-data-[state=checked]:border-[#5b0d0d] peer-data-[state=checked]:bg-[#5b0d0d]/10 cursor-pointer transition-all"
+                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                      ${
+                        isSoldOutH
+                          ? "border-[#e5e5e5] text-black/50"
+                          : "border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606] peer-data-[state=checked]:border-[#5b0d0d] peer-data-[state=checked]:bg-[#5b0d0d]/10"
+                      }`}
                   >
                     <span className="text-2xl mb-2">👨</span>
                     <span className="font-semibold text-sm sm:text-base">
-                      Hombre
+                      {isSoldOutH ? "Hombre (Agotado)" : "Hombre"}
                     </span>
                   </Label>
                 </div>
+
+                {/* Mujer */}
                 <div>
                   <RadioGroupItem
                     value="mujer"
                     id="mujer"
                     className="peer sr-only"
+                    disabled={allDisabled || isSoldOutM}
                   />
                   <Label
                     htmlFor="mujer"
-                    className="flex flex-col items-center justify-center rounded-lg border-2 border-[#e5e5e5] bg-white p-3 sm:p-4 hover:bg-[#fff2f2] hover:text-[#2a0606] peer-data-[state=checked]:border-[#7f0d0d] peer-data-[state=checked]:bg-[#7f0d0d]/10 cursor-pointer transition-all"
+                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                      ${
+                        isSoldOutM
+                          ? "border-[#e5e5e5] text-black/50"
+                          : "border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606] peer-data-[state=checked]:border-[#7f0d0d] peer-data-[state=checked]:bg-[#7f0d0d]/10"
+                      }`}
                   >
                     <span className="text-2xl mb-2">👩</span>
                     <span className="font-semibold text-sm sm:text-base">
-                      Mujer
+                      {isSoldOutM ? "Mujer (Agotado)" : "Mujer"}
                     </span>
                   </Label>
                 </div>
@@ -518,6 +649,7 @@ export function TicketSalesModal({
                 }
                 className="h-12"
                 inputMode="tel"
+                disabled={allDisabled}
               />
               {errors.phone && (
                 <p className="text-sm text-red-600">{errors.phone}</p>
@@ -525,8 +657,8 @@ export function TicketSalesModal({
             </div>
           </div>
 
-          {/* Cantidad — SOLO ESTA SECCIÓN CAMBIADA */}
-          <div className="space-y-3">
+          {/* Cantidad */}
+          <div className="space-y-3" aria-disabled={allDisabled}>
             <Label className="flex items-center gap-2 justify-center w-full text-center">
               <Ticket className="w-4 h-4" />
               Cantidad de entradas
@@ -539,7 +671,7 @@ export function TicketSalesModal({
                 variant="outline"
                 className="h-10 w-10 p-0 justify-self-end"
                 onClick={decQty}
-                disabled={quantity <= 1}
+                disabled={allDisabled || quantity <= 1}
                 aria-label="Restar"
                 title="Restar"
               >
@@ -550,13 +682,14 @@ export function TicketSalesModal({
                 value={quantity}
                 onChange={(e) => {
                   const v = Math.max(1, Number(e.target.value) || 1);
-                  if (typeof remaining === "number")
-                    setQuantity(Math.min(remaining, v));
+                  if (Number.isFinite(purchaseCap))
+                    setQuantity(Math.min(purchaseCap as number, v));
                   else setQuantity(v);
                 }}
                 type="number"
                 min={1}
                 className="h-12 w-28 sm:w-32 justify-self-center text-center font-semibold"
+                disabled={allDisabled}
               />
 
               <Button
@@ -565,7 +698,9 @@ export function TicketSalesModal({
                 className="h-10 w-10 p-0 justify-self-start"
                 onClick={incQty}
                 disabled={
-                  typeof remaining === "number" && quantity >= remaining
+                  allDisabled ||
+                  (Number.isFinite(purchaseCap) &&
+                    quantity >= (purchaseCap as number))
                 }
                 aria-label="Sumar"
                 title="Sumar"
@@ -577,6 +712,11 @@ export function TicketSalesModal({
             {errors.quantity && (
               <p className="text-sm text-red-600 text-center">
                 {errors.quantity}
+              </p>
+            )}
+            {errors.soldout && (
+              <p className="text-sm text-red-600 text-center">
+                {errors.soldout}
               </p>
             )}
           </div>
@@ -625,29 +765,67 @@ export function TicketSalesModal({
               </div>
             </div>
 
-            <Button
-              size="lg"
-              onClick={handleCheckout}
-              disabled={
-                isProcessing ||
-                cfgLoading ||
-                rulesLoading ||
-                !!cfgError ||
-                !customerInfo.gender ||
-                !unitPrice ||
-                quantity < 1 ||
-                (typeof remaining === "number" && quantity > remaining)
-              }
-              className="
-                w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
-                bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
-                hover:scale-[1.02] hover:brightness-110
-                transition-transform disabled:opacity-60
-              "
-            >
-              <CreditCard className="w-5 h-5 mr-2" />
-              {isProcessing ? "Procesando..." : "Pagar con Mercado Pago"}
-            </Button>
+            {/* CTA segun stock */}
+            {isSoldOutAll ? (
+              <Button
+                size="lg"
+                disabled
+                className="
+                  w-full text-base sm:text-lg py-4 sm:py-6 rounded-full
+                  bg-[#5b0d0d] text-white opacity-90 cursor-not-allowed
+                "
+              >
+                AGOTADO
+              </Button>
+            ) : customerInfo.gender === "hombre" && isSoldOutH ? (
+              <Button
+                size="lg"
+                disabled
+                className="
+                  w-full text-base sm:text-lg py-4 sm:py-6 rounded-full
+                  bg-[#5b0d0d] text-white opacity-90 cursor-not-allowed
+                "
+              >
+                HOMBRE AGOTADO
+              </Button>
+            ) : customerInfo.gender === "mujer" && isSoldOutM ? (
+              <Button
+                size="lg"
+                disabled
+                className="
+                  w-full text-base sm:text-lg py-4 sm:py-6 rounded-full
+                  bg-[#5b0d0d] text-white opacity-90 cursor-not-allowed
+                "
+              >
+                MUJER AGOTADO
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                onClick={handleCheckout}
+                disabled={
+                  isProcessing ||
+                  cfgLoading ||
+                  rulesLoading ||
+                  !!cfgError ||
+                  !customerInfo.gender ||
+                  !unitPrice ||
+                  quantity < 1 ||
+                  (Number.isFinite(purchaseCap) &&
+                    quantity > (purchaseCap as number))
+                }
+                className="
+                  w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
+                  bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
+                  hover:scale-[1.02] hover:brightness-110
+                  transition-transform disabled:opacity-60
+                "
+              >
+                <CreditCard className="w-5 h-5 mr-2" />
+                {isProcessing ? "Procesando..." : "Pagar con Mercado Pago"}
+              </Button>
+            )}
+
             <p className="text-xs text-center text-muted-foreground">
               Serás redirigido a Mercado Pago para completar tu compra de forma
               segura
@@ -658,3 +836,8 @@ export function TicketSalesModal({
     </Dialog>
   );
 }
+
+/* Tailwind util (animación del texto gradiente de los precios) 
+   Asegurate de tener en globals.css:
+   @keyframes gradient-move { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
+*/

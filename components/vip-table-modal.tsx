@@ -124,14 +124,19 @@ export function VIPTableModal({
   // ======= Total (siempre 1 mesa) =======
   const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
 
+  // ======= SOLD OUT flag =======
+  const soldOut =
+    typeof remainingTables === "number" && Number.isFinite(remainingTables)
+      ? remainingTables <= 0
+      : false;
+
   // ======= Validaciones =======
   function validate() {
     const e: Record<string, string> = {};
 
     if (!vipPrice || vipPrice <= 0)
       e.price = "Precio no disponible. Intentá nuevamente.";
-    if (!remainingTables || remainingTables < 1)
-      e.stock = "No hay mesas disponibles.";
+    if (soldOut) e.stock = "No hay mesas disponibles.";
 
     if (!customer.name.trim()) e.name = "Ingresá tu nombre completo";
 
@@ -234,7 +239,7 @@ export function VIPTableModal({
 
         <div className="space-y-6 py-2 sm:py-4">
           {/* Price/Stock Display — MISMOS COLORES QUE tickets */}
-          <div className="bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
+          <div className="relative bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
             <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Mesa VIP
             </h3>
@@ -254,7 +259,11 @@ export function VIPTableModal({
                 }`}
               >
                 {/* Precio por mesa */}
-                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                <div
+                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                    soldOut ? "opacity-70" : ""
+                  }`}
+                >
                   <p className="text-sm font-bold text-black mb-1">
                     Precio por mesa
                   </p>
@@ -274,16 +283,35 @@ export function VIPTableModal({
                 </div>
 
                 {/* Mesas disponibles */}
-                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                <div className="relative text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
                   <p className="text-sm font-bold text-black mb-1">
                     Mesas disponibles
                   </p>
-                  <p className="text-2xl font-bold">{remainingTables ?? 0}</p>
+
+                  {soldOut ? (
+                    <div className="flex flex-col items-center gap-1">
+                      <span className="text-2xl font-extrabold tracking-wide">
+                        0
+                      </span>
+                      <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold bg-red-600 text-white">
+                        SOLD OUT
+                      </span>
+                      <span className="text-xs text-black/70">Agotadas</span>
+                    </div>
+                  ) : (
+                    <p className="text-2xl font-bold">
+                      {Math.max(0, remainingTables ?? 0)}
+                    </p>
+                  )}
                 </div>
 
                 {/* Equivalencia */}
                 {unitSize !== null && (
-                  <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                  <div
+                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                      soldOut ? "opacity-70" : ""
+                    }`}
+                  >
                     <p className="text-sm font-bold text-black mb-1">
                       Equivalencia
                     </p>
@@ -294,10 +322,20 @@ export function VIPTableModal({
               </div>
             )}
 
+            {/* Aviso bajo el grid */}
             {typeof remainingTables === "number" && (
               <p className="text-center text-xs sm:text-sm text-white/85">
-                La compra reserva <b className="text-white">1 mesa</b> por
-                transacción.
+                {soldOut ? (
+                  <>
+                    <b className="text-white">No hay mesas disponibles.</b> Te
+                    avisamos cuando se libere stock.
+                  </>
+                ) : (
+                  <>
+                    La compra reserva <b className="text-white">1 mesa</b> por
+                    transacción.
+                  </>
+                )}
               </p>
             )}
           </div>
@@ -402,8 +440,10 @@ export function VIPTableModal({
                 cfgLoading ||
                 !!cfgError ||
                 !vipPrice ||
-                !remainingTables
+                !remainingTables || // cubre 0
+                soldOut // explícito
               }
+              aria-disabled={soldOut || undefined}
               className="
                 w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
                 bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
@@ -412,7 +452,11 @@ export function VIPTableModal({
               "
             >
               <CreditCard className="w-5 h-5 mr-2" />
-              {isProcessing ? "Procesando..." : "Reservar con Mercado Pago"}
+              {isProcessing
+                ? "Procesando..."
+                : soldOut
+                  ? "Agotadas"
+                  : "Reservar con Mercado Pago"}
             </Button>
             <p className="text-xs text-center text-muted-foreground">
               Serás redirigido a Mercado Pago para completar tu reserva de forma
