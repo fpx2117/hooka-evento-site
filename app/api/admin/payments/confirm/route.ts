@@ -56,11 +56,6 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-// 6 dígitos. SOLO se usa si falta validationCode.
-function generateValidationCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
 /* ========================= Fetchers MP ========================= */
 
 async function fetchPaymentWithRetry(paymentId: string, token: string) {
@@ -200,10 +195,9 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
 }
 
 /**
- * IMPORTANTE: No regenerar validationCode si ya existe.
- * - Si approved = true y NO hay validationCode, se crea uno.
- * - Si approved = true y YA hay validationCode, se conserva.
- * - Si approved = false, NO tocar validationCode.
+ * Persistir estado de pago SIN tocar validationCode.
+ * - Actualiza paymentId y paymentStatus.
+ * - NUNCA crea ni modifica validationCode.
  */
 async function persistStatus(
   type: "vip-table" | "ticket",
@@ -218,43 +212,15 @@ async function persistStatus(
     };
 
     if (type === "vip-table") {
-      const current = await tx.tableReservation.findUnique({
+      await tx.tableReservation.update({
         where: { id: recordId },
-        select: { validationCode: true },
+        data: baseUpdate,
       });
-
-      if (approved) {
-        const finalCode = current?.validationCode ?? generateValidationCode();
-
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: finalCode },
-        });
-      } else {
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: baseUpdate,
-        });
-      }
     } else {
-      const current = await tx.ticket.findUnique({
+      await tx.ticket.update({
         where: { id: recordId },
-        select: { validationCode: true },
+        data: baseUpdate,
       });
-
-      if (approved) {
-        const finalCode = current?.validationCode ?? generateValidationCode();
-
-        await tx.ticket.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: finalCode },
-        });
-      } else {
-        await tx.ticket.update({
-          where: { id: recordId },
-          data: baseUpdate,
-        });
-      }
     }
   });
 }
@@ -289,6 +255,22 @@ async function processPaymentById(paymentId: string) {
   const prevStatus = await getPrevStatus(type, recordId);
   await persistStatus(type, recordId, payment, approved);
 
+  // Leer (solo lectura) el validationCode para informar (no se genera ni modifica aquí)
+  let validationCode: string | null = null;
+  if (type === "ticket") {
+    const t = await prisma.ticket.findUnique({
+      where: { id: recordId },
+      select: { validationCode: true },
+    });
+    validationCode = t?.validationCode ?? null;
+  } else {
+    const r = await prisma.tableReservation.findUnique({
+      where: { id: recordId },
+      select: { validationCode: true },
+    });
+    validationCode = r?.validationCode ?? null;
+  }
+
   // ⚠️ No enviar correo acá. El mail lo maneja /api/send-confirmation.
   return {
     ok: true,
@@ -299,6 +281,7 @@ async function processPaymentById(paymentId: string) {
     type,
     recordId,
     prevStatus,
+    validationCode, // solo lectura
   };
 }
 
@@ -322,7 +305,7 @@ export async function GET(req: NextRequest) {
     if (paymentId) {
       try {
         const out = await processPaymentById(String(paymentId));
-        const status = out.ok ? 200 : 400;
+        const status = (out as any)?.ok ? 200 : 400;
         return NextResponse.json(out, { status });
       } catch (e: any) {
         if (String(e?.message) === "payment_not_found_after_retries") {

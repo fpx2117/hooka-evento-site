@@ -18,6 +18,10 @@ const cap = (str?: string | null) =>
 const isHttpsPublicUrl = (url?: string | null) =>
   !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
 
+// Normaliza códigos para evitar mismatches (espacios/copypega/minúsculas)
+const normalizeCode = (v?: string | null) =>
+  (v ?? "").toString().trim().replace(/\s+/g, "").toUpperCase();
+
 function getPublicBaseUrl(req: NextRequest) {
   const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
   if (isHttpsPublicUrl(envBase)) return envBase!;
@@ -29,7 +33,8 @@ function getPublicBaseUrl(req: NextRequest) {
 
 function buildValidateUrl(base: string, code: string) {
   const origin = base.replace(/\/+$/, "");
-  return `${origin}/validate?code=${encodeURIComponent(code)}`;
+  const normalized = normalizeCode(code);
+  return `${origin}/validate?code=${encodeURIComponent(normalized)}`;
 }
 
 function formatARS(n?: any) {
@@ -383,7 +388,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (!t.validationCode) {
+      const normalizedCode = normalizeCode(t.validationCode);
+      if (!normalizedCode) {
         return NextResponse.json(
           { error: "El ticket aprobado no posee validationCode" },
           { status: 409 }
@@ -410,7 +416,7 @@ export async function POST(request: NextRequest) {
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
 
-      const validateUrl = buildValidateUrl(BASE, t.validationCode);
+      const validateUrl = buildValidateUrl(BASE, normalizedCode);
       const qrImage = await makeQrDataUrl(validateUrl, brand);
 
       const html = emailTemplate({
@@ -419,13 +425,13 @@ export async function POST(request: NextRequest) {
         subtitle: "Tu entrada está confirmada",
         name: t.customerName || "invitad@",
         detailsHtml,
-        validationCode: t.validationCode,
+        validationCode: normalizedCode,
         qrCodeImage: qrImage || undefined,
       });
 
       const result = await enviar({
         to: t.customerEmail || "",
-        subject: `🫦 ${typeLabel} — Código: ${t.validationCode}`,
+        subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
         html,
       });
 
@@ -488,7 +494,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (!r.validationCode) {
+      const normalizedCode = normalizeCode(r.validationCode);
+      if (!normalizedCode) {
         return NextResponse.json(
           { error: "La reserva aprobada no posee validationCode" },
           { status: 409 }
@@ -510,7 +517,7 @@ export async function POST(request: NextRequest) {
         `<strong>Total:</strong> $ ${formatARS(r.totalPrice)}<br/>` +
         `</div>`;
 
-      const validateUrl = buildValidateUrl(BASE, r.validationCode);
+      const validateUrl = buildValidateUrl(BASE, normalizedCode);
       const qrImage = await makeQrDataUrl(validateUrl, brand);
 
       const html = emailTemplate({
@@ -519,13 +526,13 @@ export async function POST(request: NextRequest) {
         subtitle: "Tu mesa VIP está confirmada",
         name: r.customerName || "invitad@",
         detailsHtml,
-        validationCode: r.validationCode,
+        validationCode: normalizedCode,
         qrCodeImage: qrImage || undefined,
       });
 
       const result = await enviar({
         to: r.customerEmail || "",
-        subject: `🫦 ${typeLabel} — Código: ${r.validationCode}`,
+        subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
         html,
       });
 

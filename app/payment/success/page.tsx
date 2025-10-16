@@ -24,7 +24,7 @@ type PublicTicketOk = {
   recordId: string;
   paymentStatus: "approved" | "pending" | "rejected" | string;
   customerName: string;
-  qrCode: string | null; // no se usa para render; generamos /validate?code=...
+  qrCode: string | null;
   validationCode: string | null;
   totalPrice: number;
 };
@@ -42,13 +42,16 @@ type ConfirmOk = {
 };
 type ConfirmErr = { ok: false; error: string; retry_later?: boolean };
 type ConfirmResp = ConfirmOk | ConfirmErr;
-
 const isConfirmOk = (x: ConfirmResp): x is ConfirmOk =>
   x && (x as any).ok === true;
 
 /* =========================
    Helpers
 ========================= */
+// NEW: normalizar código de validación (espacios fuera + mayúsculas)
+const normalizeCode = (v?: string | null) =>
+  (v ?? "").toString().replace(/\s+/g, "").toUpperCase();
+
 const isHttpsPublicUrl = (url?: string | null) =>
   !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
 
@@ -61,10 +64,11 @@ function getPublicBaseUrl(): string {
   return "";
 }
 
+// NEW: build con código ya normalizado
 function buildValidateUrl(code: string) {
   const base = getPublicBaseUrl();
   const prefix = base ? `${base}` : "";
-  return `${prefix}/validate?code=${encodeURIComponent(code)}`;
+  return `${prefix}/validate?code=${encodeURIComponent(normalizeCode(code))}`;
 }
 
 /* =========================
@@ -74,11 +78,10 @@ export default function PaymentSuccessPage() {
   const searchParams = useSearchParams();
 
   const [qrCodeImg, setQrCodeImg] = useState<string>("");
-  const [validationCode, setValidationCode] = useState<string>("");
+  const [validationCode, setValidationCode] = useState<string>(""); // guardamos ya normalizado
   const [loading, setLoading] = useState(true);
 
   // Estado de confirmación del pago (solo para UI)
-  // null = validando; false = no aprobado; true = aprobado
   const [approved, setApproved] = useState<boolean | null>(null);
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
 
@@ -121,7 +124,11 @@ export default function PaymentSuccessPage() {
   };
 
   const renderQr = async (text: string) => {
-    const img = await QRCode.toDataURL(text, { width: 360, margin: 2 });
+    // NEW: generamos QR SIEMPRE con la URL que usa el código normalizado
+    const img = await QRCode.toDataURL(buildValidateUrl(text), {
+      width: 360,
+      margin: 2,
+    });
     setQrCodeImg(img);
   };
 
@@ -141,13 +148,11 @@ export default function PaymentSuccessPage() {
         try {
           const r = await fetch(url, { cache: "no-store" });
           const data: ConfirmResp = await r.json();
-
           if (isConfirmOk(data)) {
             const ok =
               typeof data.approvedStrong === "boolean"
                 ? data.approvedStrong
                 : (data.status || "").toLowerCase() === "approved";
-
             if (ok) {
               return {
                 approved: true,
@@ -156,9 +161,7 @@ export default function PaymentSuccessPage() {
               };
             }
           }
-        } catch {
-          // continuar
-        }
+        } catch {}
       }
       const wait =
         Math.min(baseDelayMs * Math.pow(1.35, i), 2500) + Math.random() * 150;
@@ -170,7 +173,7 @@ export default function PaymentSuccessPage() {
   useEffect(() => {
     const run = async () => {
       try {
-        // 1) Parametría de MP (todas las variantes típicas)
+        // 1) Parametría de MP
         const paymentId =
           searchParams.get("payment_id") ||
           searchParams.get("collection_id") ||
@@ -194,9 +197,7 @@ export default function PaymentSuccessPage() {
           );
         if (merchantOrderId)
           confirmUrls.push(
-            `/api/admin/payments/confirm?merchant_order_id=${encodeURIComponent(
-              merchantOrderId
-            )}`
+            `/api/admin/payments/confirm?merchant_order_id=${encodeURIComponent(merchantOrderId)}`
           );
 
         // 4) type/record desde external_reference
@@ -251,7 +252,7 @@ export default function PaymentSuccessPage() {
           }
         }
 
-        // 7) reflejar estado preliminar (no perder el false)
+        // 7) reflejar estado preliminar
         const approvalKnown =
           approvedFromParams ||
           confirmedApproved !== null ||
@@ -264,9 +265,9 @@ export default function PaymentSuccessPage() {
         if (localType && localRecordId) {
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
-            `/api/admin/tickets/public?type=${encodeURIComponent(
-              localType
-            )}&id=${encodeURIComponent(localRecordId)}${require}`,
+            `/api/admin/tickets/public?type=${encodeURIComponent(localType)}&id=${encodeURIComponent(
+              localRecordId
+            )}${require}`,
             { cache: "no-store" }
           );
           const info: PublicTicketResp = await r.json();
@@ -277,17 +278,18 @@ export default function PaymentSuccessPage() {
               setApproved(true);
             }
 
-            if (info.validationCode) {
-              setValidationCode(info.validationCode);
+            // NEW: normalizamos SIEMPRE lo que viene del backend
+            const code = normalizeCode(info.validationCode);
+            if (code) {
+              setValidationCode(code);
               if (approvedNow) {
-                const url = buildValidateUrl(info.validationCode);
-                await renderQr(url);
+                await renderQr(code); // renderQr ya construye la URL con code normalizado
               }
             } else {
               setQrCodeImg("");
             }
 
-            // Disparar email UNA SOLA VEZ cuando esté aprobado y haya type/recordId
+            // Envío de email UNA SOLA VEZ
             if (approvedNow && localType && localRecordId) {
               await sendEmailOnce(localType, localRecordId);
             }
@@ -311,6 +313,7 @@ export default function PaymentSuccessPage() {
     if (!qrCodeImg) return;
     const link = document.createElement("a");
     link.href = qrCodeImg;
+    // NEW: nombre de archivo con código normalizado
     link.download = `hooka-qr-${validationCode || "codigo"}.png`;
     link.click();
   };
@@ -318,6 +321,7 @@ export default function PaymentSuccessPage() {
   const copyCode = async () => {
     if (!validationCode) return;
     try {
+      // NEW: copiado con código normalizado
       await navigator.clipboard.writeText(validationCode);
     } catch {}
   };
@@ -356,6 +360,9 @@ export default function PaymentSuccessPage() {
   /* =========================
      Render
   ========================= */
+  // NEW: heurística simple de “código listo” (evita mostrar basura parcial)
+  const codeLooksReady = validationCode && validationCode.length >= 6;
+
   return (
     <main className="relative min-h-[100svh] overflow-hidden text-white">
       {/* Fondo con HOOKA */}
@@ -393,7 +400,7 @@ export default function PaymentSuccessPage() {
             ) : approved ? (
               <>
                 {/* Código de validación */}
-                {validationCode && (
+                {codeLooksReady && (
                   <div className="rounded-xl bg-[#5b0d0d]/70 border border-white/10 p-5 text-center space-y-2">
                     <p className="text-xs uppercase tracking-wide text-white/80">
                       Código de validación
@@ -440,7 +447,7 @@ export default function PaymentSuccessPage() {
                   </div>
                 )}
 
-                {!validationCode && !qrCodeImg && (
+                {!codeLooksReady && !qrCodeImg && (
                   <div className="rounded-xl border border-yellow-300/20 bg-yellow-500/15 p-4 text-yellow-50 text-sm">
                     Tu pago fue acreditado, estamos generando tu código. Si no
                     aparece en unos segundos, revisá tu email.
