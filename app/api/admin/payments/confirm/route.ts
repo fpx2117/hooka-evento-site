@@ -6,8 +6,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 const EXPECTED_CURRENCY = "ARS";
-const SEND_MAIL_ON_CONFIRM =
-  (process.env.CONFIRM_SEND_EMAIL || "").toLowerCase() === "true";
 
 /* ========================= Helpers ========================= */
 
@@ -41,7 +39,7 @@ function isApprovedStrongOrSandbox(opts: {
     refOk;
   if (strong) return true;
 
-  // Relaja criterios en sandbox: approved + monto + moneda + ref ok (con tolerancia)
+  // Relaja criterios en sandbox
   if (!liveMode) {
     const relaxed =
       status === "approved" &&
@@ -122,7 +120,7 @@ async function fetchMerchantOrder(orderId: string, token: string) {
   return order;
 }
 
-// Útil cuando sólo tenemos preference_id
+// Cuando sólo tenemos preference_id
 async function fetchMerchantOrderByPreferenceId(
   preferenceId: string,
   token: string
@@ -196,6 +194,11 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   }
 }
 
+/**
+ * Persistencia:
+ * - Siempre actualiza paymentId y paymentStatus.
+ * - Si approved=true, **solo** setea validationCode si NO existe (evita desincronización).
+ */
 async function persistStatus(
   type: "vip-table" | "ticket",
   recordId: string,
@@ -208,48 +211,42 @@ async function persistStatus(
       paymentStatus: String(payment?.status ?? "pending") as any,
     };
 
-    if (approved) {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      if (type === "vip-table") {
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: code },
-        });
-      } else {
-        await tx.ticket.update({
-          where: { id: recordId },
-          data: { ...baseUpdate, validationCode: code },
-        });
+    if (type === "vip-table") {
+      const current = await tx.tableReservation.findUnique({
+        where: { id: recordId },
+        select: { validationCode: true },
+      });
+
+      const updateData: any = { ...baseUpdate };
+      if (approved && !current?.validationCode) {
+        updateData.validationCode = Math.floor(
+          100000 + Math.random() * 900000
+        ).toString();
       }
+
+      await tx.tableReservation.update({
+        where: { id: recordId },
+        data: updateData,
+      });
     } else {
-      if (type === "vip-table") {
-        await tx.tableReservation.update({
-          where: { id: recordId },
-          data: baseUpdate,
-        });
-      } else {
-        await tx.ticket.update({ where: { id: recordId }, data: baseUpdate });
+      const current = await tx.ticket.findUnique({
+        where: { id: recordId },
+        select: { validationCode: true },
+      });
+
+      const updateData: any = { ...baseUpdate };
+      if (approved && !current?.validationCode) {
+        updateData.validationCode = Math.floor(
+          100000 + Math.random() * 900000
+        ).toString();
       }
+
+      await tx.ticket.update({
+        where: { id: recordId },
+        data: updateData,
+      });
     }
   });
-}
-
-async function sendConfirmation(
-  type: "vip-table" | "ticket",
-  recordId: string
-) {
-  try {
-    await fetch(
-      `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/send-confirmation`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, recordId }),
-      }
-    );
-  } catch (e) {
-    console.error("[payments/confirm] Error enviando email/QR:", e);
-  }
 }
 
 /* ========================= Core ========================= */
@@ -282,9 +279,8 @@ async function processPaymentById(paymentId: string) {
   const prevStatus = await getPrevStatus(type, recordId);
   await persistStatus(type, recordId, payment, approved);
 
-  if (approved && prevStatus !== "approved" && SEND_MAIL_ON_CONFIRM) {
-    await sendConfirmation(type, recordId);
-  }
+  // 👇 IMPORTANTE: no enviar correo desde confirm. Lo maneja /api/send-confirmation.
+  // (Si querés dispararlo desde el frontend success, hacelo allá. Si preferís webhook, hacelo desde el webhook.)
 
   return {
     ok: true,
@@ -294,6 +290,7 @@ async function processPaymentById(paymentId: string) {
     id: payment?.id,
     type,
     recordId,
+    prevStatus,
   };
 }
 

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
@@ -24,7 +24,7 @@ type PublicTicketOk = {
   recordId: string;
   paymentStatus: "approved" | "pending" | "rejected" | string;
   customerName: string;
-  qrCode: string | null;
+  qrCode: string | null; // no se usa para render; generamos /validate?code=...
   validationCode: string | null;
   totalPrice: number;
 };
@@ -47,6 +47,27 @@ const isConfirmOk = (x: ConfirmResp): x is ConfirmOk =>
   x && (x as any).ok === true;
 
 /* =========================
+   Helpers
+========================= */
+const isHttpsPublicUrl = (url?: string | null) =>
+  !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
+
+function getPublicBaseUrl(): string {
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+  if (isHttpsPublicUrl(envBase)) return envBase!;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin.replace(/\/+$/, "");
+  }
+  return "";
+}
+
+function buildValidateUrl(code: string) {
+  const base = getPublicBaseUrl();
+  const prefix = base ? `${base}` : "";
+  return `${prefix}/validate?code=${encodeURIComponent(code)}`;
+}
+
+/* =========================
    Componente
 ========================= */
 export default function PaymentSuccessPage() {
@@ -57,15 +78,48 @@ export default function PaymentSuccessPage() {
   const [loading, setLoading] = useState(true);
 
   // Estado de confirmación del pago (solo para UI)
-  const [approved, setApproved] = useState<boolean | null>(null); // null=validando, false=no aprobado, true=aprobado
-  const [confirmed, setConfirmed] = useState<boolean | null>(null); // hubo confirmación del backend
+  // null = validando; false = no aprobado; true = aprobado
+  const [approved, setApproved] = useState<boolean | null>(null);
+  const [confirmed, setConfirmed] = useState<boolean | null>(null);
 
   const [type, setType] = useState<"ticket" | "vip-table" | null>(null);
   const [recordId, setRecordId] = useState<string | null>(null);
 
-  /* =========================
-     Helpers
-  ========================= */
+  // Control de envío de email (evitar duplicados)
+  const emailSentRef = useRef(false);
+  const LS_EMAIL_SENT_PREFIX = "emailSent:";
+
+  const markEmailSentIfNot = (t: "ticket" | "vip-table", id: string) => {
+    try {
+      const key = `${LS_EMAIL_SENT_PREFIX}${t}:${id}`;
+      if (localStorage.getItem(key) === "1") return true;
+      localStorage.setItem(key, "1");
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const sendEmailOnce = async (t: "ticket" | "vip-table", id: string) => {
+    if (emailSentRef.current) return;
+    const already = markEmailSentIfNot(t, id);
+    if (already) {
+      emailSentRef.current = true;
+      return;
+    }
+    try {
+      const r = await fetch("/api/send-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ type: t, recordId: id }),
+      });
+      if (r.ok) emailSentRef.current = true;
+    } catch {
+      /* no bloquear UX */
+    }
+  };
+
   const renderQr = async (text: string) => {
     const img = await QRCode.toDataURL(text, { width: 360, margin: 2 });
     setQrCodeImg(img);
@@ -101,14 +155,11 @@ export default function PaymentSuccessPage() {
                 recordId: data.recordId,
               };
             }
-          } else {
-            // si el backend dice "retry_later" (propagación), seguimos intentando
           }
         } catch {
-          // intento fallido: continuar
+          // continuar
         }
       }
-      // backoff suave + jitter
       const wait =
         Math.min(baseDelayMs * Math.pow(1.35, i), 2500) + Math.random() * 150;
       await new Promise((res) => setTimeout(res, wait));
@@ -116,9 +167,6 @@ export default function PaymentSuccessPage() {
     return { approved: false };
   }
 
-  /* =========================
-     Efecto principal
-  ========================= */
   useEffect(() => {
     const run = async () => {
       try {
@@ -134,11 +182,11 @@ export default function PaymentSuccessPage() {
           "";
         const externalRef = searchParams.get("external_reference") || "";
 
-        // 2) Si vino approved en la URL, lo tomamos como pista (no definitivo)
+        // 2) pista de la URL
         const approvedFromParams =
           (statusParam || "").toLowerCase() === "approved";
 
-        // 3) Intentos de confirmación con backend (sólo IDs soportados por tu API)
+        // 3) endpoints de confirmación
         const confirmUrls: string[] = [];
         if (paymentId)
           confirmUrls.push(
@@ -151,18 +199,18 @@ export default function PaymentSuccessPage() {
             )}`
           );
 
-        // 4) Extraer type/recordId de external_reference (si vienen)
+        // 4) type/record desde external_reference
         let localType: "ticket" | "vip-table" | null = null;
         let localRecordId: string | null = null;
         if (externalRef.includes(":")) {
           const [t, id] = externalRef.split(":");
           if ((t === "ticket" || t === "vip-table") && id) {
-            localType = t;
+            localType = t as "ticket" | "vip-table";
             localRecordId = id;
           }
         }
 
-        // 5) Disparo de confirmación inmediata (una vez)
+        // 5) confirmación inmediata
         let confirmedApproved: boolean | null = null;
         let typeFromConfirm: "ticket" | "vip-table" | undefined;
         let recordIdFromConfirm: string | undefined;
@@ -192,7 +240,7 @@ export default function PaymentSuccessPage() {
         if (typeFromConfirm) localType = typeFromConfirm;
         if (recordIdFromConfirm) localRecordId = recordIdFromConfirm;
 
-        // 6) Si todavía no está aprobado, hacemos polling corto
+        // 6) polling si aún no aprobó
         let approvedNow = approvedFromParams || confirmedApproved === true;
         if (!approvedNow && confirmUrls.length) {
           const polled = await pollForApproval(confirmUrls);
@@ -203,36 +251,45 @@ export default function PaymentSuccessPage() {
           }
         }
 
-        // 7) Reflejar estado preliminar en UI
-        setApproved(approvedNow || null);
+        // 7) reflejar estado preliminar (no perder el false)
+        const approvalKnown =
+          approvedFromParams ||
+          confirmedApproved !== null ||
+          confirmUrls.length === 0;
+        setApproved(approvalKnown ? approvedNow : null);
         if (localType) setType(localType);
         if (localRecordId) setRecordId(localRecordId);
 
-        // 8) Si tengo identificadores, consulto el ticket público
+        // 8) consultar info pública y generar QR SOLO con /validate?code=...
         if (localType && localRecordId) {
-          // si ya está aprobado, pedimos que el público también lo exija aprobado (códigos consistentes)
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
-            `/api/admin/tickets/public?type=${encodeURIComponent(localType)}&id=${encodeURIComponent(
-              localRecordId
-            )}${require}`,
+            `/api/admin/tickets/public?type=${encodeURIComponent(
+              localType
+            )}&id=${encodeURIComponent(localRecordId)}${require}`,
             { cache: "no-store" }
           );
           const info: PublicTicketResp = await r.json();
 
           if (info.ok) {
-            // Si el backend público marca approved, forzamos aprobado en UI
             if (info.paymentStatus === "approved") {
+              approvedNow = true;
               setApproved(true);
             }
-            if (info.validationCode) setValidationCode(info.validationCode);
 
-            // Sólo generamos QR si está aprobado (del público o de confirm)
-            const reallyApproved =
-              info.paymentStatus === "approved" || approvedNow;
-            if (reallyApproved) {
-              if (info.qrCode) await renderQr(info.qrCode);
-              else if (info.validationCode) await renderQr(info.validationCode);
+            if (info.validationCode) {
+              setValidationCode(info.validationCode);
+              if (approvedNow) {
+                const url = buildValidateUrl(info.validationCode);
+                await renderQr(url);
+              }
+            } else {
+              setQrCodeImg("");
+            }
+
+            // Disparar email UNA SOLA VEZ cuando esté aprobado y haya type/recordId
+            if (approvedNow && localType && localRecordId) {
+              await sendEmailOnce(localType, localRecordId);
             }
           }
         }
@@ -348,7 +405,7 @@ export default function PaymentSuccessPage() {
                       <Button
                         size="sm"
                         variant="secondary"
-                        className="bg-white/10 hover:bg白/20 text-white border border-white/20"
+                        className="bg-white/10 hover:bg-white/20 text-white border border-white/20"
                         onClick={copyCode}
                       >
                         <Copy className="w-4 h-4 mr-2" />
