@@ -1,14 +1,12 @@
 // app/api/export/route.ts
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import ExcelJS from "exceljs";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import fs from "node:fs";
 import path from "node:path";
 
 export const runtime = "nodejs";
-
-const prisma = new PrismaClient();
 
 /* =========================
    Tipos
@@ -22,7 +20,7 @@ type Filters = {
 };
 
 type FlatRow = {
-  type: "general" | "vip"; // tipo unificado
+  type: "general" | "vip";
   customerName: string;
   gender: string | null;
   customerEmail: string;
@@ -32,13 +30,17 @@ type FlatRow = {
   paymentStatus: string;
   validationCode: string;
   totalPrice: number;
+  // Campos VIP (solo se completan si type === "vip")
+  vipLocation?: string | null;
+  vipTables?: number | null;
+  capacityPerTable?: number | null;
 };
 
 /* =========================
    Helpers
 ========================= */
 function buildDateFilter(
-  dateField: "purchaseDate" | "reservationDate",
+  dateField: "purchaseDate" | "createdAt",
   opts?: { dateFrom?: string; dateTo?: string }
 ) {
   const where: any = {};
@@ -130,6 +132,8 @@ export async function POST(req: NextRequest) {
     // ------- Tickets (general/vip) -------
     const whereTickets: any = {};
     if (filters.eventId) whereTickets.eventId = filters.eventId;
+
+    // IMPORTANTE: si tu modelo usa createdAt en lugar de purchaseDate, cambia aquí "purchaseDate" por "createdAt"
     Object.assign(
       whereTickets,
       buildDateFilter("purchaseDate", {
@@ -140,9 +144,9 @@ export async function POST(req: NextRequest) {
 
     const ticketsRaw = await prisma.ticket.findMany({
       where: whereTickets,
-      orderBy: { purchaseDate: "desc" },
+      orderBy: { purchaseDate: "desc" }, // o { createdAt: "desc" } si usás createdAt
       select: {
-        ticketType: true, // para determinar el tipo
+        ticketType: true,
         customerName: true,
         gender: true,
         customerEmail: true,
@@ -152,10 +156,14 @@ export async function POST(req: NextRequest) {
         paymentStatus: true,
         validationCode: true,
         totalPrice: true,
+        // VIP
+        vipLocation: true,
+        vipTables: true,
+        capacityPerTable: true,
       },
     });
 
-    const ticketRows: FlatRow[] = ticketsRaw.map((r) => ({
+    const rows: FlatRow[] = ticketsRaw.map((r) => ({
       type: (r.ticketType as any) === "vip" ? "vip" : "general",
       customerName: r.customerName ?? "",
       gender: (r.gender as any) ?? null,
@@ -166,49 +174,10 @@ export async function POST(req: NextRequest) {
       paymentStatus: (r.paymentStatus as any) ?? "",
       validationCode: r.validationCode ?? "",
       totalPrice: Number(r.totalPrice ?? 0),
+      vipLocation: r.vipLocation ?? null,
+      vipTables: r.vipTables ?? null,
+      capacityPerTable: r.capacityPerTable ?? null,
     }));
-
-    // ------- VIP Table Reservations -------
-    const whereVip: any = {};
-    if (filters.eventId) whereVip.eventId = filters.eventId;
-    Object.assign(
-      whereVip,
-      buildDateFilter("reservationDate", {
-        dateFrom: filters.dateFrom,
-        dateTo: filters.dateTo,
-      })
-    );
-
-    const vipRaw = await prisma.tableReservation.findMany({
-      where: whereVip,
-      orderBy: { reservationDate: "desc" },
-      select: {
-        customerName: true,
-        customerEmail: true,
-        customerPhone: true,
-        customerDni: true,
-        paymentMethod: true,
-        paymentStatus: true,
-        validationCode: true,
-        totalPrice: true,
-      },
-    });
-
-    const vipRows: FlatRow[] = vipRaw.map((r) => ({
-      type: "vip", // reservas de mesa
-      customerName: r.customerName ?? "",
-      gender: null, // TableReservation no tiene género
-      customerEmail: r.customerEmail ?? "",
-      customerPhone: r.customerPhone ?? "",
-      customerDni: r.customerDni ?? "",
-      paymentMethod: (r.paymentMethod as any) ?? "",
-      paymentStatus: (r.paymentStatus as any) ?? "",
-      validationCode: r.validationCode ?? "",
-      totalPrice: Number(r.totalPrice ?? 0),
-    }));
-
-    // Unificamos
-    const rows: FlatRow[] = [...ticketRows, ...vipRows];
 
     // Export
     if (format === "excel") {
@@ -219,7 +188,7 @@ export async function POST(req: NextRequest) {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       );
     } else {
-      const data = await toPdf(rows, "Reporte de Entradas y VIP");
+      const data = await toPdf(rows, "Reporte de Entradas (General & VIP)");
       return fileResponse(data, "reporte_unificado.pdf", "application/pdf");
     }
   } catch (err) {
@@ -239,8 +208,8 @@ async function toExcel(
   const ws = wb.addWorksheet(sheetName);
 
   // Portada
-  ws.mergeCells("A1:J1");
-  ws.mergeCells("A2:J2");
+  ws.mergeCells("A1:M1");
+  ws.mergeCells("A2:M2");
 
   const title = ws.getCell("A1");
   title.value = "Reporte";
@@ -261,13 +230,13 @@ async function toExcel(
   if (logo) {
     const imgId = wb.addImage({ base64: logo.base64, extension: logo.ext });
     ws.addImage(imgId, {
-      tl: { col: 11.2, row: 0.2 }, // fuera de la tabla
-      ext: { width: 240, height: 180 }, // tamaño recomendado
+      tl: { col: 12.2, row: 0.2 }, // fuera de la tabla
+      ext: { width: 240, height: 180 },
       editAs: "oneCell",
     });
   }
 
-  // Columnas
+  // Columnas (agrego campos VIP opcionales)
   ws.columns = [
     { header: "Tipo", key: "type", width: 12 },
     { header: "Nombre", key: "customerName", width: 30 },
@@ -279,6 +248,10 @@ async function toExcel(
     { header: "Estado Pago", key: "paymentStatus", width: 16 },
     { header: "Código Validación", key: "validationCode", width: 22 },
     { header: "Total", key: "totalPrice", width: 14 },
+    // VIP
+    { header: "Ubicación VIP", key: "vipLocation", width: 16 },
+    { header: "Mesas VIP", key: "vipTables", width: 12 },
+    { header: "Capacidad/Mesa", key: "capacityPerTable", width: 16 },
   ];
 
   const tableStartRow = 5;
@@ -309,6 +282,9 @@ async function toExcel(
       { name: "Estado Pago", filterButton: true },
       { name: "Código Validación", filterButton: true },
       { name: "Total", filterButton: true, totalsRowFunction: "sum" },
+      { name: "Ubicación VIP", filterButton: true },
+      { name: "Mesas VIP", filterButton: true },
+      { name: "Capacidad/Mesa", filterButton: true },
     ],
     rows: rows.map((r) => [
       r.type,
@@ -321,6 +297,9 @@ async function toExcel(
       r.paymentStatus,
       r.validationCode || "—",
       Number(r.totalPrice || 0),
+      r.type === "vip" ? (r.vipLocation ?? "—") : "—",
+      r.type === "vip" ? Number(r.vipTables ?? 0) : null,
+      r.type === "vip" ? Number(r.capacityPerTable ?? 0) : null,
     ]),
   });
   table.commit();
@@ -358,13 +337,15 @@ async function toExcel(
     pattern: "solid",
     fgColor: { argb: "FFFFFFFF" },
   };
-  ["A3", "B3", "C3", "D3", "E3", "F3", "G3", "H3", "I3", "J3"].forEach(
-    (addr) => {
-      ws.getCell(addr).border = {
-        bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
-      };
-    }
-  );
+  // línea suave separadora
+  const maxHeader = 13;
+  for (let i = 0; i < maxHeader; i++) {
+    const col = String.fromCharCode("A".charCodeAt(0) + i);
+    const addr = `${col}3`;
+    ws.getCell(addr).border = {
+      bottom: { style: "thin", color: { argb: "FFE2E8F0" } },
+    };
+  }
 
   return wb.xlsx.writeBuffer();
 }
@@ -437,8 +418,11 @@ async function toPdf(rows: FlatRow[], title: string): Promise<Uint8Array> {
 
   // Contenido
   rows.forEach((r, i) => {
+    const headerRight =
+      r.type === "vip" ? `VIP (${r.vipLocation ?? "—"})` : "GENERAL";
+
     draw(
-      `${i + 1}. ${r.customerName} — ${r.type.toUpperCase()}`,
+      `${i + 1}. ${r.customerName} — ${headerRight}`,
       12,
       true,
       rgb(0.06, 0.09, 0.16)
@@ -449,8 +433,14 @@ async function toPdf(rows: FlatRow[], title: string): Promise<Uint8Array> {
       false,
       rgb(0.22, 0.27, 0.35)
     );
+
+    const vipLine =
+      r.type === "vip"
+        ? `   •   Mesas: ${r.vipTables ?? "—"}   •   Cap/mesa: ${r.capacityPerTable ?? "—"}`
+        : "";
+
     draw(
-      `DNI: ${r.customerDni}   •   Pago: ${r.paymentStatus} (${r.paymentMethod})`,
+      `DNI: ${r.customerDni}   •   Pago: ${r.paymentStatus} (${r.paymentMethod})${vipLine}`,
       10,
       false,
       rgb(0.22, 0.27, 0.35)
