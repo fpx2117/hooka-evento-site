@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Ticket } from "lucide-react";
+import { Ticket, Calendar, MapPin } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TicketSalesModal } from "./ticket-sales-modal";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
@@ -39,7 +39,6 @@ export function Hero() {
 
   return (
     <section className="relative min-h-[100svh] overflow-hidden text-white">
-      {/* Fondo: 1 col en mobile / 4x3 en desktop */}
       <HeroBackgroundEasy
         mobile={{ rows: 4, cols: 1 }}
         desktop={{ rows: 4, cols: 3 }}
@@ -49,9 +48,8 @@ export function Hero() {
         navTopPx={72}
       />
 
-      {/* Grilla maestra */}
       <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4">
-        {/* LOGO / LABIOS con animación y offsets responsive */}
+        {/* Labio */}
         <div className="row-start-2 translate-y-[clamp(18px,5.2vh,56px)] md:translate-y-[clamp(64px,10.5vh,170px)]">
           <div className="relative lip-wrap">
             <span aria-hidden className="lip-shine" />
@@ -72,12 +70,12 @@ export function Hero() {
           </div>
         </div>
 
-        {/* CONTENIDO (sin título) */}
+        {/* Contenido */}
         <div className="row-start-3 w-full text-center">
-          {/* aire para que no toque la gota */}
+          {/* aire para la gota */}
           <div className="mt-[clamp(14px,3.8vh,48px)]" />
 
-          {/* Countdown con halo sutil */}
+          {/* Countdown con halo */}
           <div className="relative inline-flex items-end justify-center gap-3 sm:gap-4 md:gap-6">
             <span
               aria-hidden
@@ -96,6 +94,26 @@ export function Hero() {
             <Sep />
             <TimeBox value={pad(timeLeft.seconds)} label="SEG" />
           </div>
+
+          {/* Separador sutil para “anclar” visualmente el bloque */}
+          <div className="mx-auto mt-3 h-[2px] w-[140px] sm:w-[180px] rounded-full bg-white/15" />
+
+          {/* Metadatos (llenan el vacío sin meter un título grande) */}
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
+              <Calendar className="h-3.5 w-3.5 opacity-90" />
+              <span className="opacity-95">Dom 02/11 · 12:00</span>
+            </span>
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
+              <MapPin className="h-3.5 w-3.5 opacity-90" />
+              <span className="opacity-95">Ubicación secreta</span>
+            </span>
+          </div>
+
+          {/* Lema */}
+          <p className="text-sm md:text-base font-semibold opacity-90 mt-2">
+            Recibí el calor con nosotros
+          </p>
 
           {/* CTA */}
           <div className="flex items-center justify-center pt-4 md:pt-5 px-4">
@@ -126,7 +144,7 @@ export function Hero() {
         onOpenChange={setShowTicketModal}
       />
 
-      {/* Animaciones locales */}
+      {/* Animaciones */}
       <style jsx>{`
         @keyframes lipFloat {
           0% {
