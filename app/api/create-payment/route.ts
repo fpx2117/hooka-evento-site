@@ -8,11 +8,12 @@ import { MercadoPagoConfig, Preference } from "mercadopago";
 
 /** ========= Helpers ========= */
 function isHttps(url?: string | null) {
-  return !!url && /^https:\/\/[^ ]+$/i.test(url.trim());
+  return !!url && /^https:\/\/[^ ]+$/i.test((url || "").trim());
 }
 function isLocalHttp(url?: string | null) {
   return (
-    !!url && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url.trim())
+    !!url &&
+    /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test((url || "").trim())
   );
 }
 function getBaseUrl(req: NextRequest) {
@@ -31,7 +32,7 @@ const n = (v: unknown, d = 0) => {
   return Number.isFinite(num) ? num : d;
 };
 
-// 1 mesa VIP = N personas (config)
+// 1 mesa VIP = N personas (fallback si falta en BD)
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 const DEFAULT_CURRENCY = "ARS";
 
@@ -54,6 +55,7 @@ type CreateBody = {
       gender?: "hombre" | "mujer";
       quantity?: number; // entradas (general)
       tables?: number; // mesas (vip)
+      location?: "dj" | "piscina" | "general"; // ✅ ubicación VIP
     };
   };
 };
@@ -103,6 +105,17 @@ function pickBestDiscount(qty: number, unit: number, rules: RuleRow[]) {
   return { discount: best, subtotal, total: subtotal - best, ruleId: bestId };
 }
 
+function prettyLocation(loc: string | undefined) {
+  switch ((loc || "").toLowerCase()) {
+    case "dj":
+      return "Cerca del DJ";
+    case "piscina":
+      return "Cerca de la Piscina";
+    default:
+      return "VIP (General)";
+  }
+}
+
 /** ========= Handler ========= */
 export async function POST(req: NextRequest) {
   try {
@@ -150,82 +163,96 @@ export async function POST(req: NextRequest) {
 
     /** ------- VARIABLES COMUNES ------- */
     let unitPriceFromDB = 0; // SIEMPRE desde DB
-    let recordId: string;
+
+    // Construcción robusta de back_urls por adelantado
+    const successUrl = new URL("/payment/success", base).toString();
+    const failureUrl = new URL("/payment/failure", base).toString();
+    const pendingUrl = new URL("/payment/pending", base).toString();
+    // 👇 Solo activamos auto_return si ES HTTPS (prod). Localhost queda desactivado.
+    const canAutoReturn = isHttps(successUrl);
 
     if (body.type === "vip-table") {
-      // ===== VIP =====
+      // ===== VIP por UBICACIÓN =====
       const tables = Math.max(
         1,
         n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
       );
-
-      const cfgVip = await prisma.ticketConfig.findFirst({
-        where: { eventId: event.id, ticketType: "vip", gender: null },
-        select: { id: true, price: true, stockLimit: true },
-      });
-      if (!cfgVip)
+      const location = (
+        s(body.payer?.additionalInfo?.location) || ""
+      ).toLowerCase() as "dj" | "piscina" | "general";
+      if (!["dj", "piscina", "general"].includes(location)) {
         return NextResponse.json(
-          { error: "Precio VIP no configurado" },
+          { error: "Ubicación VIP inválida (dj | piscina | general)" },
+          { status: 400 }
+        );
+      }
+
+      // Config de la ubicación
+      const cfg = await prisma.vipTableConfig.findFirst({
+        where: { eventId: event.id, location },
+        select: {
+          id: true,
+          price: true,
+          stockLimit: true,
+          soldCount: true,
+          capacityPerTable: true,
+        },
+      });
+      if (!cfg)
+        return NextResponse.json(
+          { error: "Ubicación VIP no configurada" },
           { status: 400 }
         );
 
-      // Stock VIP por personas (mesas * VIP_UNIT_SIZE)
-      const vipApproved = await prisma.ticket.findMany({
-        where: {
-          eventId: event.id,
-          ticketType: "vip",
-          paymentStatus: "approved" as any,
-        },
-        select: { quantity: true },
-      });
-      const vipPersonsSold = vipApproved.reduce(
-        (a, t) => a + (t.quantity || 0) * VIP_UNIT_SIZE,
-        0
-      );
-      const remainingPersons = Math.max(
-        0,
-        Number(cfgVip.stockLimit) - vipPersonsSold
-      );
-      const remainingTables = Math.floor(remainingPersons / VIP_UNIT_SIZE);
+      const cap = Math.max(1, Number(cfg.capacityPerTable ?? VIP_UNIT_SIZE));
+      const limitTables = Math.max(0, Number(cfg.stockLimit || 0));
+      const soldTables = Math.max(0, Number(cfg.soldCount || 0));
+      const remainingTables = Math.max(0, limitTables - soldTables);
+
       if (remainingTables < tables)
         return NextResponse.json(
-          { error: "Sin mesas VIP disponibles" },
+          { error: "Sin mesas disponibles en esa ubicación" },
           { status: 409 }
         );
 
-      unitPriceFromDB = Number(cfgVip.price) || 0;
+      unitPriceFromDB = Number(cfg.price) || 0;
 
-      // Descuentos (por mesa)
+      // Descuentos (por mesa) — usan reglas 'vip'
       const rules = await getActiveRulesFor(event.id, "vip");
       const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
-      const created = await prisma.ticket.create({
+      // Crear TableReservation (pendiente)
+      const createdRes = await prisma.tableReservation.create({
         data: {
           eventId: event.id,
-          eventDate: event.date,
-          ticketType: "vip",
-          gender: null,
-          quantity: tables,
+          vipTableConfigId: cfg.id,
+          packageType: "mesa",
+          location: location as any,
+          tables,
+          capacity: tables * cap,
+          guests: 0,
           totalPrice: total,
           customerName: s(body.payer?.name) ?? "",
           customerEmail: s(body.payer?.email) ?? "",
           customerPhone: s(body.payer?.phone) ?? "",
           customerDni: s(body.payer?.dni) ?? "",
+          reservationDate: new Date(),
           paymentStatus: "pending" as any,
-          ticketConfigId: cfgVip.id,
+          paymentMethod: "mercadopago" as any,
         },
         select: { id: true, totalPrice: true },
       });
-      recordId = created.id;
 
       // MP: 1 ítem con total
       const mpItems = [
         {
-          id: recordId, // recomendado por MP
-          title: `Mesa VIP x${tables}`,
-          description: body.items?.[0]?.description,
+          id: createdRes.id,
+          title: `Mesa VIP - ${prettyLocation(location)} x${tables}`,
+          description:
+            body.items?.[0]?.description ||
+            `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
           quantity: 1,
-          unit_price: Number(created.totalPrice) || 0,
+          unit_price: Number(createdRes.totalPrice) || 0,
           currency_id: DEFAULT_CURRENCY,
         },
       ];
@@ -243,13 +270,13 @@ export async function POST(req: NextRequest) {
             : undefined,
         },
         back_urls: {
-          success: `${base}/payment/success`,
-          failure: `${base}/payment/failure`,
-          pending: `${base}/payment/pending`,
+          success: successUrl,
+          failure: failureUrl,
+          pending: pendingUrl,
         },
-        auto_return: "approved" as const,
-        notification_url: `${base}/api/webhooks/mercadopago`,
-        external_reference: `vip-table:${recordId}`,
+        ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
+        notification_url: new URL("/api/webhooks/mercadopago", base).toString(),
+        external_reference: `vip-table-res:${createdRes.id}`,
         binary_mode:
           (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
         payment_methods: {
@@ -257,9 +284,12 @@ export async function POST(req: NextRequest) {
         },
         metadata: {
           type: "vip-table",
-          recordId,
+          tableReservationId: createdRes.id,
           eventId: event.id,
           eventCode: event.code,
+          location,
+          tables,
+          capacityPerTable: cap,
         },
       };
 
@@ -269,10 +299,33 @@ export async function POST(req: NextRequest) {
         options: { timeout: 5000 },
       });
       const pref = new Preference(mp);
-      const createdPref = await pref.create({
-        body: preferenceBody,
-        requestOptions: { idempotencyKey: `pref:vip-table:${recordId}` },
-      });
+
+      let createdPref;
+      try {
+        createdPref = await pref.create({
+          body: preferenceBody,
+          requestOptions: {
+            idempotencyKey: `pref:vip-table-res:${createdRes.id}`,
+          },
+        });
+      } catch (err: any) {
+        console.error("[MP preference error][VIP]", {
+          message: err?.message,
+          error: err?.error,
+          status: err?.status,
+          cause: err?.cause,
+          base,
+          preferenceBody,
+        });
+        await prisma.tableReservation.update({
+          where: { id: createdRes.id },
+          data: { paymentStatus: "failed_preference" as any },
+        });
+        return NextResponse.json(
+          { error: "Error creando preferencia de pago (VIP)" },
+          { status: 502 }
+        );
+      }
 
       const redirect_url =
         createdPref.sandbox_init_point ||
@@ -284,12 +337,12 @@ export async function POST(req: NextRequest) {
           : undefined);
 
       if (!redirect_url) {
-        await prisma.ticket.update({
-          where: { id: recordId },
+        await prisma.tableReservation.update({
+          where: { id: createdRes.id },
           data: { paymentStatus: "failed_preference" as any },
         });
         return NextResponse.json(
-          { error: "Preferencia sin URL utilizable", details: createdPref },
+          { error: "Preferencia sin URL utilizable" },
           { status: 502 }
         );
       }
@@ -332,8 +385,10 @@ export async function POST(req: NextRequest) {
     });
     const totalLimit = Number(cfgTotal?.stockLimit ?? 0);
 
-    // ✅ Personas vendidas aprobadas (GENERAL) — usar SUM(quantity), no count()
-    const [soldGenHAggr, soldGenMAggr, vipApproved] = await Promise.all([
+    // ✅ Personas vendidas aprobadas:
+    // - GENERAL por género = SUM(quantity)
+    // - VIP por ubicación = SUM(soldCount * capacityPerTable)
+    const [soldGenHAggr, soldGenMAggr, vipCfgs] = await Promise.all([
       prisma.ticket.aggregate({
         where: {
           eventId: event.id,
@@ -352,22 +407,19 @@ export async function POST(req: NextRequest) {
         },
         _sum: { quantity: true },
       }),
-      prisma.ticket.findMany({
-        where: {
-          eventId: event.id,
-          ticketType: "vip",
-          paymentStatus: "approved" as any,
-        },
-        select: { quantity: true },
+      prisma.vipTableConfig.findMany({
+        where: { eventId: event.id },
+        select: { soldCount: true, capacityPerTable: true },
       }),
     ]);
     const soldGenH = Number(soldGenHAggr._sum.quantity || 0);
     const soldGenM = Number(soldGenMAggr._sum.quantity || 0);
+    const vipPersonsSold = (vipCfgs || []).reduce((acc, c) => {
+      const soldTables = Math.max(0, Number(c.soldCount || 0));
+      const cap = Math.max(1, Number(c.capacityPerTable || VIP_UNIT_SIZE));
+      return acc + soldTables * cap;
+    }, 0);
 
-    const vipPersonsSold = vipApproved.reduce(
-      (a, t) => a + (t.quantity || 0) * VIP_UNIT_SIZE,
-      0
-    );
     const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
     const remainingTotal = Math.max(0, totalLimit - soldTotalPersons);
 
@@ -396,15 +448,15 @@ export async function POST(req: NextRequest) {
         customerPhone: s(body.payer?.phone) ?? "",
         customerDni: s(body.payer?.dni) ?? "",
         paymentStatus: "pending" as any,
+        paymentMethod: "mercadopago" as any,
         ticketConfigId: cfgGen.id,
       },
       select: { id: true, totalPrice: true },
     });
-    recordId = created.id;
 
     const mpItems = [
       {
-        id: recordId,
+        id: created.id,
         title: `Entrada General - ${gender === "hombre" ? "Hombre" : "Mujer"} x${qty}`,
         description: body.items?.[0]?.description,
         quantity: 1,
@@ -426,13 +478,13 @@ export async function POST(req: NextRequest) {
           : undefined,
       },
       back_urls: {
-        success: `${base}/payment/success`,
-        failure: `${base}/payment/failure`,
-        pending: `${base}/payment/pending`,
+        success: successUrl,
+        failure: failureUrl,
+        pending: pendingUrl,
       },
-      auto_return: "approved" as const,
-      notification_url: `${base}/api/webhooks/mercadopago`,
-      external_reference: `ticket:${recordId}`,
+      ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
+      notification_url: new URL("/api/webhooks/mercadopago", base).toString(),
+      external_reference: `ticket:${created.id}`,
       binary_mode:
         (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
       payment_methods: {
@@ -440,7 +492,7 @@ export async function POST(req: NextRequest) {
       },
       metadata: {
         type: "ticket",
-        recordId,
+        recordId: created.id,
         eventId: event.id,
         eventCode: event.code,
       },
@@ -452,10 +504,31 @@ export async function POST(req: NextRequest) {
       options: { timeout: 5000 },
     });
     const pref = new Preference(mp);
-    const createdPref = await pref.create({
-      body: preferenceBody,
-      requestOptions: { idempotencyKey: `pref:ticket:${recordId}` },
-    });
+
+    let createdPref;
+    try {
+      createdPref = await pref.create({
+        body: preferenceBody,
+        requestOptions: { idempotencyKey: `pref:ticket:${created.id}` },
+      });
+    } catch (err: any) {
+      console.error("[MP preference error][GENERAL]", {
+        message: err?.message,
+        error: err?.error,
+        status: err?.status,
+        cause: err?.cause,
+        base,
+        preferenceBody,
+      });
+      await prisma.ticket.update({
+        where: { id: created.id },
+        data: { paymentStatus: "failed_preference" as any },
+      });
+      return NextResponse.json(
+        { error: "Error creando preferencia de pago (General)" },
+        { status: 502 }
+      );
+    }
 
     const redirect_url =
       createdPref.sandbox_init_point ||
@@ -468,11 +541,11 @@ export async function POST(req: NextRequest) {
 
     if (!redirect_url) {
       await prisma.ticket.update({
-        where: { id: recordId },
+        where: { id: created.id },
         data: { paymentStatus: "failed_preference" as any },
       });
       return NextResponse.json(
-        { error: "Preferencia sin URL utilizable", details: createdPref },
+        { error: "Preferencia sin URL utilizable" },
         { status: 502 }
       );
     }

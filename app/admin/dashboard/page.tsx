@@ -54,9 +54,10 @@ import {
   TrendingUp,
   Mail,
   MoreVertical,
+  MapPin,
 } from "lucide-react";
 import QRCode from "qrcode";
-import { ExportModal } from "@/components/export-modal"; // + modal
+import { ExportModal } from "@/components/export-modal";
 
 /* =========================
    Utils responsive
@@ -80,6 +81,8 @@ function useIsMobile(breakpoint: number = 640) {
 /* =========================
    Tipos
 ========================= */
+type TableLocation = "piscina" | "dj" | "general";
+
 interface AdminTicket {
   id: string;
   ticketType: "general" | "vip";
@@ -96,6 +99,8 @@ interface AdminTicket {
   validationCode?: string | null;
   validated: boolean;
   purchaseDate: string;
+  // opcional, si tu API ya lo devuelve en VIP:
+  tableLocation?: TableLocation | null;
 }
 
 type AddGeneralForm = {
@@ -107,6 +112,7 @@ type AddGeneralForm = {
   paymentMethod: "efectivo" | "transferencia" | "mercadopago";
   quantity: number;
 };
+
 type AddVipForm = {
   customerName: string;
   customerEmail: string;
@@ -114,6 +120,7 @@ type AddVipForm = {
   customerDni: string;
   paymentMethod: "efectivo" | "transferencia" | "mercadopago";
   quantity: number; // MESAS
+  tableLocation: TableLocation;
 };
 
 type AdminForm = {
@@ -137,14 +144,14 @@ type DiscountCfg = {
   isActive?: boolean;
 };
 
-// ✅ TicketsConfig con TOTAL en personas + VIP en personas
+// ✅ TicketsConfig con TOTAL en personas + VIP por ubicación
 type TicketsConfig = {
   eventId: string;
   eventName: string;
   eventDate: string;
   isActive: boolean;
   totals: {
-    unitVipSize: number;
+    unitVipSize: number; // tamaño default si hiciera falta (puede variar por ubicación con capacityPerTable)
     limitPersons: number;
     soldPersons: number;
     remainingPersons: number;
@@ -159,6 +166,7 @@ type TicketsConfig = {
       };
       mujer?: { price: number; limit: number; sold: number; remaining: number };
     };
+    // vip global (legacy) puede venir, pero NO lo usamos más en UI
     vip?: {
       price: number;
       limit: number; // PERSONAS
@@ -166,15 +174,15 @@ type TicketsConfig = {
       remaining: number; // PERSONAS
       unitSize: number;
       remainingTables: number;
-    };
+    } | null;
   };
   vipTables: Array<{
-    location: "piscina" | "dj" | "general";
+    location: TableLocation;
     price: number;
-    limit: number;
-    sold: number;
-    remaining: number;
-    capacityPerTable?: number | null;
+    limit: number; // mesas totales permitidas
+    sold: number; // mesas vendidas
+    remaining: number; // mesas restantes
+    capacityPerTable?: number | null; // personas por mesa
   }>;
 };
 
@@ -419,6 +427,12 @@ function TicketRow({
           <span className="capitalize font-medium text-sm">
             {ticket.ticketType}
           </span>
+          {ticket.ticketType === "vip" && (
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-amber-400/50 text-amber-700 bg-amber-50">
+              <MapPin className="w-3 h-3" />
+              {(ticket.tableLocation || "—").toString()}
+            </span>
+          )}
         </div>
       </td>
       <td className="p-4">
@@ -528,7 +542,7 @@ export default function AdminDashboard() {
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Config desde BD (sin descuentos)
+  // Config desde BD
   const [cfg, setCfg] = useState<TicketsConfig | null>(null);
   const [cfgLoading, setCfgLoading] = useState(true);
 
@@ -572,6 +586,7 @@ export default function AdminDashboard() {
     paymentMethod: "efectivo",
     quantity: 1,
   });
+
   const [formVip, setFormVip] = useState<AddVipForm>({
     customerName: "",
     customerEmail: "",
@@ -579,6 +594,7 @@ export default function AdminDashboard() {
     customerDni: "",
     paymentMethod: "efectivo",
     quantity: 1,
+    tableLocation: "dj",
   });
 
   // Form editar ticket
@@ -593,14 +609,23 @@ export default function AdminDashboard() {
     totalPrice: 0,
   });
 
-  // ✅ Form configuración (TOTAL + precios H/M + VIP personas)
+  // ✅ Form configuración (TOTAL + precios H/M + VIP por ubicación)
   const [configForm, setConfigForm] = useState({
     totalLimitPersons: 0,
     genHPrice: 0,
     genMPrice: 0,
-    vipPrice: 0,
-    vipLimitPersons: 0,
   });
+
+  type VipTableFormRow = {
+    location: TableLocation;
+    price: number;
+    stockLimit: number; // MESAS
+    capacityPerTable: number; // personas por mesa
+  };
+  const [vipTablesForm, setVipTablesForm] = useState<VipTableFormRow[]>([
+    { location: "dj", price: 0, stockLimit: 0, capacityPerTable: 10 },
+    { location: "piscina", price: 0, stockLimit: 0, capacityPerTable: 10 },
+  ]);
 
   // Modal QR grande
   const [qrModalOpen, setQrModalOpen] = useState(false);
@@ -630,6 +655,7 @@ export default function AdminDashboard() {
         customerDni:
           t.customerDni ?? t.customerDNI ?? t.customer_dni ?? t.dni ?? "",
         qrCode: t.qrCode ?? t.Code ?? undefined,
+        tableLocation: t.tableLocation ?? t.location ?? null,
       }));
       setTickets(normalized);
     } catch (error) {
@@ -639,20 +665,48 @@ export default function AdminDashboard() {
     }
   };
 
-  // ✅ Lee totals/VIP (PERSONAS) — sin descuentos
+  // ✅ Lee totals/VIP por ubicación — sin usar VIP global
   const fetchConfig = async () => {
     try {
       const r = await fetch(`/api/admin/tickets/config`, { cache: "no-store" });
       if (r.ok) {
         const data: TicketsConfig = await r.json();
         setCfg(data);
+
         setConfigForm({
           totalLimitPersons: data.totals?.limitPersons ?? 0,
           genHPrice: data.tickets.general.hombre?.price ?? 0,
           genMPrice: data.tickets.general.mujer?.price ?? 0,
-          vipPrice: data.tickets.vip?.price ?? 0,
-          vipLimitPersons: data.tickets.vip?.limit ?? 0,
         });
+
+        // mapear vipTables -> vipTablesForm (aseguramos dj y piscina existan)
+        const byLoc = new Map<TableLocation, VipTableFormRow>();
+        for (const c of data.vipTables || []) {
+          byLoc.set(c.location, {
+            location: c.location,
+            price: c.price ?? 0,
+            stockLimit: c.limit ?? 0,
+            capacityPerTable:
+              typeof c.capacityPerTable === "number" && c.capacityPerTable > 0
+                ? c.capacityPerTable
+                : (data.totals?.unitVipSize ?? 10),
+          });
+        }
+        const merged: VipTableFormRow[] = [];
+        (["dj", "piscina"] as TableLocation[]).forEach((loc) => {
+          if (byLoc.has(loc)) merged.push(byLoc.get(loc)!);
+          else
+            merged.push({
+              location: loc,
+              price: 0,
+              stockLimit: 0,
+              capacityPerTable: data.totals?.unitVipSize ?? 10,
+            });
+        });
+        // si hay "general", también lo incluimos editable
+        if (byLoc.has("general")) merged.push(byLoc.get("general")!);
+
+        setVipTablesForm(merged);
       }
     } catch (e) {
       console.error("[dashboard] Error fetching config:", e);
@@ -792,10 +846,23 @@ export default function AdminDashboard() {
     [generalUnitPrice, formGeneral.quantity, generalDiscountRule]
   );
 
-  const vipUnitPrice = useMemo(() => cfg?.tickets.vip?.price || 0, [cfg]);
+  // VIP por ubicación
+  const vipOptions = useMemo(() => cfg?.vipTables || [], [cfg]);
+
+  const selectedVipCfg = useMemo(() => {
+    if (!cfg) return null;
+    const loc = formVip.tableLocation;
+    return cfg.vipTables.find((v) => v.location === loc) || null;
+  }, [cfg, formVip.tableLocation]);
+
+  const vipUnitPrice = useMemo(
+    () => (selectedVipCfg ? selectedVipCfg.price : 0),
+    [selectedVipCfg]
+  );
+
   const vipRemainingTables = useMemo(
-    () => cfg?.tickets.vip?.remainingTables || 0,
-    [cfg]
+    () => (selectedVipCfg ? selectedVipCfg.remaining : 0),
+    [selectedVipCfg]
   );
 
   const vipTotalInfo = useMemo(
@@ -813,6 +880,7 @@ export default function AdminDashboard() {
       paymentMethod: "efectivo",
       quantity: 1,
     });
+
   const resetVip = () =>
     setFormVip({
       customerName: "",
@@ -821,6 +889,7 @@ export default function AdminDashboard() {
       customerDni: "",
       paymentMethod: "efectivo",
       quantity: 1,
+      tableLocation: (cfg?.vipTables?.[0]?.location as TableLocation) ?? "dj",
     });
 
   const addGeneral = async (e: React.FormEvent) => {
@@ -867,8 +936,11 @@ export default function AdminDashboard() {
   const addVip = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cfg) return;
+
     if (formVip.quantity > vipRemainingTables) {
-      alert("No hay mesas VIP disponibles para esa cantidad.");
+      alert(
+        "No hay mesas disponibles para esa cantidad en la ubicación seleccionada."
+      );
       return;
     }
     try {
@@ -882,6 +954,7 @@ export default function AdminDashboard() {
         paymentMethod: formVip.paymentMethod,
         totalPrice: vipTotalInfo.total,
         forceTotalPrice: true,
+        tableLocation: formVip.tableLocation, // <<< ubicación elegida
       };
       const r = await fetch("/api/admin/tickets", {
         method: "POST",
@@ -973,10 +1046,13 @@ export default function AdminDashboard() {
           hombre: { price: Number(configForm.genHPrice) },
           mujer: { price: Number(configForm.genMPrice) },
         },
-        vip: {
-          price: Number(configForm.vipPrice),
-          stockLimit: Number(configForm.vipLimitPersons),
-        },
+        // VIP por ubicación
+        vipTables: vipTablesForm.map((row) => ({
+          location: row.location,
+          price: Number(row.price),
+          stockLimit: Number(row.stockLimit),
+          capacityPerTable: Number(row.capacityPerTable),
+        })),
       };
 
       const r = await fetch("/api/admin/tickets/config", {
@@ -1050,10 +1126,31 @@ export default function AdminDashboard() {
 
   // Clases de tamaño para Dialog en mobile/desktop
   const modalClass = (extra = "") =>
-    `${isMobile ? "w-[100vw] h-[100vh] max-w-none rounded-none" : "sm:max-w-2xl sm:max-h-[90vh]"} overflow-y-auto ${extra}`;
+    `${
+      isMobile
+        ? "w-[100vw] h-[100vh] max-w-none rounded-none"
+        : "sm:max-w-2xl sm:max-h-[90vh]"
+    } overflow-y-auto ${extra}`;
 
   const largeModalClass = (extra = "") =>
-    `${isMobile ? "w-[100vw] h-[100vh] max-w-none rounded-none" : "sm:max-w-3xl sm:max-h-[90vh]"} overflow-y-auto ${extra}`;
+    `${
+      isMobile
+        ? "w-[100vw] h-[100vh] max-w-none rounded-none"
+        : "sm:max-w-3xl sm:max-h-[90vh]"
+    } overflow-y-auto ${extra}`;
+
+  // Helpers UI
+  const sumVipRemainingTables = useMemo(
+    () => (cfg?.vipTables || []).reduce((a, v) => a + (v.remaining || 0), 0),
+    [cfg]
+  );
+
+  const locationLabel = (loc: TableLocation) =>
+    loc === "dj"
+      ? "Cerca del DJ"
+      : loc === "piscina"
+        ? "Cerca de la Piscina"
+        : "General";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-50 dark:from-slate-950 dark:via-blue-950/20 dark:to-slate-950">
@@ -1085,7 +1182,7 @@ export default function AdminDashboard() {
                 Validar QR
               </Button>
 
-              {/* NUEVO: Exportar */}
+              {/* Exportar */}
               <Button
                 variant="secondary"
                 onClick={() => setShowExportModal(true)}
@@ -1126,7 +1223,7 @@ export default function AdminDashboard() {
               </Button>
             </div>
 
-            {/* Mobile: botón rápido de Validar QR + Dropdown con Configuración/Descuentos/Salir */}
+            {/* Mobile: botón rápido de Validar QR + Dropdown */}
             <div className="sm:hidden flex items-center gap-2">
               <Button
                 variant="outline"
@@ -1237,7 +1334,7 @@ export default function AdminDashboard() {
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">VIP (mesas):</span>
                     <b className="text-foreground">
-                      {cfg.tickets.vip?.remainingTables ?? 0} mesas
+                      {sumVipRemainingTables} mesas
                     </b>
                   </div>
                 </div>
@@ -1432,8 +1529,8 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                {/* Forzar ancho mínimo para buena UX en móviles */}
-                <table className="w-full min-w-[980px]">
+                {/* Ancho mínimo para buena UX en móviles */}
+                <table className="w-full min-w-[1060px]">
                   <thead className="bg-muted/50 border-b border-border/50">
                     <tr>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
@@ -1644,7 +1741,9 @@ export default function AdminDashboard() {
                     <b className="text-emerald-900 dark:text-emerald-100">
                       {generalDiscountRule.type === "percent"
                         ? `${generalDiscountRule.value}%`
-                        : `$ ${generalDiscountRule.value.toLocaleString("es-AR")}`}
+                        : `$ ${generalDiscountRule.value.toLocaleString(
+                            "es-AR"
+                          )}`}
                     </b>
                   </div>
                   <div className="mt-1 text-xs text-emerald-800/80 dark:text-emerald-200/80">
@@ -1717,11 +1816,9 @@ export default function AdminDashboard() {
                 <Crown className="w-5 h-5 text-white" />
               </div>
               <div>
-                <DialogTitle className="text-xl">
-                  Agregar Entrada VIP
-                </DialogTitle>
+                <DialogTitle className="text-xl">Agregar VIP</DialogTitle>
                 <DialogDescription>
-                  Precio por mesa (10 personas) desde la base de datos
+                  Precio por mesa según ubicación desde la base de datos
                 </DialogDescription>
               </div>
             </div>
@@ -1783,7 +1880,34 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {/* Ubicación + Cantidad */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Ubicación</Label>
+                <Select
+                  value={formVip.tableLocation}
+                  onValueChange={(value: TableLocation) =>
+                    setFormVip({ ...formVip, tableLocation: value })
+                  }
+                >
+                  <SelectTrigger className="border-border/50">
+                    <SelectValue placeholder="Elegí la ubicación" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(vipOptions || []).map((opt) => (
+                      <SelectItem key={opt.location} value={opt.location}>
+                        {locationLabel(opt.location)} — $
+                        {opt.price.toLocaleString("es-AR")} · {opt.remaining}{" "}
+                        mesas
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Precio por mesa según ubicación.
+                </p>
+              </div>
+
               <div className="space-y-2">
                 <Label className="text-sm font-medium">Cantidad de Mesas</Label>
                 <Input
@@ -1800,27 +1924,8 @@ export default function AdminDashboard() {
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  Mesas disponibles: {vipRemainingTables}
+                  Disponibles acá: {vipRemainingTables}
                 </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Método de Pago</Label>
-                <Select
-                  value={formVip.paymentMethod}
-                  onValueChange={(value: any) =>
-                    setFormVip({ ...formVip, paymentMethod: value })
-                  }
-                >
-                  <SelectTrigger className="border-border/50">
-                    <SelectValue placeholder="Seleccionar método" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="efectivo">Efectivo</SelectItem>
-                    <SelectItem value="transferencia">Transferencia</SelectItem>
-                    <SelectItem value="mercadopago">Mercado Pago</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </div>
 
@@ -2038,7 +2143,7 @@ export default function AdminDashboard() {
                 </DialogTitle>
                 <DialogDescription>
                   Definí el <b>stock TOTAL (personas)</b>, precios por género y
-                  la configuración VIP (por mesa).
+                  la configuración de <b>Mesas VIP por ubicación</b>.
                 </DialogDescription>
               </div>
             </div>
@@ -2088,8 +2193,8 @@ export default function AdminDashboard() {
               </div>
               <p className="text-xs text-muted-foreground">
                 * El total descuenta automáticamente las personas equivalentes a
-                las mesas VIP (1 mesa = {cfg?.totals?.unitVipSize ?? 10}{" "}
-                personas).
+                las mesas VIP por ubicación (capacidad por mesa × mesas
+                vendidas).
               </p>
             </div>
 
@@ -2175,81 +2280,114 @@ export default function AdminDashboard() {
               </p>
             </div>
 
-            {/* VIP (por mesa) */}
+            {/* VIP por ubicación */}
             <div className="rounded-xl border border-amber-200/50 dark:border-amber-800/50 p-5 space-y-4 bg-gradient-to-br from-amber-50/50 to-orange-50/50 dark:from-amber-950/20 dark:to-orange-950/20">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center shadow-sm">
                   <Crown className="w-4 h-4 text-white" />
                 </div>
                 <h4 className="font-semibold text-lg">
-                  Entrada VIP (por mesa)
+                  Mesas VIP por ubicación
                 </h4>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium">
-                    Precio por mesa (ARS)
-                  </Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={configForm.vipPrice}
-                    onChange={(e) =>
-                      setConfigForm({
-                        ...configForm,
-                        vipPrice: Number(e.target.value),
-                      })
-                    }
-                    className="border-border/50"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium">
-                    Cupo VIP (PERSONAS)
-                  </Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={configForm.vipLimitPersons}
-                    onChange={(e) =>
-                      setConfigForm({
-                        ...configForm,
-                        vipLimitPersons: Number(e.target.value),
-                      })
-                    }
-                    className="border-border/50"
-                    required
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    (1 mesa ={" "}
-                    {cfg?.tickets.vip?.unitSize ??
-                      cfg?.totals?.unitVipSize ??
-                      10}{" "}
-                    personas)
-                  </p>
-                </div>
-              </div>
+              <div className="space-y-4">
+                {vipTablesForm.map((row, idx) => {
+                  const live = cfg?.vipTables.find(
+                    (v) => v.location === row.location
+                  );
+                  return (
+                    <div
+                      key={row.location}
+                      className="rounded-lg border border-amber-200/60 dark:border-amber-800/60 p-4 bg-white/60 dark:bg-black/20"
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-amber-600" />
+                          <b>{locationLabel(row.location)}</b>
+                        </div>
+                        {live ? (
+                          <span className="text-xs text-amber-700 dark:text-amber-300">
+                            Vendidas: <b>{live.sold}</b> · Restantes:{" "}
+                            <b>{live.remaining}</b>
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            Sin ventas registradas aún
+                          </span>
+                        )}
+                      </div>
 
-              <div className="rounded-lg bg-amber-100/50 dark:bg-amber-950/30 p-3 text-sm border border-amber-200/50 dark:border-amber-800/50">
-                <div className="flex items-center justify-between">
-                  <span className="text-amber-900 dark:text-amber-100">
-                    Vendidas (personas):
-                  </span>
-                  <b className="text-amber-900 dark:text-amber-100">
-                    {cfg?.tickets.vip?.sold ?? 0}
-                  </b>
-                </div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-amber-900 dark:text-amber-100">
-                    Restantes:
-                  </span>
-                  <b className="text-amber-900 dark:text-amber-100">
-                    {cfg?.tickets.vip?.remaining ?? 0} personas (
-                    {cfg?.tickets.vip?.remainingTables ?? 0} mesas)
-                  </b>
-                </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">
+                            Precio por mesa (ARS)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={row.price}
+                            onChange={(e) => {
+                              const next = [...vipTablesForm];
+                              next[idx] = {
+                                ...row,
+                                price: Number(e.target.value),
+                              };
+                              setVipTablesForm(next);
+                            }}
+                            className="border-border/50"
+                            required
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">
+                            Stock de mesas
+                          </Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={row.stockLimit}
+                            onChange={(e) => {
+                              const next = [...vipTablesForm];
+                              next[idx] = {
+                                ...row,
+                                stockLimit: Number(e.target.value),
+                              };
+                              setVipTablesForm(next);
+                            }}
+                            className="border-border/50"
+                            required
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">
+                            Capacidad por mesa (personas)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.capacityPerTable}
+                            onChange={(e) => {
+                              const next = [...vipTablesForm];
+                              next[idx] = {
+                                ...row,
+                                capacityPerTable: Math.max(
+                                  1,
+                                  Number(e.target.value) || 1
+                                ),
+                              };
+                              setVipTablesForm(next);
+                            }}
+                            className="border-border/50"
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

@@ -71,6 +71,7 @@ async function getOrCreateActiveEvent() {
       skipDuplicates: true,
     });
 
+    // Semillas de ubicaciones (opcional): no creamos por defecto
     event = await prisma.event.findUnique({
       where: { id: created.id },
       include: { ticketConfig: true, vipConfigs: true },
@@ -91,8 +92,11 @@ function findCfg(
 }
 
 // ============ GET ===========
-// Devuelve configuración del evento ACTIVO con stock TOTAL (en PERSONAS)
-// VIP se expresa en PERSONAS; mesas restantes = floor(remaining / VIP_UNIT_SIZE)
+// Devuelve configuración del evento ACTIVO
+// - General H/M (precios) sin cupo por género
+// - TOTAL en PERSONAS
+// - VIP por ubicación (DJ / Piscina / General) en MESAS (stockLimit) + capacidad por mesa
+// - Compat: tickets.vip agregado a partir de ubicaciones
 export async function GET(_req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
@@ -122,32 +126,9 @@ export async function GET(_req: NextRequest) {
     const soldGenH = clampNonNegative(soldGenHAggr._sum.quantity || 0);
     const soldGenM = clampNonNegative(soldGenMAggr._sum.quantity || 0);
 
-    // VIP: mesas vendidas = sum(quantity) tickets VIP (aprobados) del evento
-    const vipTickets = await prisma.ticket.findMany({
-      where: {
-        eventId: event.id,
-        ticketType: "vip",
-        paymentStatus: "approved",
-      },
-      select: { quantity: true },
-    });
-    const vipTablesSold = vipTickets.reduce(
-      (a, t) => a + clampNonNegative(t.quantity || 0),
-      0
-    );
-    const vipPersonsSold = vipTablesSold * VIP_UNIT_SIZE;
-
     // Configs de precios (general H/M)
     const cfgGenH = findCfg(event, "general", "hombre");
     const cfgGenM = findCfg(event, "general", "mujer");
-
-    // VIP en PERSONAS (fila con gender NULL)
-    const cfgVip = findCfg(event, "vip", null);
-    const vipLimitPersons = clampNonNegative(
-      cfgVip ? Number(cfgVip.stockLimit) : 0
-    );
-    const vipRemainingPersons = Math.max(0, vipLimitPersons - vipPersonsSold);
-    const vipRemainingTables = Math.floor(vipRemainingPersons / VIP_UNIT_SIZE);
 
     // TOTAL en PERSONAS (fila con gender NULL)
     const cfgTotal = findCfg(event, "total", null);
@@ -155,7 +136,51 @@ export async function GET(_req: NextRequest) {
       cfgTotal ? Number(cfgTotal.stockLimit) : 0
     );
 
-    const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
+    // VIP por ubicación (VipTableConfig):
+    // limit MESAS = stockLimit
+    // vendidos MESAS = soldCount
+    // capacidad por mesa = capacityPerTable (default 10)
+    const vipTablesRaw = event.vipConfigs || [];
+
+    const vipTables = vipTablesRaw.map((c: any) => {
+      const limitTables = clampNonNegative(c.stockLimit);
+      const soldTables = clampNonNegative(c.soldCount);
+      const remainingTables = Math.max(0, limitTables - soldTables);
+      const capacityPerTable =
+        clampNonNegative(c.capacityPerTable) || VIP_UNIT_SIZE;
+      return {
+        location: c.location as "piscina" | "dj" | "general",
+        price: Number(c.price) || 0,
+        limit: limitTables, // MESAS
+        sold: soldTables, // MESAS
+        remaining: remainingTables, // MESAS
+        capacityPerTable,
+      };
+    });
+
+    // Agregados VIP (compat: personas + mesas)
+    const vipTotalPersonsLimit = vipTables.reduce(
+      (acc, t) => acc + t.limit * (t.capacityPerTable || VIP_UNIT_SIZE),
+      0
+    );
+    const vipTotalPersonsSold = vipTables.reduce(
+      (acc, t) => acc + t.sold * (t.capacityPerTable || VIP_UNIT_SIZE),
+      0
+    );
+    const vipTotalPersonsRemaining = Math.max(
+      0,
+      vipTotalPersonsLimit - vipTotalPersonsSold
+    );
+    const vipTotalRemainingTables = vipTables.reduce(
+      (acc, t) => acc + t.remaining,
+      0
+    );
+    const unitVipSizeDefault =
+      vipTables.find((t) => t.capacityPerTable)?.capacityPerTable ||
+      VIP_UNIT_SIZE;
+
+    // Totales del evento (personas)
+    const soldTotalPersons = soldGenH + soldGenM + vipTotalPersonsSold;
     const remainingTotalPersons = Math.max(
       0,
       totalLimitPersons - soldTotalPersons
@@ -169,7 +194,7 @@ export async function GET(_req: NextRequest) {
       isActive: event.isActive,
 
       totals: {
-        unitVipSize: VIP_UNIT_SIZE,
+        unitVipSize: unitVipSizeDefault,
         limitPersons: totalLimitPersons,
         soldPersons: soldTotalPersons,
         remainingPersons: remainingTotalPersons,
@@ -179,9 +204,8 @@ export async function GET(_req: NextRequest) {
         general: {
           hombre: {
             price: Number(cfgGenH?.price ?? 0),
-            // MOSTRAMOS EL TOTAL porque no hay cupo por género
-            limit: totalLimitPersons,
-            sold: soldGenH, // informativo (personas)
+            limit: totalLimitPersons, // mostramos total (no cupo por género)
+            sold: soldGenH,
             remaining: remainingTotalPersons,
           },
           mujer: {
@@ -191,29 +215,21 @@ export async function GET(_req: NextRequest) {
             remaining: remainingTotalPersons,
           },
         },
+
+        // ⚠️ Compat (no usar en UI nueva):
+        // Datos agregados desde ubicaciones para no romper clientes viejos.
         vip: {
-          price: Number(cfgVip?.price ?? 0),
-          // VIP en PERSONAS
-          limit: vipLimitPersons,
-          sold: vipPersonsSold,
-          remaining: vipRemainingPersons,
-          unitSize: VIP_UNIT_SIZE,
-          remainingTables: vipRemainingTables,
+          price: undefined, // no hay un precio único si hay varias ubicaciones
+          limit: vipTotalPersonsLimit, // PERSONAS
+          sold: vipTotalPersonsSold, // PERSONAS
+          remaining: vipTotalPersonsRemaining, // PERSONAS
+          unitSize: unitVipSizeDefault,
+          remainingTables: vipTotalRemainingTables, // total mesas restantes
         },
       },
 
-      // Si usás ubicaciones de mesas separadas
-      vipTables: event.vipConfigs.map((c: any) => ({
-        location: c.location as "piscina" | "dj" | "general",
-        price: Number(c.price),
-        limit: clampNonNegative(c.stockLimit),
-        sold: clampNonNegative(c.soldCount),
-        remaining: Math.max(
-          0,
-          clampNonNegative(c.stockLimit) - clampNonNegative(c.soldCount)
-        ),
-        capacityPerTable: clampNonNegative(c.capacityPerTable),
-      })),
+      // Config por ubicación (usar en la UI nueva)
+      vipTables,
     };
 
     return json(payload);
@@ -224,8 +240,15 @@ export async function GET(_req: NextRequest) {
 }
 
 // ============ PATCH ===========
-// Actualiza precios (general H/M, VIP) y límites (TOTAL personas y VIP personas)
-// ⚠️ Sin pasar `gender: null` en ninguna operación.
+// Actualiza precios (general H/M), límite TOTAL (PERSONAS) y VIP por ubicación (MESAS)
+// Formato esperado:
+// {
+//   totalEntriesLimit: number,
+//   general: { hombre: { price }, mujer: { price } },
+//   vipTables: [
+//     { location: "dj"|"piscina"|"general", price: number, stockLimit: number, capacityPerTable?: number }
+//   ]
+// }
 export async function PATCH(req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
@@ -235,20 +258,9 @@ export async function PATCH(req: NextRequest) {
     const genHPrice = toNumber(body?.general?.hombre?.price);
     const genMPrice = toNumber(body?.general?.mujer?.price);
 
-    // VIP (PERSONAS)
-    const vipPrice = toNumber(body?.vip?.price);
-    const vipLimit = clampNonNegative(toNumber(body?.vip?.stockLimit));
-
     // TOTAL (PERSONAS)
-    const legacyGenHLimit = clampNonNegative(
-      toNumber(body?.general?.hombre?.stockLimit)
-    );
-    const legacyGenMLimit = clampNonNegative(
-      toNumber(body?.general?.mujer?.stockLimit)
-    );
     const totalEntriesLimit = clampNonNegative(
-      toNumber(body?.totalEntriesLimit) ??
-        (legacyGenHLimit ?? 0) + (legacyGenMLimit ?? 0)
+      toNumber(body?.totalEntriesLimit)
     );
 
     // ---- General Hombre (precio) ----
@@ -311,7 +323,6 @@ export async function PATCH(req: NextRequest) {
           data: {
             eventId: event.id,
             ticketType: "total",
-            // omitimos gender para que quede NULL
             price: 0,
             stockLimit: totalEntriesLimit,
           },
@@ -319,30 +330,39 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // ---- VIP (PERSONAS) ----
-    if (vipPrice !== undefined || vipLimit !== undefined) {
-      // upsert manual para evitar pasar gender: null
-      const existingVip = await prisma.ticketConfig.findFirst({
-        where: { eventId: event.id, ticketType: "vip", gender: null },
+    // ---- VIP por ubicación (MESAS) ----
+    const vipTables = Array.isArray(body?.vipTables) ? body.vipTables : [];
+
+    for (const row of vipTables) {
+      const location = (row?.location || "").toString().toLowerCase();
+      if (!["dj", "piscina", "general"].includes(location)) continue;
+
+      const price = clampNonNegative(toNumber(row?.price, 0));
+      const stockLimit = clampNonNegative(toNumber(row?.stockLimit, 0));
+      const capacityPerTable = clampNonNegative(
+        toNumber(row?.capacityPerTable, VIP_UNIT_SIZE)
+      );
+
+      // upsert por (eventId, location)
+      const existing = await prisma.vipTableConfig.findFirst({
+        where: { eventId: event.id, location },
         select: { id: true },
       });
 
-      if (existingVip) {
-        await prisma.ticketConfig.update({
-          where: { id: existingVip.id },
-          data: {
-            ...(vipPrice !== undefined ? { price: vipPrice } : {}),
-            ...(vipLimit !== undefined ? { stockLimit: vipLimit } : {}),
-          },
+      if (existing) {
+        await prisma.vipTableConfig.update({
+          where: { id: existing.id },
+          data: { price, stockLimit, capacityPerTable },
         });
       } else {
-        await prisma.ticketConfig.create({
+        await prisma.vipTableConfig.create({
           data: {
             eventId: event.id,
-            ticketType: "vip",
-            // omitimos gender para que quede NULL
-            price: vipPrice ?? 0,
-            stockLimit: vipLimit ?? 0,
+            location,
+            price,
+            stockLimit,
+            capacityPerTable,
+            soldCount: 0, // se irá actualizando cuando vendas
           },
         });
       }

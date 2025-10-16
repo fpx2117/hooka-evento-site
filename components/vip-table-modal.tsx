@@ -16,21 +16,34 @@ import {
   Award as IdCard,
   Mail,
   Phone,
+  Music,
+  Waves,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 /* =========================
    Tipos mínimos de la API de config
 ========================= */
+type TableLoc = "piscina" | "dj" | "general";
+
 type TicketsConfig = {
   tickets?: {
     vip?: {
-      price?: number;
-      remaining?: number;
-      remainingTables?: number;
-      unitSize?: number;
+      price?: number; // (fallback global)
+      remaining?: number; // (fallback global - personas, no usado si hay vipTables)
+      remainingTables?: number; // (fallback global)
+      unitSize?: number; // (fallback global: personas/mesa)
     };
   };
+  // NUEVO: soporte por ubicación
+  vipTables?: Array<{
+    location: TableLoc; // "piscina" | "dj" | "general"
+    price: number; // precio por mesa en esa ubicación
+    limit: number; // MESAS totales
+    sold: number; // MESAS vendidas
+    remaining: number; // MESAS disponibles
+    capacityPerTable: number; // personas por mesa para esa ubicación
+  }>;
 };
 
 interface VIPTableModalProps {
@@ -58,10 +71,21 @@ export function VIPTableModal({
   onOpenChange,
   configEndpoint = "/api/admin/tickets/config",
 }: VIPTableModalProps) {
-  // ======= State de config VIP desde BD =======
-  const [vipPrice, setVipPrice] = useState<number | null>(null);
-  const [remainingTables, setRemainingTables] = useState<number | null>(null);
-  const [unitSize, setUnitSize] = useState<number | null>(null);
+  // ======= State de config VIP desde BD (fallback global) =======
+  const [vipPriceGlobal, setVipPriceGlobal] = useState<number | null>(null);
+  const [remainingTablesGlobal, setRemainingTablesGlobal] = useState<
+    number | null
+  >(null);
+  const [unitSizeGlobal, setUnitSizeGlobal] = useState<number | null>(null);
+
+  // ======= NUEVO: config por ubicación =======
+  const [vipTablesCfg, setVipTablesCfg] = useState<TicketsConfig["vipTables"]>(
+    []
+  );
+  const [selectedLocation, setSelectedLocation] = useState<TableLoc | null>(
+    null
+  );
+
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgError, setCfgError] = useState<string | null>(null);
 
@@ -83,7 +107,11 @@ export function VIPTableModal({
       setCfgLoading(true);
       setCfgError(null);
 
-      const tryEndpoints = [configEndpoint, "/api/admin/tickets/config"];
+      const tryEndpoints = [
+        configEndpoint,
+        "/api/admin/tickets/config",
+        "/api/tickets/config",
+      ];
       for (const ep of tryEndpoints) {
         try {
           const r = await fetch(ep, { cache: "no-store" });
@@ -91,12 +119,32 @@ export function VIPTableModal({
           const data: TicketsConfig = await r.json();
           if (cancelled) return;
 
+          // fallback global
           const v = data?.tickets?.vip ?? {};
-          setVipPrice(typeof v.price === "number" ? v.price : null);
-          setRemainingTables(
+          setVipPriceGlobal(typeof v.price === "number" ? v.price : null);
+          setRemainingTablesGlobal(
             typeof v.remainingTables === "number" ? v.remainingTables : null
           );
-          setUnitSize(typeof v.unitSize === "number" ? v.unitSize : null);
+          setUnitSizeGlobal(typeof v.unitSize === "number" ? v.unitSize : null);
+
+          // per-location
+          const tables = Array.isArray(data?.vipTables) ? data.vipTables : [];
+          setVipTablesCfg(tables);
+
+          // elegir ubicación por defecto:
+          // 1) dj si existe, 2) piscina si existe, 3) la primera que tenga remaining > 0, 4) primera disponible
+          let defaultLoc: TableLoc | null = null;
+          const hasDJ = tables.find((t) => t.location === "dj");
+          const hasPiscina = tables.find((t) => t.location === "piscina");
+          const firstWithStock = tables.find((t) => (t?.remaining ?? 0) > 0);
+          defaultLoc =
+            (hasDJ?.location as TableLoc) ||
+            (hasPiscina?.location as TableLoc) ||
+            (firstWithStock?.location as TableLoc) ||
+            (tables[0]?.location as TableLoc) ||
+            null;
+          setSelectedLocation(defaultLoc ?? null);
+
           setCfgLoading(false);
           return;
         } catch {
@@ -121,6 +169,26 @@ export function VIPTableModal({
     };
   }, [open, configEndpoint]);
 
+  // ======= Config actual según ubicación seleccionada (si hay vipTables) =======
+  const currentLocCfg = useMemo(() => {
+    if (!selectedLocation) return null;
+    return vipTablesCfg?.find((t) => t.location === selectedLocation) || null;
+  }, [vipTablesCfg, selectedLocation]);
+
+  // ======= Derivados mostrados =======
+  const vipPrice = useMemo(() => {
+    return currentLocCfg?.price ?? vipPriceGlobal ?? 0;
+  }, [currentLocCfg, vipPriceGlobal]);
+
+  const remainingTables = useMemo(() => {
+    return currentLocCfg?.remaining ?? remainingTablesGlobal ?? 0;
+  }, [currentLocCfg, remainingTablesGlobal]);
+
+  // Para la equivalencia, si hay por ubicación, usamos esa
+  const unitSize = useMemo(() => {
+    return currentLocCfg?.capacityPerTable ?? unitSizeGlobal ?? null;
+  }, [currentLocCfg, unitSizeGlobal]);
+
   // ======= Total (siempre 1 mesa) =======
   const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
 
@@ -137,6 +205,7 @@ export function VIPTableModal({
     if (!vipPrice || vipPrice <= 0)
       e.price = "Precio no disponible. Intentá nuevamente.";
     if (soldOut) e.stock = "No hay mesas disponibles.";
+    if (!selectedLocation) e.location = "Elegí una ubicación de mesa.";
 
     if (!customer.name.trim()) e.name = "Ingresá tu nombre completo";
 
@@ -163,16 +232,27 @@ export function VIPTableModal({
 
     setIsProcessing(true);
     try {
+      const locLabel =
+        selectedLocation === "dj"
+          ? "Cerca del DJ"
+          : selectedLocation === "piscina"
+            ? "Cerca de la PISCINA"
+            : "General";
+
+      const capacity =
+        typeof unitSize === "number" && Number.isFinite(unitSize)
+          ? unitSize
+          : undefined;
+
       const body = {
         items: [
           {
-            title: "Mesa VIP",
-            description:
-              unitSize && Number.isFinite(unitSize)
-                ? `1 mesa = ${unitSize} personas`
-                : "Reserva de Mesa VIP",
+            title: `Mesa VIP (${locLabel})`,
+            description: capacity
+              ? `1 mesa = ${capacity} personas`
+              : "Reserva de Mesa VIP",
             quantity: 1,
-            unit_price: vipPrice, // ✅ precio desde BD
+            unit_price: vipPrice, // ✅ precio de la ubicación o fallback
           },
         ],
         payer: {
@@ -183,10 +263,15 @@ export function VIPTableModal({
           additionalInfo: {
             type: "vip-table",
             tables: 1, // siempre 1 mesa por compra
-            unitSize: unitSize ?? undefined,
+            unitSize: capacity,
+            location: selectedLocation ?? undefined, // ✅ enviar ubicación
           },
         },
         type: "vip-table" as const,
+        // opcional: podés enviar un campo `meta` si tu backend lo soporta
+        meta: {
+          location: selectedLocation ?? undefined,
+        },
       };
 
       const res = await fetch("/api/create-payment", {
@@ -224,6 +309,10 @@ export function VIPTableModal({
     }
   };
 
+  // ======= UI helpers =======
+  const hasDJ = !!vipTablesCfg?.find((t) => t.location === "dj");
+  const hasPiscina = !!vipTablesCfg?.find((t) => t.location === "piscina");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[94vw] sm:max-w-lg max-h-[86svh] sm:max-h-[90vh] overflow-y-auto">
@@ -242,6 +331,9 @@ export function VIPTableModal({
           <div className="relative bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
             <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Mesa VIP
+              {selectedLocation
+                ? ` — ${selectedLocation === "dj" ? "Cerca del DJ" : "Cerca de la PISCINA"}`
+                : ""}
             </h3>
 
             {cfgLoading ? (
@@ -424,6 +516,53 @@ export function VIPTableModal({
             </div>
           </div>
 
+          {/* NUEVO: Selector de ubicación */}
+          <div className="rounded-xl border p-3 sm:p-4 bg-white/60">
+            <p className="text-sm font-semibold mb-3">Elegí la ubicación</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {/* Botón DJ (si existe config) */}
+              <Button
+                type="button"
+                variant={selectedLocation === "dj" ? "default" : "outline"}
+                onClick={() => setSelectedLocation("dj")}
+                disabled={!hasDJ}
+                className={`justify-start h-12 ${
+                  selectedLocation === "dj"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
+              >
+                <Music className="w-4 h-4 mr-2" />
+                Cerca del DJ
+              </Button>
+
+              {/* Botón Piscina (si existe config) */}
+              <Button
+                type="button"
+                variant={selectedLocation === "piscina" ? "default" : "outline"}
+                onClick={() => setSelectedLocation("piscina")}
+                disabled={!hasPiscina}
+                className={`justify-start h-12 ${
+                  selectedLocation === "piscina"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
+              >
+                <Waves className="w-4 h-4 mr-2" />
+                Cerca de la PISCINA
+              </Button>
+            </div>
+            {errors.location && (
+              <p className="text-sm text-red-600 mt-2">{errors.location}</p>
+            )}
+            {!hasDJ && !hasPiscina && (
+              <p className="text-xs text-muted-foreground mt-2">
+                * Por ahora no hay ubicaciones configuradas. Se usará el precio
+                y stock general de VIP si está disponible.
+              </p>
+            )}
+          </div>
+
           {/* Summary + Pay — mismos colores que tickets */}
           <div className="rounded-xl p-4 sm:p-6 space-y-4 border-2 bg-gradient-to-r from-[#4a0a0a]/10 to-[#7a0a0a]/10 border-[#5b0d0d]/20">
             <div className="flex justify-between items-center text-xl sm:text-2xl">
@@ -440,8 +579,9 @@ export function VIPTableModal({
                 cfgLoading ||
                 !!cfgError ||
                 !vipPrice ||
-                !remainingTables || // cubre 0
-                soldOut // explícito
+                (!remainingTables && remainingTables !== 0) || // null/undefined
+                soldOut ||
+                !selectedLocation
               }
               aria-disabled={soldOut || undefined}
               className="
