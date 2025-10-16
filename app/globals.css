@@ -1,8 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Variante de tema oscuro (Tailwind v4) */
 @custom-variant dark (&:is(.dark *));
 
+/* =========================
+   Tokens (Light)
+========================= */
 :root {
   /* Tropical vibrant palette */
   --background: oklch(0.98 0.01 280);
@@ -56,38 +60,31 @@
   --sidebar-ring: oklch(0.65 0.18 200);
 }
 
-/* Texto con gradiente animado */
-.text-gradient {
-  background-image: linear-gradient(90deg, #f25691, #ef6065, #ead1a6);
-  background-size: 200% 200%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: gradient-move 6s ease-in-out infinite;
-}
-
-/* Glow suave estilo neón */
-.neon-glow {
-  text-shadow:
-    0 2px 12px rgba(0, 0, 0, 0.25),
-    0 0 18px rgba(242, 86, 145, 0.45);
-}
-
+/* =========================
+   Tokens (Dark)
+========================= */
 .dark {
   --background: oklch(0.15 0.02 280);
   --foreground: oklch(0.98 0.01 280);
+
   --primary: oklch(0.7 0.2 200);
   --primary-foreground: oklch(0.15 0.02 200);
+
   --secondary: oklch(0.75 0.22 35);
   --secondary-foreground: oklch(0.15 0.02 35);
+
   --accent: oklch(0.7 0.28 330);
   --accent-foreground: oklch(0.15 0.02 330);
+
   --muted: oklch(0.25 0.03 280);
   --muted-foreground: oklch(0.7 0.05 280);
+
   --card: oklch(0.18 0.02 280);
   --card-foreground: oklch(0.98 0.01 280);
+
   --popover: oklch(0.18 0.02 280);
   --popover-foreground: oklch(0.98 0.01 280);
+
   --border: oklch(0.3 0.03 280);
   --input: oklch(0.3 0.03 280);
   --ring: oklch(0.7 0.2 200);
@@ -108,37 +105,52 @@
   --sidebar-ring: oklch(0.7 0.2 200);
 }
 
+/* =========================
+   Tailwind v4 Theme Bridge
+========================= */
 @theme inline {
   --font-sans: var(--font-poppins);
   --font-display: var(--font-bebas-neue);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
+
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -149,18 +161,99 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* =========================
+   Base layer
+========================= */
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
+  }
+  /* Usamos ring para focus visibles; evitamos outline global inválido */
+  :focus-visible {
+    @apply ring-2 ring-ring/50 outline-none;
   }
   body {
     @apply bg-background text-foreground;
   }
 }
 
-/* Adding custom tropical animations and effects */
+/* =========================
+   Utilities
+========================= */
 @layer utilities {
-  /* Gradient text effect */
+  /* ========= THEME RED (por className) + helpers ========= */
+  .theme-red {
+    --primary: oklch(0.62 0.25 29); /* rojo brillante */
+    --secondary: oklch(0.54 0.22 29); /* rojo profundo */
+    --accent: oklch(0.6 0.27 20); /* carmín rojizo */
+  }
+  .dark .theme-red {
+    --primary: oklch(0.6 0.23 29);
+    --secondary: oklch(0.5 0.2 29);
+    --accent: oklch(0.58 0.26 20);
+  }
+
+  /* Textos/íconos controlados por tema */
+  .text-brand-primary {
+    color: var(--primary);
+  }
+  .text-brand-secondary {
+    color: var(--secondary);
+  }
+  .text-brand-accent {
+    color: var(--accent);
+  }
+  .icon-brand {
+    color: var(--primary);
+  }
+
+  /* Bordes themed (mezcla suave) */
+  .border-brand-primary {
+    border-color: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+  .border-brand-secondary {
+    border-color: color-mix(in oklab, var(--secondary) 30%, transparent);
+  }
+  .border-brand-accent {
+    border-color: color-mix(in oklab, var(--accent) 30%, transparent);
+  }
+  .border-brand-primary-soft {
+    border-color: color-mix(in oklab, var(--primary) 20%, transparent);
+  }
+
+  /* Fondos suaves para cards */
+  .bg-brand-surface {
+    background: color-mix(in oklab, var(--card) 70%, transparent);
+  }
+
+  /* Gradientes themed */
+  .bg-brand-gradient {
+    background: linear-gradient(
+      90deg,
+      var(--primary),
+      var(--secondary),
+      var(--accent)
+    );
+  }
+  .bg-brand-gradient-soft {
+    background: linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--primary) 10%, transparent),
+      color-mix(in oklab, var(--secondary) 10%, transparent),
+      color-mix(in oklab, var(--accent) 10%, transparent)
+    );
+  }
+  .bg-brand-gradient-soft-2 {
+    background: linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--primary) 10%, transparent),
+      color-mix(in oklab, var(--secondary) 10%, transparent)
+    );
+  }
+
+  /* ====== Tus utilidades existentes ====== */
+
+  /* Texto con gradiente animado */
   .text-gradient {
     background: linear-gradient(
       135deg,
@@ -176,7 +269,23 @@
     animation: gradient-shift 8s ease infinite;
   }
 
-  /* Neon glow effect */
+  /* Texto rojo con gradiente (si lo usás) */
+  .text-gradient-red {
+    background-image: linear-gradient(
+      90deg,
+      #ff1f1f,
+      #ff0000,
+      #c41414,
+      #7a0a0a
+    );
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: gradient-move 6s ease-in-out infinite;
+  }
+
+  /* Glow suave estilo neón */
   .neon-glow {
     text-shadow:
       0 0 10px oklch(0.65 0.18 200 / 0.8),
@@ -185,7 +294,7 @@
       0 0 40px oklch(0.7 0.2 35 / 0.3);
   }
 
-  /* Tropical gradient background */
+  /* Fondo con gradiente tropical animado */
   .gradient-tropical {
     background: linear-gradient(
       135deg,
@@ -199,22 +308,43 @@
     animation: gradient-shift 15s ease infinite;
   }
 
-  /* Floating animation */
+  /* Flotantes / Pulso / Carrusel brand */
   .animate-float {
     animation: float 6s ease-in-out infinite;
   }
-
-  /* Pulse glow animation */
   .animate-pulse-glow {
     animation: pulse-glow 3s ease-in-out infinite;
   }
-
-  /* Scroll-left animation for brand carousel */
   .animate-scroll-left {
     animation: scroll-left 30s linear infinite;
   }
 
-  /* Gradient shift keyframes */
+  /* Variantes lentas */
+  .animate-float-slow {
+    animation: float-slow 8s ease-in-out infinite;
+  }
+  .animate-float-slower {
+    animation: float-slower 12s ease-in-out infinite;
+  }
+  .animate-pulse-slow {
+    animation: pulse-slow 4s ease-in-out infinite;
+  }
+  .animate-gradient {
+    animation: gradient-shift 20s ease infinite;
+  }
+  .animate-wave {
+    animation: wave 8s ease-in-out infinite;
+  }
+  .animate-wave-slow {
+    animation: wave 12s ease-in-out infinite;
+  }
+
+  /* Radial helpers */
+  .bg-gradient-radial {
+    background: radial-gradient(circle, var(--tw-gradient-stops));
+  }
+
+  /* ===== Keyframes ===== */
   @keyframes gradient-shift {
     0%,
     100% {
@@ -225,19 +355,16 @@
     }
   }
 
-  /* Float keyframes */
   @keyframes float {
     0%,
     100% {
       transform: translateY(0px);
     }
     50% {
-      /* Reduced translateY from -20px to -8px to prevent logo from going off-screen */
       transform: translateY(-8px);
     }
   }
 
-  /* New float variations */
   @keyframes float-slow {
     0%,
     100% {
@@ -258,7 +385,6 @@
     }
   }
 
-  /* Pulse glow keyframes */
   @keyframes pulse-glow {
     0%,
     100% {
@@ -273,7 +399,6 @@
     }
   }
 
-  /* Slow pulse animation */
   @keyframes pulse-slow {
     0%,
     100% {
@@ -286,7 +411,6 @@
     }
   }
 
-  /* Wave animation for water effect */
   @keyframes wave {
     0%,
     100% {
@@ -303,7 +427,6 @@
     }
   }
 
-  /* Scroll-left keyframes for brand carousel */
   @keyframes scroll-left {
     0% {
       transform: translateX(0);
@@ -313,39 +436,14 @@
     }
   }
 
-  /* Additional animations for hero background */
-  /* Slow float animation */
-  .animate-float-slow {
-    animation: float-slow 8s ease-in-out infinite;
-  }
-
-  /* Slower float animation */
-  .animate-float-slower {
-    animation: float-slower 12s ease-in-out infinite;
-  }
-
-  /* Slow pulse animation */
-  .animate-pulse-slow {
-    animation: pulse-slow 4s ease-in-out infinite;
-  }
-
-  /* Animated gradient background */
-  .animate-gradient {
-    animation: gradient-shift 20s ease infinite;
-  }
-
-  /* Wave animation */
-  .animate-wave {
-    animation: wave 8s ease-in-out infinite;
-  }
-
-  /* Slow wave animation */
-  .animate-wave-slow {
-    animation: wave 12s ease-in-out infinite;
-  }
-
-  /* Gradient radial utility */
-  .bg-gradient-radial {
-    background: radial-gradient(circle, var(--tw-gradient-stops));
+  /* Animación usada por .text-gradient-red */
+  @keyframes gradient-move {
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
   }
 }

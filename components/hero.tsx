@@ -1,23 +1,28 @@
 "use client";
 
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Waves, Sparkles } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Waves } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { TicketSalesModal } from "./ticket-sales-modal";
+import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
+
+const TARGET_ISO = "2025-11-02T22:00:00-03:00"; // 02/11/2025 22:00 AR
 
 export function Hero() {
+  const [showTicketModal, setShowTicketModal] = useState(false);
   const [timeLeft, setTimeLeft] = useState({
     days: 0,
     hours: 0,
     minutes: 0,
     seconds: 0,
   });
-  const [showTicketModal, setShowTicketModal] = useState(false);
+
+  const targetMs = useMemo(() => new Date(TARGET_ISO).getTime(), []);
 
   useEffect(() => {
-    const targetDate = new Date("2025-11-02T22:00:00").getTime();
     const tick = () => {
-      const diff = Math.max(targetDate - Date.now(), 0);
+      const diff = Math.max(targetMs - Date.now(), 0);
       setTimeLeft({
         days: Math.floor(diff / 86_400_000),
         hours: Math.floor((diff % 86_400_000) / 3_600_000),
@@ -28,149 +33,219 @@ export function Hero() {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [targetMs]);
+
+  const pad = (n: number) => n.toString().padStart(2, "0");
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
-      {/* BG */}
-      <div className="absolute inset-0 z-0">
-        <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.85_0.15_95)] via-[oklch(0.7_0.18_35)] to-[oklch(0.65_0.18_210)] animate-gradient" />
-        <div className="absolute top-20 right-20 w-32 h-32 md:w-48 md:h-48 rounded-full bg-gradient-radial from-[oklch(0.95_0.2_90)] to-transparent opacity-60 blur-2xl animate-pulse-slow" />
-        <div className="absolute top-1/4 left-10 w-20 h-20 md:w-24 md:h-24 rounded-full bg-primary/20 blur-xl animate-float-slow" />
-        <div className="absolute bottom-1/3 right-20 w-24 h-24 md:w-32 md:h-32 rounded-full bg-secondary/20 blur-xl animate-float-slower" />
-        <div className="absolute top-1/2 left-1/4 w-12 h-12 md:w-16 md:h-16 rounded-full bg-accent/20 blur-lg animate-float" />
-        <div className="absolute top-1/3 right-1/3 w-16 h-16 md:w-20 md:h-20 rounded-full bg-primary/15 blur-xl animate-float" />
-        <div className="absolute bottom-1/4 left-1/3 w-14 h-14 md:w-[4.5rem] md:h-[4.5rem] rounded-full bg-accent/15 blur-lg animate-float-slower" />
-        <div className="absolute bottom-0 left-0 right-0 -mb-1">
-          <svg
-            viewBox="0 0 1440 200"
-            className="w-full h-40 md:h-56"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M0,100 Q360,50 720,100 T1440,100 L1440,200 L0,200 Z"
-              fill="oklch(0.65 0.2 210 / 0.5)"
-              className="animate-wave"
+    <section className="relative min-h-[100svh] overflow-hidden text-white">
+      {/* Fondo: 1 col en mobile / 4x3 en desktop */}
+      <HeroBackgroundEasy
+        mobile={{ rows: 4, cols: 1 }}
+        desktop={{ rows: 4, cols: 3 }}
+        fontMobile="clamp(2.6rem, 21vw, 9rem)"
+        opacity={0.65}
+        gap="clamp(0px, 1vh, 10px)"
+        navTopPx={72} // <<--- importante
+      />
+
+      {/* Grilla maestra (usar backticks para evitar strings rotos) */}
+      <div
+        className={`relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4`}
+      >
+        {/* LOGO / LABIOS con animación y offsets responsive */}
+        <div
+          className={`row-start-2 translate-y-[clamp(10px,3.5vh,40px)] md:translate-y-[clamp(56px,10vh,160px)]`}
+        >
+          <div className="relative lip-wrap">
+            <span aria-hidden className="lip-shine" />
+            <Image
+              src="/logov2.png" /* cambia si tu asset es otro */
+              alt="Labios rojos"
+              width={860}
+              height={860}
+              priority
+              className={`pointer-events-none select-none w-[70vw] max-w-[780px] min-w-[240px] drop-shadow-[0_10px_45px_rgba(0,0,0,0.55)] lip-float md:hover:lip-pop`}
             />
-            <path
-              d="M0,120 Q360,80 720,120 T1440,120 L1440,200 L0,200 Z"
-              fill="oklch(0.6 0.22 215 / 0.4)"
-              className="animate-wave-slow"
-            />
-            <path
-              d="M0,140 Q360,110 720,140 T1440,140 L1440,200 L0,200 Z"
-              fill="oklch(0.55 0.25 220 / 0.3)"
-              className="animate-wave"
-            />
-          </svg>
+          </div>
         </div>
-      </div>
 
-      <div className="absolute inset-0 z-10 bg-gradient-to-b from-background/50 via-background/30 to-background/40" />
+        {/* CONTENIDO (sin título) */}
+        <div className="row-start-3 w-full text-center">
+          {/* espacio para no tocar la gota */}
+          <div className="mt-[clamp(10px,3.2vh,42px)]" />
 
-      {/* CONTENT */}
-      <div className="relative z-20 container mx-auto px-4 text-center pt-24 md:pt-28 pb-10">
-        <div className="max-w-5xl mx-auto space-y-5 md:space-y-7">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 md:px-6 md:py-3 rounded-full bg-background/80 backdrop-blur-sm border-2 border-primary/50">
-            <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-accent" />
-            <span className="text-xs md:text-sm font-semibold tracking-wider text-foreground">
-              TEMPORADA 2025
-            </span>
-            <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-secondary" />
+          {/* Countdown con halo sutil (sin card) */}
+          <div className="relative inline-flex items-end justify-center gap-3 sm:gap-4 md:gap-6">
+            <span
+              aria-hidden
+              className="absolute -inset-x-[12%] -inset-y-[18%] -z-10 rounded-[999px] pointer-events-none"
+              style={{
+                background:
+                  "radial-gradient(ellipse at center, rgba(0,0,0,.36) 0%, rgba(0,0,0,.22) 45%, rgba(0,0,0,0) 68%)",
+                filter: "blur(6px)",
+              }}
+            />
+            <TimeBox value={pad(timeLeft.days)} label="DÍAS" />
+            <Sep />
+            <TimeBox value={pad(timeLeft.hours)} label="HORAS" />
+            <Sep />
+            <TimeBox value={pad(timeLeft.minutes)} label="MIN" />
+            <Sep />
+            <TimeBox value={pad(timeLeft.seconds)} label="SEG" />
           </div>
 
-          {/* H1 principal */}
-          <h1 className="text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-display tracking-tight leading-[0.95] mb-2 md:mb-3">
-            <span className="block neon-glow text-primary-foreground">
-              ¡VIENE EL
-            </span>
-            <span className="block text-gradient mt-1 md:mt-2">VERANO!</span>
-          </h1>
-
-          {/* Hooka Party — centrado y sin logo */}
-          <h2
-            className="
-              font-display text-white
-              text-5xl sm:text-6xl
-              md:text-7xl lg:text-6xl xl:text-6xl
-              font-extrabold tracking-tight leading-[0.95]
-              text-center whitespace-nowrap
-              drop-shadow-[0_1px_0_rgba(0,0,0,0.15)]
-            "
-          >
-            Hooka&nbsp;Party
-          </h2>
-
-          {/* Countdown */}
-          <div className="flex items-center justify-center gap-3 sm:gap-4 md:gap-6 pt-3 md:pt-4">
-            <div className="text-center">
-              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
-                {timeLeft.days.toString().padStart(2, "0")}
-              </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
-                DÍAS
-              </div>
-            </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
-              :
-            </div>
-            <div className="text-center">
-              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
-                {timeLeft.hours.toString().padStart(2, "0")}
-              </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
-                HORAS
-              </div>
-            </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
-              :
-            </div>
-            <div className="text-center">
-              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
-                {timeLeft.minutes.toString().padStart(2, "0")}
-              </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
-                MIN
-              </div>
-            </div>
-            <div className="text-2xl sm:text-3xl md:text-4xl text-primary-foreground/50">
-              :
-            </div>
-            <div className="text-center">
-              <div className="text-4xl sm:text-5xl md:text-5xl font-display text-gradient font-bold">
-                {timeLeft.seconds.toString().padStart(2, "0")}
-              </div>
-              <div className="text-xs md:text-sm text-primary-foreground/70 mt-1">
-                SEG
-              </div>
-            </div>
-          </div>
-
-          {/* Copy */}
-          <p className="text-base sm:text-lg md:text-xl text-primary-foreground/80 max-w-2xl mx-auto leading-relaxed px-4">
-            La mejor fiesta de zona norte. Música, diversión y energía para
-            disfrutar al máximo.
+          <p className="text-sm md:text-base opacity-90 mt-2">
+            Recibí el calor con nosotros
           </p>
 
           {/* CTA */}
-          <div className="flex items-center justify-center pt-6 md:pt-7 px-4">
+          <div className="flex items-center justify-center pt-4 md:pt-5 px-4">
             <Button
               size="lg"
               onClick={() => setShowTicketModal(true)}
-              className="text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full bg-gradient-to-r from-primary via-secondary to-accent text-primary-foreground font-bold tracking-wide hover:scale-105 transition-transform shadow-2xl w-full sm:w-auto"
+              className="
+      w-full sm:w-auto
+      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+      bg-white text-[#5b0d0d] font-bold tracking-wide
+      hover:bg-[#5b0d0d] hover:text-white        /* ⬅️ swap en hover */
+      transition-colors duration-200            /* suaviza el cambio */
+      hover:scale-105 transition-transform
+      shadow-2xl
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+    "
             >
               <Waves className="w-5 h-5 mr-2" />
               ¡Reservá Ahora!
             </Button>
           </div>
         </div>
+
+        <div className="row-start-1" />
+        <div className="row-start-4" />
       </div>
 
       <TicketSalesModal
         open={showTicketModal}
         onOpenChange={setShowTicketModal}
       />
+
+      {/* Animaciones locales (Styled-JSX OK) */}
+      <style jsx>{`
+        @keyframes lipFloat {
+          0% {
+            transform: translateY(0) rotate(0deg);
+          }
+          50% {
+            transform: translateY(8px) rotate(0.5deg);
+          }
+          100% {
+            transform: translateY(0) rotate(0deg);
+          }
+        }
+        @keyframes lipPop {
+          0% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.02);
+          }
+          100% {
+            transform: scale(1);
+          }
+        }
+        @keyframes lipShine {
+          0% {
+            transform: translateX(-130%) rotate(-18deg);
+            opacity: 0;
+          }
+          10% {
+            opacity: 0.25;
+          }
+          50% {
+            opacity: 0.18;
+          }
+          100% {
+            transform: translateX(130%) rotate(-18deg);
+            opacity: 0;
+          }
+        }
+        .lip-wrap {
+          display: inline-block;
+          position: relative;
+        }
+        .lip-float {
+          animation: lipFloat 6.2s ease-in-out infinite;
+        }
+        .lip-pop {
+          animation: lipPop 1.2s ease-in-out;
+        }
+        .lip-shine {
+          position: absolute;
+          top: 10%;
+          left: -20%;
+          width: 60%;
+          height: 70%;
+          background: linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0) 0%,
+            rgba(255, 255, 255, 0.35) 50%,
+            rgba(255, 255, 255, 0) 100%
+          );
+          filter: blur(6px);
+          transform: translateX(-130%) rotate(-18deg);
+          border-radius: 999px;
+          pointer-events: none;
+          animation: lipShine 6s linear infinite;
+          mix-blend-mode: screen;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .lip-float,
+          .lip-pop,
+          .lip-shine {
+            animation: none !important;
+          }
+        }
+      `}</style>
     </section>
+  );
+}
+
+/* Countdown: alto contraste sin “card” */
+function TimeBox({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="text-center">
+      <div
+        className="text-4xl sm:text-5xl md:text-5xl font-display font-extrabold"
+        style={{
+          textShadow: "0 2px 8px rgba(0,0,0,.55), 0 0 18px rgba(0,0,0,.35)",
+        }}
+      >
+        {value}
+      </div>
+      <div
+        className="text-[10px] md:text-xs mt-1 tracking-wide"
+        style={{
+          color: "rgba(255,255,255,.92)",
+          textShadow: "0 1px 4px rgba(0,0,0,.45)",
+        }}
+      >
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function Sep() {
+  return (
+    <div
+      className="text-2xl sm:text-3xl md:text-4xl"
+      style={{
+        color: "rgba(255,255,255,.92)",
+        textShadow: "0 2px 8px rgba(0,0,0,.55)",
+      }}
+    >
+      :
+    </div>
   );
 }

@@ -16,7 +16,7 @@ export function BrandCarousel() {
   return (
     <section className="py-16 bg-background/50 overflow-hidden">
       <div className="container mx-auto px-4 mb-8">
-        <h3 className="text-2xl md:text-3xl font-display text-center text-muted-foreground tracking-wide">
+        <h3 className="text-2xl md:text-3xl font-display text-red-900 text-center  tracking-wide">
           NUESTRAS MARCAS
         </h3>
       </div>

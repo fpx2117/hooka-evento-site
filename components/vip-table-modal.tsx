@@ -25,10 +25,10 @@ import { useEffect, useMemo, useState } from "react";
 type TicketsConfig = {
   tickets?: {
     vip?: {
-      price?: number; // precio por mesa
-      remaining?: number; // personas restantes (opcional en algunas APIs)
-      remainingTables?: number; // mesas disponibles
-      unitSize?: number; // personas por mesa
+      price?: number;
+      remaining?: number;
+      remainingTables?: number;
+      unitSize?: number;
     };
   };
 };
@@ -50,6 +50,9 @@ function cleanDigits(s: string) {
   return (s || "").replace(/\D+/g, "");
 }
 
+/* =========================
+   VIPTableModal
+========================= */
 export function VIPTableModal({
   open,
   onOpenChange,
@@ -80,9 +83,7 @@ export function VIPTableModal({
       setCfgLoading(true);
       setCfgError(null);
 
-      // intentamos el endpoint recibido y luego un fallback
       const tryEndpoints = [configEndpoint, "/api/tickets/config"];
-
       for (const ep of tryEndpoints) {
         try {
           const r = await fetch(ep, { cache: "no-store" });
@@ -91,14 +92,11 @@ export function VIPTableModal({
           if (cancelled) return;
 
           const v = data?.tickets?.vip ?? {};
-          const price = typeof v.price === "number" ? v.price : null;
-          const tables =
-            typeof v.remainingTables === "number" ? v.remainingTables : null;
-          const unit = typeof v.unitSize === "number" ? v.unitSize : null;
-
-          setVipPrice(price);
-          setRemainingTables(tables);
-          setUnitSize(unit);
+          setVipPrice(typeof v.price === "number" ? v.price : null);
+          setRemainingTables(
+            typeof v.remainingTables === "number" ? v.remainingTables : null
+          );
+          setUnitSize(typeof v.unitSize === "number" ? v.unitSize : null);
           setCfgLoading(false);
           return;
         } catch {
@@ -223,85 +221,90 @@ export function VIPTableModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[94vw] sm:max-w-lg max-h-[86svh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-3xl font-display flex items-center gap-3">
-            <Sparkles className="w-8 h-8 text-primary" />
+          <DialogTitle className="text-2xl sm:text-3xl font-display flex items-center gap-2 sm:gap-3">
+            <Sparkles className="w-6 h-6 sm:w-8 sm:h-8 text-[#5b0d0d]" />
             Reservar Mesa VIP
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-sm sm:text-base">
             Completá tus datos para reservar tu mesa VIP
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          {/* Price/Stock Display (desde BD) — mismo patrón visual que entradas */}
-          <div className="bg-gradient-to-r from-primary/10 via-secondary/10 to-accent/10 rounded-xl p-6 space-y-3">
-            <h3 className="font-display text-xl font-bold text-center">
+        <div className="space-y-6 py-2 sm:py-4">
+          {/* Price/Stock Display — MISMOS COLORES QUE tickets */}
+          <div className="bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
+            <h3 className="font-display text-lg sm:text-xl font-bold text-center">
               Mesa VIP
             </h3>
 
             {cfgLoading ? (
-              <p className="text-center text-sm text-muted-foreground">
+              <p className="text-center text-sm text-white/85">
                 Cargando configuración…
               </p>
             ) : cfgError ? (
-              <p className="text-center text-sm text-red-600">{cfgError}</p>
+              <p className="text-center text-sm text-red-200">{cfgError}</p>
             ) : (
               <div
-                className={`grid gap-4 ${
+                className={`grid gap-3 sm:gap-4 ${
                   unitSize !== null
                     ? "grid-cols-1 sm:grid-cols-3"
                     : "grid-cols-1 sm:grid-cols-2"
                 }`}
               >
-                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-primary/30">
-                  <p className="text-sm text-muted-foreground mb-1">
+                {/* Precio por mesa */}
+                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                  <p className="text-sm font-bold text-black mb-1">
                     Precio por mesa
                   </p>
-
-                  {/* centrado real */}
                   <div className="flex items-baseline justify-center gap-1">
-                    <span className="text-lg font-bold text-primary">$</span>
-                    <span className="text-2xl font-bold text-primary tabular-nums tracking-tight leading-none">
+                    <span className="text-lg font-bold"> $ </span>
+                    <span
+                      className="
+                        text-2xl font-bold tabular-nums tracking-tight leading-none
+                        bg-gradient-to-r from-[#4a0a0a] via-[#5b0d0d] to-[#7a0a0a]
+                        bg-clip-text text-transparent
+                        bg-[length:200%_200%] animate-[gradient-move_6s_ease-in-out_infinite]
+                      "
+                    >
                       {formatMoney(vipPrice ?? 0)}
                     </span>
                   </div>
                 </div>
 
-                <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-secondary/30">
-                  <p className="text-sm text-muted-foreground mb-1">
+                {/* Mesas disponibles */}
+                <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                  <p className="text-sm font-bold text-black mb-1">
                     Mesas disponibles
                   </p>
-                  <p className="text-2xl font-bold text-secondary">
-                    {remainingTables ?? 0}
-                  </p>
+                  <p className="text-2xl font-bold">{remainingTables ?? 0}</p>
                 </div>
 
+                {/* Equivalencia */}
                 {unitSize !== null && (
-                  <div className="text-center p-4 rounded-lg bg-background/50 border-2 border-accent/30">
-                    <p className="text-sm text-muted-foreground mb-1">
+                  <div className="text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
+                    <p className="text-sm font-bold text-black mb-1">
                       Equivalencia
                     </p>
-                    <p className="text-2xl font-bold text-accent">{unitSize}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      pers./mesa
-                    </p>
+                    <p className="text-2xl font-bold">{unitSize}</p>
+                    <p className="text-xs text-black/70 mt-1">pers./mesa</p>
                   </div>
                 )}
               </div>
             )}
 
             {typeof remainingTables === "number" && (
-              <p className="text-center text-xs text-muted-foreground">
-                La compra reserva <b>1 mesa</b> por transacción.
+              <p className="text-center text-xs sm:text-sm text-white/85">
+                La compra reserva <b className="text-white">1 mesa</b> por
+                transacción.
               </p>
             )}
           </div>
 
-          {/* Datos del cliente — igual layout que entradas, sin género */}
+          {/* Datos del cliente */}
           <div className="space-y-4">
-            <h3 className="font-semibold text-lg">Tus datos</h3>
+            <h3 className="font-semibold text-base sm:text-lg">Tus datos</h3>
 
             <div className="space-y-2">
               <Label htmlFor="vip-name" className="flex items-center gap-2">
@@ -383,11 +386,11 @@ export function VIPTableModal({
             </div>
           </div>
 
-          {/* Summary + Pay — misma sección que entradas */}
-          <div className="bg-gradient-to-r from-primary/10 to-secondary/10 rounded-xl p-6 space-y-4 border-2 border-primary/20">
-            <div className="flex justify-between items-center text-2xl">
+          {/* Summary + Pay — mismos colores que tickets */}
+          <div className="rounded-xl p-4 sm:p-6 space-y-4 border-2 bg-gradient-to-r from-[#4a0a0a]/10 to-[#7a0a0a]/10 border-[#5b0d0d]/20">
+            <div className="flex justify-between items-center text-xl sm:text-2xl">
               <span className="font-bold">Total a pagar:</span>
-              <span className="font-bold text-primary">
+              <span className="font-bold text-[#2a0606]">
                 ${formatMoney(total)}
               </span>
             </div>
@@ -401,7 +404,12 @@ export function VIPTableModal({
                 !vipPrice ||
                 !remainingTables
               }
-              className="w-full text-lg py-6 rounded-full bg-gradient-to-r from-primary via-secondary to-accent hover:scale-105 transition-transform disabled:opacity-60"
+              className="
+                w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
+                bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
+                hover:scale-[1.02] hover:brightness-110
+                transition-transform disabled:opacity-60
+              "
             >
               <CreditCard className="w-5 h-5 mr-2" />
               {isProcessing ? "Procesando..." : "Reservar con Mercado Pago"}

@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
+const RED = "#5b0d0d";
+
 const INITIAL_DJS = [
   {
     name: "DJ Pirata",
@@ -34,43 +36,84 @@ const INITIAL_DJS = [
     spotifyUrl: "",
     youtubeUrl: "https://www.instagram.com/juanc_rmx",
   },
-
-  // Podés agregar hasta 2 más; el componente recorta a 6
 ] as const;
 
 type DJ = (typeof INITIAL_DJS)[number];
 
 export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
-  // Máximo 6 para landing
   const djList: DJ[] = (djs ?? INITIAL_DJS).slice(0, 6) as DJ[];
   const [selectedDJ, setSelectedDJ] = useState<DJ | null>(null);
 
-  if (!djList.length) return null; // si no hay DJs, ocultamos la sección
+  if (!djList.length) return null;
 
-  // Layout dinámico en desktop:
-  // - 4 DJs => 4 columnas (1 fila)
-  // - 5 o 6 DJs => 3 columnas (3+2 o 3+3)
   const lgColsClass = djList.length === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3";
+
+  // helpers de estilo (blanco + rojo con hover invertido)
+  const btnSwap =
+    "rounded-full border transition-colors w-full " +
+    "border-[" +
+    RED +
+    "] bg-white text-[" +
+    RED +
+    "] " +
+    "hover:bg-[" +
+    RED +
+    "] hover:text-white " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[" +
+    RED +
+    "]";
+  const outlineSwap =
+    "rounded-full border w-full " +
+    "border-[" +
+    RED +
+    "] text-[" +
+    RED +
+    "] bg-transparent " +
+    "hover:bg-[" +
+    RED +
+    "] hover:text-white transition-colors " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[" +
+    RED +
+    "]";
 
   return (
     <>
       <section className="py-24 bg-gradient-to-b from-background to-muted/30">
         <div className="container mx-auto px-4">
+          {/* Badge + Título */}
           <div className="text-center mb-16 space-y-4">
-            <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-primary/10 border border-primary/30">
-              <Headphones className="w-5 h-5 text-primary" />
+            <div
+              className="
+                inline-flex items-center gap-3 px-6 py-3 rounded-full
+                bg-white border
+              "
+              style={{ borderColor: RED, color: RED }}
+            >
+              <Headphones className="w-5 h-5" />
               <span className="text-sm font-semibold tracking-wider">
                 LINEUP
               </span>
             </div>
-            <h2 className="text-5xl md:text-7xl font-display text-gradient tracking-tight">
+
+            <h2
+              className="text-5xl md:text-7xl font-display tracking-tight"
+              style={{
+                backgroundImage: `linear-gradient(90deg, ${RED}, #8a1010)`,
+                backgroundSize: "200% 200%",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+              }}
+            >
               DJS DESTACADOS
             </h2>
+
             <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
               Los mejores artistas para hacer vibrar cada noche
             </p>
           </div>
 
+          {/* Cards */}
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 ${lgColsClass} gap-8 justify-items-center`}
           >
@@ -78,7 +121,8 @@ export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
               <Card
                 key={dj.name}
                 onClick={() => setSelectedDJ(dj)}
-                className="group relative overflow-hidden border-2 hover:border-accent transition-all duration-300 hover:scale-105 cursor-pointer w-full max-w-sm"
+                className="group relative overflow-hidden transition-all duration-300 hover:scale-[1.02] cursor-pointer w-full max-w-sm"
+                style={{ borderWidth: 2, borderColor: RED }}
               >
                 <CardContent className="p-0">
                   <div className="relative aspect-square overflow-hidden">
@@ -87,21 +131,36 @@ export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
                       alt={dj.name}
                       className="w-full h-full object-cover object-center group-hover:scale-110 transition-transform duration-500 brightness-90 group-hover:brightness-100"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-background via-background/30 to-transparent opacity-30" />
 
+                    {/* tope inferior con degradado rojo oscuro sutil para lectura */}
+                    <div
+                      className="absolute inset-0"
+                      style={{
+                        background:
+                          "linear-gradient(180deg, rgba(0,0,0,0) 50%, rgba(0,0,0,0.35) 100%)",
+                      }}
+                    />
+
+                    {/* Botón play centrado con rojo */}
                     <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                      <div className="w-16 h-16 rounded-full bg-primary/90 flex items-center justify-center">
-                        <Play className="w-8 h-8 text-primary-foreground ml-1" />
+                      <div
+                        className="w-16 h-16 rounded-full flex items-center justify-center"
+                        style={{ backgroundColor: RED }}
+                      >
+                        <Play className="w-8 h-8 text-white ml-1" />
                       </div>
                     </div>
 
+                    {/* Nombre */}
                     <div className="absolute bottom-0 left-0 right-0 p-6 space-y-2">
-                      <h3 className="text-2xl font-display text-primary-foreground tracking-wide">
+                      <h3 className="text-2xl font-display tracking-wide text-white drop-shadow">
                         {dj.name}
                       </h3>
-                      <p className="text-sm text-primary-foreground/80 font-medium">
-                        {dj.specialty}
-                      </p>
+                      {!!dj.specialty && (
+                        <p className="text-sm text-white/85 font-medium">
+                          {dj.specialty}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -111,6 +170,7 @@ export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
         </div>
       </section>
 
+      {/* Modal */}
       <Dialog
         open={!!selectedDJ}
         onOpenChange={(open) => {
@@ -125,38 +185,34 @@ export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
           </DialogHeader>
 
           <div className="space-y-4">
-            <p className="text-muted-foreground">{selectedDJ?.specialty}</p>
+            {!!selectedDJ?.specialty && (
+              <p className="text-muted-foreground">{selectedDJ.specialty}</p>
+            )}
 
-            {/* ✅ Mostrar solo los botones con enlaces válidos */}
+            {/* Botones: blanco/rojo con hover invertido */}
             <div className="space-y-3">
               {!!selectedDJ?.spotifyUrl?.trim() && (
-                <Button
-                  asChild
-                  className="w-full bg-[#1DB954] hover:bg-[#1ed760] text-white"
-                >
+                <Button asChild className={btnSwap}>
                   <a
                     href={selectedDJ!.spotifyUrl!}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
+                    {/* Ícono genérico de “play/ondas” en lugar del verde de marca */}
                     <svg
                       className="w-5 h-5 mr-2"
                       fill="currentColor"
                       viewBox="0 0 24 24"
                     >
-                      <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3 .719 1.02 .419 1.56-.299.421-1.02.599-1.559.3z" />
+                      <path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm-1 6.5a1 1 0 0 1 1.555-.832l5 3.5a1 1 0 0 1 0 1.664l-5 3.5A1 1 0 0 1 11 15.5v-7z" />
                     </svg>
-                    Escuchar en Spotify
+                    Escuchar
                   </a>
                 </Button>
               )}
 
               {!!selectedDJ?.youtubeUrl?.trim() && (
-                <Button
-                  asChild
-                  variant="outline"
-                  className="w-full border-red-500 text-red-500 hover:bg-red-600 hover:text-white hover:border-red-600 bg-transparent transition-colors focus-visible:ring-red-600"
-                >
+                <Button asChild variant="outline" className={outlineSwap}>
                   <a
                     href={selectedDJ!.youtubeUrl!}
                     target="_blank"
@@ -167,9 +223,9 @@ export function Lineup({ djs = INITIAL_DJS }: { djs?: ReadonlyArray<DJ> }) {
                       fill="currentColor"
                       viewBox="0 0 24 24"
                     >
-                      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                      <path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8zM9.5 15.6V8.4L15.8 12 9.5 15.6z" />
                     </svg>
-                    Ver en YouTube
+                    Ver
                   </a>
                 </Button>
               )}

@@ -13,13 +13,30 @@ export function Header() {
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
-    window.addEventListener("scroll", handleScroll);
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  const btnSwap =
+    "rounded-full border transition-colors shadow-sm " +
+    "border-[#5b0d0d] bg-white text-[#5b0d0d] " +
+    "hover:bg-[#5b0d0d] hover:text-white " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]";
+
+  const iconSwap =
+    "rounded-full border transition-colors w-9 h-9 " +
+    "border-[#5b0d0d] bg-white text-[#5b0d0d] " +
+    "hover:bg-[#5b0d0d] hover:text-white " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]";
+
+  const showOnScrollMobile = scrolled
+    ? "opacity-100 pointer-events-auto"
+    : "opacity-0 pointer-events-none";
+  const transBase = "transition-opacity duration-300";
+
   return (
     <>
-      {/* HEADER: transparente por defecto; blanco solo si hay scroll */}
       <header
         className={`fixed top-0 left-0 right-0 z-50 transition-colors duration-300 ${
           scrolled ? "bg-white/95 backdrop-blur-md shadow-lg" : "bg-transparent"
@@ -27,37 +44,59 @@ export function Header() {
       >
         <div className="container mx-auto px-4">
           <div className="flex items-center justify-between h-16 md:h-20 lg:h-24">
-            {/* Logo */}
-            <div className="flex items-center">
-              <a href="/" className="block" aria-label="Hooka Party">
-                <Image
-                  src="/logov1.png"
-                  alt="Hooka Party"
-                  width={800}
-                  height={300}
-                  priority
-                  className="h-full w-auto max-h-16 md:max-h-20 lg:max-h-24 shrink-0"
-                  sizes="(max-width: 768px) 64px, (max-width: 1024px) 80px, 96px"
-                />
-              </a>
-            </div>
+            {/* LOGO MOBILE: aparece solo al scrollear */}
+            <a
+              href="/"
+              aria-label="Hooka Party"
+              className={`block md:hidden ${transBase} ${showOnScrollMobile}`}
+            >
+              <Image
+                src="/logov1.png"
+                alt="Hooka Party"
+                width={1000}
+                height={400}
+                priority
+                className="h-auto w-auto max-h-14 xs:max-h-16 sm:max-h-20"
+                /* ~56px -> 80px de alto aprox */
+                sizes="(max-width: 480px) 120px, (max-width: 768px) 160px, 0px"
+              />
+            </a>
 
-            {/* Desktop actions */}
-            <div className="hidden md:flex items-center gap-3">
+            {/* LOGO DESKTOP: oculto arriba, visible al scrollear */}
+            <a
+              href="/"
+              aria-label="Hooka Party"
+              className={`hidden md:block ${transBase} ${
+                scrolled ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
+            >
+              <Image
+                src="/logov1.png"
+                alt="Hooka Party"
+                width={1400}
+                height={500}
+                priority
+                className="h-auto w-auto max-h-16 lg:max-h-20 xl:max-h-28"
+                /* ~64px -> 80px -> 112px de alto */
+                sizes="(min-width: 1280px) 220px, (min-width: 1024px) 180px, (min-width: 768px) 150px, 0px"
+              />
+            </a>
+
+            {/* ACCIONES DESKTOP */}
+            <div className="hidden md:flex items-center gap-3 ml-auto">
               <Button
                 size="sm"
                 onClick={() => setTicketModalOpen(true)}
-                className="rounded-full bg-gradient-to-r from-primary to-secondary text-primary-foreground font-semibold hover:scale-105 transition-transform"
+                className={`${btnSwap} font-semibold px-5 py-5`}
               >
                 <Ticket className="w-4 h-4 mr-2" />
                 Comprar Entrada
               </Button>
-
               <div className="flex items-center gap-2">
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-primary hover:text-primary-foreground transition-all hover:scale-110"
+                  className={iconSwap}
                   asChild
                 >
                   <a
@@ -71,7 +110,7 @@ export function Header() {
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-secondary hover:text-secondary-foreground transition-all hover:scale-110"
+                  className={iconSwap}
                   asChild
                 >
                   <a
@@ -85,7 +124,7 @@ export function Header() {
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-accent hover:text-accent-foreground transition-all hover:scale-110"
+                  className={iconSwap}
                   asChild
                 >
                   <a
@@ -99,26 +138,28 @@ export function Header() {
               </div>
             </div>
 
-            {/* Mobile burger */}
-            <div className="flex md:hidden items-center gap-2">
+            {/* BURGER MOBILE: aparece solo al scrollear */}
+            <div
+              className={`md:hidden flex items-center gap-2 ${transBase} ${showOnScrollMobile}`}
+            >
               <Button
                 size="icon"
                 variant="ghost"
-                className="rounded-full"
+                className={`rounded-full ${scrolled ? "text-[#5b0d0d]" : "text-white"}`}
                 onClick={() => setMobileMenuOpen((v) => !v)}
                 aria-expanded={mobileMenuOpen}
                 aria-controls="mobile-menu"
               >
                 {mobileMenuOpen ? (
-                  <X className="w-5 h-5" />
+                  <X className="w-6 h-6" />
                 ) : (
-                  <Menu className="w-5 h-5" />
+                  <Menu className="w-6 h-6" />
                 )}
               </Button>
             </div>
           </div>
 
-          {/* MOBILE MENU: solo el panel es blanco */}
+          {/* MENÚ MOBILE */}
           {mobileMenuOpen && (
             <div
               id="mobile-menu"
@@ -130,17 +171,16 @@ export function Header() {
                   setTicketModalOpen(true);
                   setMobileMenuOpen(false);
                 }}
-                className="w-full rounded-full bg-gradient-to-r from-primary to-secondary text-primary-foreground font-semibold"
+                className={`${btnSwap} w-full font-semibold py-5`}
               >
                 <Ticket className="w-4 h-4 mr-2" />
                 Comprar Entrada
               </Button>
-
               <div className="flex items-center justify-center gap-3">
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-primary hover:text-primary-foreground transition-all"
+                  className={iconSwap}
                   asChild
                 >
                   <a
@@ -154,7 +194,7 @@ export function Header() {
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-secondary hover:text-secondary-foreground transition-all"
+                  className={iconSwap}
                   asChild
                 >
                   <a
@@ -168,7 +208,7 @@ export function Header() {
                 <Button
                   size="icon"
                   variant="ghost"
-                  className="rounded-full hover:bg-accent hover:text-accent-foreground transition-all"
+                  className={iconSwap}
                   asChild
                 >
                   <a
