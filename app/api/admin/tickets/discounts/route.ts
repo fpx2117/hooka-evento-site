@@ -1,4 +1,7 @@
 // app/api/admin/tickets/discounts/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { jwtVerify } from "jose";
@@ -35,6 +38,7 @@ function json(payload: any, init?: number | ResponseInit) {
   );
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
+  headers.set("Content-Type", "application/json; charset=utf-8");
   return NextResponse.json(payload, { ...initObj, headers });
 }
 
@@ -65,9 +69,9 @@ function toDiscountType(v?: string): DiscountType | undefined {
   return t === "percent" ? "percent" : t === "amount" ? "amount" : undefined;
 }
 
-/** gender: admite "hombre" | "mujer" | "null" (string) -> null; undefined = no-proveer */
+/** gender param: "hombre" | "mujer" | "null" (string) -> null; undefined = no filtrar */
 function parseGenderParam(raw: string | null): Gender | null | undefined {
-  if (raw === null) return undefined; // no filtrar
+  if (raw === null) return undefined; // sin filtro
   const t = (raw || "").toLowerCase();
   if (!t || t === "null") return null;
   if (t === "hombre") return "hombre";
@@ -84,14 +88,20 @@ async function getActiveEventId() {
   return ev?.id || null;
 }
 
+const ORDER = [
+  { ticketType: "asc" as const },
+  { minQty: "asc" as const },
+  { priority: "desc" as const },
+  { createdAt: "asc" as const },
+];
+
 /* =========================================================
    GET /api/admin/tickets/discounts
    • Si hay admin-token => modo ADMIN (filtros completos)
-   • Si NO hay token    => modo PÚBLICO (solo reglas activas
-                           del evento activo; ignora isActive)
-   Filtros soportados:
+   • Si NO hay token    => modo PÚBLICO (solo reglas activas del evento)
+   Filtros:
      ticketType=general|vip
-     isActive=true|false   (solo en modo admin)
+     isActive=true|false   (solo admin)
      gender=hombre|mujer|null
 ========================================================= */
 export async function GET(request: NextRequest) {
@@ -109,7 +119,7 @@ export async function GET(request: NextRequest) {
       return json({ error: "Parámetro gender inválido" }, 400);
     }
 
-    // ======= MODO ADMIN (requiere auth) =======
+    // ======= ADMIN =======
     if (auth) {
       const isActiveRaw = sp.get("isActive");
 
@@ -120,18 +130,13 @@ export async function GET(request: NextRequest) {
 
       const rules = await prisma.discountRule.findMany({
         where,
-        orderBy: [
-          { ticketType: "asc" },
-          { minQty: "asc" },
-          { priority: "desc" },
-          { createdAt: "asc" },
-        ],
+        orderBy: ORDER,
       });
 
       return json({ ok: true, rules, mode: "admin" });
     }
 
-    // ======= MODO PÚBLICO (sin auth) =======
+    // ======= PÚBLICO =======
     const wherePublic: any = { eventId, isActive: true };
     if (ticketType) wherePublic.ticketType = ticketType;
     if (genderParsed !== undefined) wherePublic.gender = genderParsed;
@@ -146,15 +151,10 @@ export async function GET(request: NextRequest) {
         type: true,
         value: true,
         priority: true,
-        isActive: true, // siempre true acá
+        isActive: true,
         createdAt: true,
       },
-      orderBy: [
-        { ticketType: "asc" },
-        { minQty: "asc" },
-        { priority: "desc" },
-        { createdAt: "asc" },
-      ],
+      orderBy: ORDER,
     });
 
     return json({ ok: true, rules: rulesPublic, mode: "public" });
@@ -166,16 +166,6 @@ export async function GET(request: NextRequest) {
 
 /* =========================
    POST /api/admin/tickets/discounts
-   Body:
-   {
-     ticketType: "general" | "vip",
-     minQty: number,
-     type: "percent" | "amount",
-     value: number,
-     priority?: number,
-     isActive?: boolean,
-     gender?: "hombre" | "mujer" | null
-   }
 ========================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -188,7 +178,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as any;
 
     const ticketType = toTicketType(s(body.ticketType));
-    const minQty = n(body.minQty);
+    let minQty = n(body.minQty);
     const dType = toDiscountType(s(body.type));
     const value = n(body.value);
     const priority = n(body.priority, 0) ?? 0;
@@ -202,10 +192,15 @@ export async function POST(request: NextRequest) {
       finalGender = g ?? null;
     }
 
+    // Para VIP, ignoramos género (si viene) -> null
+    if (ticketType === "vip") finalGender = null;
+
     // Validaciones
     if (!ticketType) return json({ error: "ticketType inválido" }, 400);
     if (typeof minQty !== "number" || minQty < 1)
       return json({ error: "minQty debe ser >= 1" }, 400);
+    minQty = Math.floor(minQty);
+
     if (!dType) return json({ error: "type inválido" }, 400);
     if (typeof value !== "number" || value < 0)
       return json({ error: "value debe ser >= 0" }, 400);
@@ -250,17 +245,6 @@ export async function POST(request: NextRequest) {
 
 /* =========================
    PATCH /api/admin/tickets/discounts
-   Body (se requiere id):
-   {
-     id: string,
-     ticketType?: "general" | "vip",
-     minQty?: number,
-     type?: "percent" | "amount",
-     value?: number,
-     priority?: number,
-     isActive?: boolean,
-     gender?: "hombre" | "mujer" | null
-   }
 ========================= */
 export async function PATCH(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -280,13 +264,16 @@ export async function PATCH(request: NextRequest) {
       const tt = toTicketType(s(body.ticketType));
       if (!tt) return json({ error: "ticketType inválido" }, 400);
       data.ticketType = tt;
+
+      // si pasa a VIP, forzamos gender null
+      if (tt === "vip") data.gender = null;
     }
 
     if (body.minQty !== undefined) {
-      const mq = n(body.minQty);
+      let mq = n(body.minQty);
       if (typeof mq !== "number" || mq < 1)
         return json({ error: "minQty debe ser >= 1" }, 400);
-      data.minQty = mq;
+      data.minQty = Math.floor(mq);
     }
 
     if (body.type !== undefined) {

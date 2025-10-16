@@ -1,9 +1,12 @@
 // app/api/send-confirmation/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import QRCode from "qrcode";
 import { Resend } from "resend";
-import { PaymentStatus as PS } from "@prisma/client";
+import { PaymentStatus as PS, TicketType } from "@prisma/client";
 import { normalizeSixDigitCode } from "@/lib/validation-code";
 
 /* -------------------------------------------------------------------------- */
@@ -84,7 +87,7 @@ const DEFAULT_BRAND: Brand = {
     bg: process.env.HOOKA_BG || "#0A0E27",
     card: process.env.HOOKA_CARD || "#1A1F3A",
     qrDark: process.env.HOOKA_QR_DARK || "#1A1A2E",
-    qrLight: process.env.HOOKA_QR_LIGHT || "#FFFFFF",
+    qrLight: "#FFFFFF",
   },
 };
 
@@ -194,7 +197,7 @@ function emailTemplate({
 
         <div style="position:relative; padding:32px 24px;">
           <div style="background:linear-gradient(135deg, rgba(255,0,110,0.15) 0%, rgba(255,190,11,0.15) 100%);
-                      border-left:5px solid ${colors.accent};
+                      border-left:5px solid ${brand.colors.accent};
                       border-radius:12px;
                       padding:20px 24px;
                       margin-bottom:24px;">
@@ -211,47 +214,47 @@ function emailTemplate({
           ${
             validationCode
               ? `
-              <div style="background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
-                          padding:28px 24px; text-align:center; border-radius:20px; margin:24px 0;
-                          box-shadow:0 12px 40px rgba(255,0,110,0.5), 0 0 60px rgba(255,190,11,0.3);
-                          border:3px solid rgba(255,255,255,0.2);">
-                <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${brand.colors.accent};">
-                  <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${brand.colors.accent};">
-                    🫦 Código de Validación 🫦
-                  </p>
-                </div>
-                <div style="background:rgba(0,0,0,0.3); border-radius:16px; padding:20px; margin:12px auto; max-width:320px; border:2px solid rgba(255,255,255,0.15);">
-                  <div style="font-size:36px; font-weight:900; letter-spacing:12px; line-height:1; color:#FFFFFF;">
-                    ${validationCode}
-                  </div>
-                </div>
-                <p style="margin:12px 0 0 0; font-size:14px; font-weight:600; color:rgba(255,255,255,0.95);">
-                  ✨ Mostrá este código o tu QR al personal ✨
+            <div style="background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
+                        padding:28px 24px; text-align:center; border-radius:20px; margin:24px 0;
+                        box-shadow:0 12px 40px rgba(255,0,110,0.5), 0 0 60px rgba(255,190,11,0.3);
+                        border:3px solid rgba(255,255,255,0.2);">
+              <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${brand.colors.accent};">
+                <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${brand.colors.accent};">
+                  🫦 Código de Validación 🫦
                 </p>
-              </div>`
+              </div>
+              <div style="background:rgba(0,0,0,0.3); border-radius:16px; padding:20px; margin:12px auto; max-width:320px; border:2px solid rgba(255,255,255,0.15);">
+                <div style="font-size:36px; font-weight:900; letter-spacing:12px; line-height:1; color:#FFFFFF;">
+                  ${validationCode}
+                </div>
+              </div>
+              <p style="margin:12px 0 0 0; font-size:14px; font-weight:600; color:rgba(255,255,255,0.95);">
+                ✨ Mostrá este código o tu QR al personal ✨
+              </p>
+            </div>`
               : ""
           }
 
           ${
             qrCodeImage
               ? `
-              <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
-                          background:#FFFFFF; border:4px solid transparent; position:relative;
-                          padding:24px; border-radius:20px; margin:24px auto;
-                          box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
-                <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${brand.colors.gradientFrom} 0%, ${brand.colors.accent} 50%, ${brand.colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
-                <div style="background:#FFFFFF; border-radius:12px; padding:12px 20px; margin-bottom:16px; display:inline-block;">
-                  <h3 style="margin:0; font-size:20px; font-weight:800; color:${brand.colors.gradientFrom};">
-                    🫦 Tu Código QR 🫦
-                  </h3>
-                </div>
-                <div style="background:#FFFFFF; border-radius:16px; padding:16px; display:inline-block; box-shadow:0 8px 24px rgba(0,0,0,0.15);">
-                  <img src="${qrCodeImage}" alt="QR de validación" width="240" style="max-width:240px; height:auto; border-radius:8px;"/>
-                </div>
-                <p style="font-size:13px; color:#555; margin:16px 0 0 0; font-weight:600; line-height:1.5;">
-                  📱 Mostrá este código o tu QR al personal 📱
-                </p>
-              </div>`
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
+                        background:#FFFFFF; border:4px solid transparent; position:relative;
+                        padding:24px; border-radius:20px; margin:24px auto;
+                        box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
+              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${brand.colors.gradientFrom} 0%, ${brand.colors.accent} 50%, ${brand.colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
+              <div style="background:#FFFFFF; border-radius:12px; padding:12px 20px; margin-bottom:16px; display:inline-block;">
+                <h3 style="margin:0; font-size:20px; font-weight:800; color:${brand.colors.gradientFrom};">
+                  🫦 Tu Código QR 🫦
+                </h3>
+              </div>
+              <div style="background:#FFFFFF; border-radius:16px; padding:16px; display:inline-block; box-shadow:0 8px 24px rgba(0,0,0,0.15);">
+                <img src="${qrCodeImage}" alt="QR de validación" width="240" style="max-width:240px; height:auto; border-radius:8px;"/>
+              </div>
+              <p style="font-size:13px; color:#555; margin:16px 0 0 0; font-weight:600; line-height:1.5;">
+                📱 Mostrá este código o tu QR al personal 📱
+              </p>
+            </div>`
               : ""
           }
 
@@ -297,22 +300,25 @@ function emailTemplate({
 /* -------------------------------------------------------------------------- */
 
 type Payload = {
-  type?: "ticket" | "vip-table";
+  type?: "ticket" | "vip-table"; // compat: "vip-table" se trata como ticket VIP
   recordId?: string;
   force?: boolean; // reenviar aunque exista emailSentAt (omite lock)
 };
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
 export async function POST(request: NextRequest) {
   try {
-    const { type, recordId, force } = (await request.json()) as Payload;
+    let { type, recordId, force } = (await request.json()) as Payload;
     if (!type || !recordId) {
       return NextResponse.json(
         { error: "type y recordId son requeridos" },
         { status: 400 }
       );
+    }
+
+    // Compat: si vino "vip-table", lo normalizamos a "ticket"
+    if (type === "vip-table") type = "ticket";
+    if (type !== "ticket") {
+      return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });
     }
 
     const BASE = getPublicBaseUrl(request);
@@ -346,298 +352,170 @@ export async function POST(request: NextRequest) {
       return res;
     }
 
-    /* ----------------------------- ENTRADA (ticket GENERAL) ---------------------------- */
-    if (type === "ticket") {
-      const t = await prisma.ticket.findUnique({
-        where: { id: recordId },
-        select: {
-          id: true,
-          customerName: true,
-          customerEmail: true,
-          ticketType: true, // en nuestro modelo actual es "general"
-          gender: true, // "hombre" | "mujer" | null
-          validationCode: true,
-          totalPrice: true,
-          paymentStatus: true,
-          emailSentAt: true,
-          event: { select: { name: true, date: true } },
-        },
-      });
+    // ---- Cargamos el ticket (GENERAL o VIP) ----
+    const t = await prisma.ticket.findUnique({
+      where: { id: recordId },
+      select: {
+        id: true,
+        ticketType: true, // "general" | "vip"
+        gender: true, // sólo general
+        quantity: true, // sólo general
+        vipLocation: true, // sólo vip
+        vipTables: true, // sólo vip
+        capacityPerTable: true, // sólo vip
+        validationCode: true,
+        totalPrice: true,
+        paymentStatus: true,
+        emailSentAt: true,
+        customerName: true,
+        customerEmail: true,
+        event: { select: { name: true, date: true } },
+      },
+    });
 
-      if (!t) {
-        return NextResponse.json(
-          { error: "Ticket no encontrado" },
-          { status: 404 }
-        );
-      }
-      if (t.paymentStatus !== PS.approved) {
-        return NextResponse.json(
-          { error: "El pago no está aprobado para este ticket" },
-          { status: 409 }
-        );
-      }
+    if (!t) {
+      return NextResponse.json(
+        { error: "Ticket no encontrado" },
+        { status: 404 }
+      );
+    }
+    if (t.paymentStatus !== PS.approved) {
+      return NextResponse.json(
+        { error: "El pago no está aprobado para este ticket" },
+        { status: 409 }
+      );
+    }
 
-      const normalizedCode = normalizeSixDigitCode(t.validationCode);
-      if (!normalizedCode) {
-        return NextResponse.json(
-          {
-            error: "El ticket aprobado no posee un validationCode de 6 dígitos",
-          },
-          { status: 409 }
-        );
-      }
+    const normalizedCode = normalizeSixDigitCode(t.validationCode);
+    if (!normalizedCode) {
+      return NextResponse.json(
+        { error: "El ticket aprobado no posee un validationCode de 6 dígitos" },
+        { status: 409 }
+      );
+    }
 
-      if (!t.customerEmail) {
-        return NextResponse.json(
-          { error: "customerEmail vacío" },
-          { status: 400 }
-        );
-      }
+    if (!t.customerEmail) {
+      return NextResponse.json(
+        { error: "customerEmail vacío" },
+        { status: 400 }
+      );
+    }
 
-      if (t.emailSentAt && !force) {
-        return NextResponse.json(
-          { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
-          { status: 200 }
-        );
-      }
+    if (t.emailSentAt && !force) {
+      return NextResponse.json(
+        { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
+        { status: 200 }
+      );
+    }
 
-      const brand = resolveBrand();
+    const brand = resolveBrand();
+    const title = `🫦 ${t.event?.name || brand.name} 🫦`;
+    const dateStr = t.event?.date
+      ? new Date(t.event.date).toLocaleDateString("es-AR")
+      : "";
+
+    let subject = "";
+    let detailsHtml = "";
+
+    if (t.ticketType === TicketType.general) {
+      // ------ General ------
       const typeLabel = "Entrada General";
-      const title = `🫦 ${t.event?.name || brand.name} 🫦`;
-      const dateStr = t.event?.date
-        ? new Date(t.event.date).toLocaleDateString("es-AR")
-        : "";
+      subject = `🫦 ${typeLabel} — Código: ${normalizedCode}`;
       const genderLine = t.gender
         ? `<strong>Género:</strong> ${cap(t.gender)}<br/>`
         : "";
+      const qtyLine =
+        typeof t.quantity === "number"
+          ? `<strong>Cantidad:</strong> ${t.quantity}<br/>`
+          : "";
 
-      const detailsHtml =
+      detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `<strong>Tipo:</strong> ${typeLabel}<br/>` +
         `${genderLine}` +
+        `${qtyLine}` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
+    } else {
+      // ------ VIP ------
+      const locLabel = prettyLocation(t.vipLocation);
+      subject = `🫦 Mesa VIP — ${locLabel} — Código: ${normalizedCode}`;
+      const tables = Math.max(1, Number(t.vipTables ?? 1));
+      const capPerTable = Math.max(1, Number(t.capacityPerTable ?? 0));
+      const totalCap = capPerTable ? capPerTable * tables : undefined;
 
-      const validateUrl = buildValidateUrl(BASE, normalizedCode);
-      const qrImage = await makeQrDataUrl(validateUrl, brand);
-
-      const html = emailTemplate({
-        brand,
-        title,
-        subtitle: "Tu entrada está confirmada",
-        name: t.customerName || "invitad@",
-        detailsHtml,
-        validationCode: normalizedCode,
-        qrCodeImage: qrImage || undefined,
-      });
-
-      let reservedAt: Date | null = null;
-      if (!force) {
-        reservedAt = new Date();
-        const lock = await prisma.ticket.updateMany({
-          where: { id: t.id, emailSentAt: null, paymentStatus: PS.approved },
-          data: { emailSentAt: reservedAt },
-        });
-        if (lock.count === 0) {
-          return NextResponse.json(
-            { ok: true, alreadySent: true },
-            { status: 200 }
-          );
-        }
-      }
-
-      try {
-        const result = await enviar({
-          to: t.customerEmail,
-          subject: `🫦 ${typeLabel} — Código: ${normalizedCode}`,
-          html,
-        });
-
-        if (force) {
-          await prisma.ticket.update({
-            where: { id: t.id },
-            data: { emailSentAt: new Date() },
-          });
-        }
-
-        return NextResponse.json({
-          success: true,
-          validateUrl,
-          emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
-          ...result,
-        });
-      } catch (err) {
-        if (!force && reservedAt) {
-          await prisma.ticket.update({
-            where: { id: t.id },
-            data: { emailSentAt: null },
-          });
-        }
-        throw err;
-      }
+      detailsHtml =
+        `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
+        `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
+        `<strong>Ubicación:</strong> ${locLabel}<br/>` +
+        `<strong>Mesas:</strong> ${tables}<br/>` +
+        `${capPerTable ? `<strong>Capacidad por mesa (ref):</strong> ${capPerTable} personas<br/>` : ""}` +
+        `${totalCap ? `<strong>Capacidad total (ref):</strong> ${totalCap} personas<br/>` : ""}` +
+        `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
+        `</div>`;
     }
 
-    /* ------------------------- MESA VIP (vip-table + location) ------------------------- */
-    if (type === "vip-table") {
-      const r = await prisma.tableReservation.findUnique({
-        where: { id: recordId },
-        select: {
-          id: true,
-          customerName: true,
-          customerEmail: true,
-          packageType: true,
-          tables: true,
-          capacity: true,
-          validationCode: true,
-          totalPrice: true,
-          paymentStatus: true,
-          emailSentAt: true,
-          location: true, // redundante, pero útil si lo guardás en la reserva
-          vipTableConfig: {
-            select: {
-              location: true,
-              capacityPerTable: true,
-              price: true,
-            },
-          },
-          event: { select: { name: true, date: true } },
-        },
+    const validateUrl = buildValidateUrl(BASE, normalizedCode);
+    const qrImage = await makeQrDataUrl(validateUrl, brand);
+
+    const html = emailTemplate({
+      brand,
+      title,
+      subtitle:
+        t.ticketType === TicketType.vip
+          ? "Tu mesa VIP está confirmada"
+          : "Tu entrada está confirmada",
+      name: t.customerName || "invitad@",
+      detailsHtml,
+      validationCode: normalizedCode,
+      qrCodeImage: qrImage || undefined,
+    });
+
+    let reservedAt: Date | null = null;
+    if (!force) {
+      reservedAt = new Date();
+      const lock = await prisma.ticket.updateMany({
+        where: { id: t.id, emailSentAt: null, paymentStatus: PS.approved },
+        data: { emailSentAt: reservedAt },
       });
-
-      if (!r) {
+      if (lock.count === 0) {
         return NextResponse.json(
-          { error: "Reserva no encontrada" },
-          { status: 404 }
-        );
-      }
-      if (r.paymentStatus !== PS.approved) {
-        return NextResponse.json(
-          { error: "El pago no está aprobado para esta reserva" },
-          { status: 409 }
-        );
-      }
-
-      const normalizedCode = normalizeSixDigitCode(r.validationCode);
-      if (!normalizedCode) {
-        return NextResponse.json(
-          {
-            error:
-              "La reserva aprobada no posee un validationCode de 6 dígitos",
-          },
-          { status: 409 }
-        );
-      }
-
-      if (!r.customerEmail) {
-        return NextResponse.json(
-          { error: "customerEmail vacío" },
-          { status: 400 }
-        );
-      }
-
-      if (r.emailSentAt && !force) {
-        return NextResponse.json(
-          { ok: true, alreadySent: true, emailSentAt: r.emailSentAt },
+          { ok: true, alreadySent: true },
           { status: 200 }
         );
       }
-
-      const brand = resolveBrand();
-      const title = `🫦 ${r.event?.name || brand.name} 🫦`;
-      const dateStr = r.event?.date
-        ? new Date(r.event.date).toLocaleDateString("es-AR")
-        : "";
-
-      const locationRaw =
-        r.vipTableConfig?.location || (r as any).location || "general";
-      const locationLabel = prettyLocation(locationRaw);
-      const capPerTable = Math.max(
-        1,
-        Number(r.vipTableConfig?.capacityPerTable || 0)
-      );
-      const inferredCapPerTable =
-        capPerTable ||
-        (r.tables && r.capacity
-          ? Math.max(1, Math.floor(r.capacity / r.tables))
-          : 0);
-
-      const detailsHtml =
-        `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
-        `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
-        `<strong>Ubicación:</strong> ${locationLabel}<br/>` +
-        `<strong>Mesas:</strong> ${r.tables || 1}<br/>` +
-        `${
-          inferredCapPerTable
-            ? `<strong>Capacidad por mesa (ref):</strong> ${inferredCapPerTable} personas<br/>`
-            : ""
-        }` +
-        `<strong>Capacidad total (ref):</strong> ${
-          r.capacity || inferredCapPerTable * (r.tables || 1) || 0
-        } personas<br/>` +
-        `<strong>Total:</strong> $ ${formatARS(r.totalPrice)}<br/>` +
-        `</div>`;
-
-      const validateUrl = buildValidateUrl(BASE, normalizedCode);
-      const qrImage = await makeQrDataUrl(validateUrl, brand);
-
-      const html = emailTemplate({
-        brand,
-        title,
-        subtitle: "Tu mesa VIP está confirmada",
-        name: r.customerName || "invitad@",
-        detailsHtml,
-        validationCode: normalizedCode,
-        qrCodeImage: qrImage || undefined,
-      });
-
-      let reservedAt: Date | null = null;
-      if (!force) {
-        reservedAt = new Date();
-        const lock = await prisma.tableReservation.updateMany({
-          where: { id: r.id, emailSentAt: null, paymentStatus: PS.approved },
-          data: { emailSentAt: reservedAt },
-        });
-        if (lock.count === 0) {
-          return NextResponse.json(
-            { ok: true, alreadySent: true },
-            { status: 200 }
-          );
-        }
-      }
-
-      try {
-        const result = await enviar({
-          to: r.customerEmail,
-          subject: `🫦 Mesa VIP — ${locationLabel} — Código: ${normalizedCode}`,
-          html,
-        });
-
-        if (force) {
-          await prisma.tableReservation.update({
-            where: { id: r.id },
-            data: { emailSentAt: new Date() },
-          });
-        }
-
-        return NextResponse.json({
-          success: true,
-          validateUrl,
-          emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
-          ...result,
-        });
-      } catch (err) {
-        if (!force && reservedAt) {
-          await prisma.tableReservation.update({
-            where: { id: r.id },
-            data: { emailSentAt: null },
-          });
-        }
-        throw err;
-      }
     }
 
-    return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });
+    try {
+      const result = await enviar({
+        to: t.customerEmail,
+        subject,
+        html,
+      });
+
+      if (force) {
+        await prisma.ticket.update({
+          where: { id: t.id },
+          data: { emailSentAt: new Date() },
+        });
+      }
+
+      return NextResponse.json({
+        success: true,
+        validateUrl,
+        emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
+        ...result,
+      });
+    } catch (err) {
+      if (!force && reservedAt) {
+        await prisma.ticket.update({
+          where: { id: t.id },
+          data: { emailSentAt: null },
+        });
+      }
+      throw err;
+    }
   } catch (error) {
     console.error("[send-confirmation] Error:", error);
     return NextResponse.json(

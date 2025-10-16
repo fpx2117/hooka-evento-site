@@ -1,5 +1,5 @@
 // ========================================================
-// Prisma Schema — Eventos con Entradas Generales y Mesas VIP
+// Prisma Schema — Entradas Generales y VIP (por ubicación)
 // DB: PostgreSQL
 // ========================================================
 
@@ -52,10 +52,6 @@ enum TicketType {
   vip
 }
 
-enum PackageType {
-  mesa
-}
-
 // ========================= Admin =========================
 
 model Admin {
@@ -81,17 +77,15 @@ model Event {
   vipConfigs    VipTableConfig[]
 
   tickets       Ticket[]
-  tableRes      TableReservation[]
-
   discountRules DiscountRule[]
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
 
-// ========================= Tickets =========================
-// Un ticket representa una operación de acceso (puede cubrir N personas vía quantity).
-// Para VIP, gender = null y puede vincularse a una TableReservation.
+// ========================= Ticket (ÚNICA entidad de venta) =========================
+// - GENERAL: quantity = personas, gender = hombre|mujer, vip* = null
+// - VIP:     vipLocation + vipTables + capacityPerTable (quantity no se usa para stock)
 
 model Ticket {
   id                 String         @id @default(cuid())
@@ -100,8 +94,13 @@ model Ticket {
   event              Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   ticketType         TicketType
-  gender             Gender?
-  quantity           Int            @default(1)        // personas
+  gender             Gender?                 // sólo en general
+  quantity           Int            @default(1) // personas (sólo general)
+
+  // VIP (por ubicación, en mesas)
+  vipLocation        TableLocation?
+  vipTables          Int?                      // mesas compradas (VIP)
+  capacityPerTable   Int?                      // personas por mesa (VIP)
 
   totalPrice         Decimal        @db.Decimal(10, 2)
 
@@ -127,13 +126,6 @@ model Ticket {
   ticketConfigId     String?
   ticketConfig       TicketConfig?  @relation(fields: [ticketConfigId], references: [id], onDelete: SetNull)
 
-  // Relación con reserva VIP (si corresponde)
-  tableReservationId String?
-  tableReservation   TableReservation? @relation(fields: [tableReservationId], references: [id], onDelete: SetNull)
-
-  // Ubicación (opcional, para reporting rápido; también se infiere desde la reserva)
-  location           TableLocation?
-
   // Idempotencia de mail/entrega
   emailSentAt        DateTime?
 
@@ -142,75 +134,16 @@ model Ticket {
 
   @@index([eventId])
   @@index([customerEmail])
-  @@index([paymentId])
   @@index([customerDni])
+  @@index([paymentId])
   @@index([paymentStatus, purchaseDate])
   @@index([ticketType, gender])
   @@index([emailSentAt])
-  @@index([tableReservationId])
-}
-
-// ========================= Reservas de Mesa VIP =========================
-// Representa la compra/reserva de MESAS (stock operativo en mesas).
-// El cupo GLOBAL (personas) se descuenta al aprobar generando Ticket vip.
-
-model TableReservation {
-  id               String         @id @default(cuid())
-
-  eventId          String
-  event            Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  packageType      PackageType    @default(mesa)
-  location         TableLocation
-
-  tables           Int            @default(1)          // cantidad de mesas
-  capacity         Int                                 // personas = tables * capacityPerTable
-  guests           Int            @default(0)
-
-  totalPrice       Decimal        @db.Decimal(10, 2)
-
-  customerName     String
-  customerEmail    String
-  customerPhone    String
-  customerDni      String
-  reservationDate  DateTime
-
-  paymentId        String?        @unique
-  paymentStatus    PaymentStatus  @default(pending)
-  paymentMethod    PaymentMethod  @default(mercadopago)
-
-  qrCode           String?        @unique
-  validationCode   String?        @unique
-  validated        Boolean        @default(false)
-  validatedAt      DateTime?
-
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-  expiresAt        DateTime?
-
-  vipTableConfigId String?
-  vipTableConfig   VipTableConfig? @relation(fields: [vipTableConfigId], references: [id], onDelete: SetNull)
-
-  // Emails idempotentes
-  emailSentAt      DateTime?
-
-  // Relación inversa a tickets emitidos por aprobación
-  tickets          Ticket[]
-
-  @@index([eventId])
-  @@index([customerEmail])
-  @@index([paymentId])
-  @@index([reservationDate])
-  @@index([customerDni])
-  @@index([paymentStatus, reservationDate])
-  @@index([location, reservationDate])
-  @@index([emailSentAt])
+  @@index([vipLocation])
 }
 
 // ========================= Reglas de descuento =========================
-// Por cantidad y tipo de ticket. Para VIP gender = null.
-// ⚠️ Para compatibilidad con datos existentes, usamos String en ticketType
-// (valores esperados: "general" | "vip").
+// String para compatibilidad (valores esperados: "general" | "vip")
 
 model DiscountRule {
   id         String        @id @default(cuid())
@@ -218,14 +151,14 @@ model DiscountRule {
   eventId    String
   event      Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  ticketType String        // "general" | "vip"  (String para no romper filas antiguas NULL)
-  gender     Gender?
+  ticketType String        // "general" | "vip"
+  gender     Gender?       // en VIP es null
 
   minQty     Int
   type       DiscountType
   value      Decimal       @db.Decimal(10, 2)
   isActive   Boolean       @default(true)
-  priority   Int           @default(0)   // desempate
+  priority   Int           @default(0)
 
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
@@ -238,8 +171,8 @@ model DiscountRule {
 // Filas típicas por evento:
 // - (ticketType="general", gender=hombre)
 // - (ticketType="general", gender=mujer)
-// - (ticketType="vip",     gender=null)  -> precio por persona VIP (si aplica)
 // - (ticketType="total",   gender=null)  -> cupo TOTAL (personas) del evento
+// (Si querés precio por persona VIP —poco común— podés agregar fila "vip", gender=null)
 
 model TicketConfig {
   id         String        @id @default(cuid())
@@ -247,11 +180,11 @@ model TicketConfig {
   eventId    String
   event      Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  ticketType String        // se mantiene String para permitir "total"
+  ticketType String        // "general" | "total" | (opcional "vip")
   gender     Gender?
 
   price      Decimal       @db.Decimal(10, 2)
-  stockLimit Int           @default(0)
+  stockLimit Int           @default(0) // para "total" = cupo total (personas)
   soldCount  Int           @default(0)
 
   tickets    Ticket[]
@@ -265,8 +198,9 @@ model TicketConfig {
   @@index([ticketType])
 }
 
-// ========================= Configuración MESAS VIP =========================
-// Stock por ubicación (en MESAS) y capacidad por mesa.
+// ========================= Configuración MESAS VIP (por ubicación) =========================
+// Stock y precio por ubicación (en MESAS) + capacidad por mesa.
+// Se descuenta/incrementa en función de Tickets VIP aprobados/anulados.
 
 model VipTableConfig {
   id               String        @id @default(cuid())
@@ -277,11 +211,9 @@ model VipTableConfig {
   location         TableLocation
   price            Decimal       @db.Decimal(10, 2)
 
-  stockLimit       Int
-  soldCount        Int           @default(0)
+  stockLimit       Int           // mesas totales disponibles en esta ubicación
+  soldCount        Int           @default(0) // mesas vendidas (suma de vipTables aprobadas)
   capacityPerTable Int           @default(10)
-
-  tableRes         TableReservation[]
 
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt

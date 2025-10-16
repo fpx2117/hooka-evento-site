@@ -10,7 +10,7 @@ import {
   Copy,
   MapPin,
   Users,
-  Grid3X3,
+  Grid3x3, // <- fix: nombre correcto
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -36,8 +36,7 @@ type PublicTicketOk = {
   // VIP (TableReservation)
   location?: TableLocation | null;
   tables?: number | null;
-  capacity?: number | null; // puede ser TOTAL
-  // 👇 algunos endpoints ya devuelven esto; si no, lo inferimos
+  capacity?: number | null;
   capacityPerTable?: number | null;
   guests?: number | null;
 };
@@ -63,7 +62,6 @@ const isConfirmOk = (x: ConfirmResp): x is ConfirmOk =>
 /* =========================
    Helpers
 ========================= */
-// normalizar a 6 dígitos estrictos (quita todo salvo [0-9])
 const normalizeCode = (v?: string | null) => {
   const digits = (v ?? "").replace(/\D+/g, "");
   return /^\d{6}$/.test(digits) ? digits : "";
@@ -81,7 +79,6 @@ function getPublicBaseUrl(): string {
   return "";
 }
 
-// build con código ya normalizado
 function buildValidateUrl(code: string) {
   const base = getPublicBaseUrl();
   const prefix = base ? `${base}` : "";
@@ -111,7 +108,6 @@ export default function PaymentSuccessPage() {
   const [validationCode, setValidationCode] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
-  // Estado de confirmación del pago (solo para UI)
   const [approved, setApproved] = useState<boolean | null>(null);
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
 
@@ -164,7 +160,7 @@ export default function PaymentSuccessPage() {
             }
           }
         } catch {
-          // ignore this try
+          /* ignore */
         }
       }
       const wait =
@@ -177,7 +173,6 @@ export default function PaymentSuccessPage() {
   useEffect(() => {
     const run = async () => {
       try {
-        // 1) Parametría de MP
         const paymentId =
           searchParams.get("payment_id") ||
           searchParams.get("collection_id") ||
@@ -189,11 +184,9 @@ export default function PaymentSuccessPage() {
           "";
         const externalRef = searchParams.get("external_reference") || "";
 
-        // 2) pista de la URL
         const approvedFromParams =
           (statusParam || "").toLowerCase() === "approved";
 
-        // 3) endpoints de confirmación
         const confirmUrls: string[] = [];
         if (paymentId)
           confirmUrls.push(
@@ -206,7 +199,6 @@ export default function PaymentSuccessPage() {
             )}`
           );
 
-        // 4) type/record desde external_reference
         let localType: "ticket" | "vip-table" | null = null;
         let localRecordId: string | null = null;
         if (externalRef.includes(":")) {
@@ -217,7 +209,6 @@ export default function PaymentSuccessPage() {
           }
         }
 
-        // 5) confirmación inmediata
         let confirmedApproved: boolean | null = null;
         let typeFromConfirm: "ticket" | "vip-table" | undefined;
         let recordIdFromConfirm: string | undefined;
@@ -235,7 +226,6 @@ export default function PaymentSuccessPage() {
                   : (data.status || "").toLowerCase() === "approved";
               setConfirmed(true);
 
-              // si ya trae validationCode válido
               const codeFromConfirm = normalizeCode(data.validationCode);
               if (codeFromConfirm) {
                 setValidationCode(codeFromConfirm);
@@ -256,7 +246,6 @@ export default function PaymentSuccessPage() {
         if (typeFromConfirm) localType = typeFromConfirm;
         if (recordIdFromConfirm) localRecordId = recordIdFromConfirm;
 
-        // 6) polling si aún no aprobó
         let approvedNow = approvedFromParams || confirmedApproved === true;
         if (!approvedNow && confirmUrls.length) {
           const polled = await pollForApproval(confirmUrls);
@@ -271,7 +260,6 @@ export default function PaymentSuccessPage() {
           }
         }
 
-        // 7) reflejar estado preliminar
         const approvalKnown =
           approvedFromParams ||
           confirmedApproved !== null ||
@@ -280,7 +268,6 @@ export default function PaymentSuccessPage() {
         if (localType) setType(localType);
         if (localRecordId) setRecordId(localRecordId);
 
-        // 8) consultar info pública (agrega location/tables para VIP)
         if (localType && localRecordId) {
           const require = approvedNow ? "&requireApproved=1" : "";
           const r = await fetch(
@@ -297,7 +284,6 @@ export default function PaymentSuccessPage() {
               setApproved(true);
             }
 
-            // Guardar code si faltaba
             const code = normalizeCode(info.validationCode);
             if (code && !validationCode) {
               setValidationCode(code);
@@ -308,7 +294,6 @@ export default function PaymentSuccessPage() {
               setVipLocation((info.location as TableLocation) ?? null);
               setVipTables(info.tables ?? null);
 
-              // capacityPerTable puede venir directo o la inferimos
               const capPerTableFromApi = (info as any).capacityPerTable ?? null;
               const inferred =
                 capPerTableFromApi ??
@@ -351,7 +336,7 @@ export default function PaymentSuccessPage() {
     try {
       await navigator.clipboard.writeText(validationCode);
     } catch {
-      // ignore
+      /* ignore */
     }
   };
 
@@ -434,7 +419,6 @@ export default function PaymentSuccessPage() {
               </div>
             ) : approved ? (
               <>
-                {/* Detalle VIP si corresponde */}
                 {type === "vip-table" && (
                   <div className="rounded-xl bg-white/8 border border-white/15 p-4 text-sm">
                     <div className="flex flex-wrap gap-2 items-center">
@@ -446,7 +430,7 @@ export default function PaymentSuccessPage() {
                       )}
                       {vipTables != null && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1">
-                          <Grid3X3 className="w-4 h-4" />
+                          <Grid3x3 className="w-4 h-4" />
                           Mesas: <b>{vipTables}</b>
                         </span>
                       )}
@@ -526,7 +510,8 @@ export default function PaymentSuccessPage() {
               </div>
             )}
 
-            <div className="rounded-xl border border-white/10 bg:white/5 p-4 text-[12px] text-white/80">
+            {/* fix: bg-white/5 (antes tenía 'bg:white/5') */}
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-[12px] text-white/80">
               Te enviamos toda la info para disfrutar de HOOKA. Si tenés dudas,
               respondé el email de confirmación.
               {confirmed === true && approved === false && (

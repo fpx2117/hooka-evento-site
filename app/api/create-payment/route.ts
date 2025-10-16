@@ -40,7 +40,7 @@ const DEFAULT_CURRENCY = "ARS";
 
 /* ========================= Tipos de request ========================= */
 type CreateBody = {
-  type: "ticket" | "vip-table";
+  type: "ticket"; // ahora siempre es Ticket; distinguir por ticketType internamente
   items?: Array<{
     title?: string;
     description?: string;
@@ -55,8 +55,11 @@ type CreateBody = {
     additionalInfo?: {
       eventId?: string;
       eventCode?: string;
+      // General
       gender?: "hombre" | "mujer";
       quantity?: number; // entradas (general)
+      // VIP
+      ticketType?: "vip" | "general"; // preferido
       tables?: number; // mesas (vip)
       location?: "dj" | "piscina" | "general"; // ubicación VIP
     };
@@ -79,6 +82,7 @@ async function getActiveRulesFor(
   const rows = await prisma.discountRule.findMany({
     where: { eventId, ticketType, isActive: true },
     select: { id: true, minQty: true, type: true, value: true, priority: true },
+    orderBy: [{ minQty: "asc" }, { priority: "desc" }, { createdAt: "asc" }],
   });
   return rows.map((r) => ({
     id: r.id,
@@ -140,9 +144,6 @@ export async function POST(req: NextRequest) {
     }
 
     const body: CreateBody = await req.json();
-    if (body.type !== "ticket" && body.type !== "vip-table") {
-      return NextResponse.json({ error: "type inválido" }, { status: 400 });
-    }
 
     // === Evento activo por code/id o último activo ===
     const codeOrId =
@@ -179,11 +180,18 @@ export async function POST(req: NextRequest) {
     const payerPhone = onlyDigits(s(body.payer?.phone));
     const payerDni = onlyDigits(s(body.payer?.dni));
 
+    // ¿Qué tipo de ticket se quiere? Por compatibilidad:
+    const requestedType =
+      (s(body.payer?.additionalInfo?.ticketType)?.toLowerCase() as
+        | "general"
+        | "vip"
+        | undefined) ?? "general";
+
     /* ======================================================================
-       VIP por ubicación -> crea TableReservation (paymentStatus=pending) y
-       Preference de MP por el total de mesas (1 ítem)
+       VIP (ticketType = "vip") -> crea TICKET PENDING y Preference
+       Chequea: mesas disponibles por ubicación + cupo total en personas
     ====================================================================== */
-    if (body.type === "vip-table") {
+    if (requestedType === "vip") {
       const tables = Math.max(
         1,
         n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
@@ -224,38 +232,90 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // Chequeo de cupo TOTAL (personas)
+      const cfgTotal = await prisma.ticketConfig.findFirst({
+        where: { eventId: event.id, ticketType: "total", gender: null },
+        select: { stockLimit: true },
+      });
+      const totalLimit = Number(cfgTotal?.stockLimit ?? 0);
+
+      const [soldGenHAggr, soldGenMAggr, vipCfgs] = await Promise.all([
+        prisma.ticket.aggregate({
+          where: {
+            eventId: event.id,
+            ticketType: "general",
+            gender: "hombre",
+            paymentStatus: "approved" as any,
+          },
+          _sum: { quantity: true },
+        }),
+        prisma.ticket.aggregate({
+          where: {
+            eventId: event.id,
+            ticketType: "general",
+            gender: "mujer",
+            paymentStatus: "approved" as any,
+          },
+          _sum: { quantity: true },
+        }),
+        prisma.vipTableConfig.findMany({
+          where: { eventId: event.id },
+          select: { soldCount: true, capacityPerTable: true },
+        }),
+      ]);
+      const soldGenH = Number(soldGenHAggr._sum.quantity || 0);
+      const soldGenM = Number(soldGenMAggr._sum.quantity || 0);
+      const vipPersonsSold = (vipCfgs || []).reduce((acc, c) => {
+        const soldTables = Math.max(0, Number(c.soldCount || 0));
+        const eachCap = Math.max(
+          1,
+          Number(c.capacityPerTable || VIP_UNIT_SIZE)
+        );
+        return acc + soldTables * eachCap;
+      }, 0);
+      const soldTotalPersons = soldGenH + soldGenM + vipPersonsSold;
+      const remainingTotalPersons = Math.max(0, totalLimit - soldTotalPersons);
+
+      const newVipPersons = tables * cap;
+      if (newVipPersons > remainingTotalPersons) {
+        return NextResponse.json(
+          { error: "No hay cupo total disponible para esa cantidad de mesas" },
+          { status: 409 }
+        );
+      }
+
       const unitPriceFromDB = Number(cfg.price) || 0;
 
       // Descuento por mesa (usa reglas 'vip')
       const rules = await getActiveRulesFor(event.id, "vip");
       const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
-      // Crear reserva PENDING
-      const createdRes = await prisma.tableReservation.create({
+      // Crear Ticket VIP (PENDING)
+      const createdVip = await prisma.ticket.create({
         data: {
           eventId: event.id,
-          vipTableConfigId: cfg.id,
-          packageType: "mesa",
-          location: location as any,
-          tables,
-          capacity: tables * cap,
-          guests: 0,
+          eventDate: event.date,
+          ticketType: "vip",
+          gender: null,
+          quantity: 1, // no se usa para stock VIP, queda en 1 por consistencia
+          vipLocation: location as any,
+          vipTables: tables,
+          capacityPerTable: cap,
           totalPrice: total,
           customerName: payerName,
           customerEmail: payerEmail,
           customerPhone: payerPhone,
           customerDni: payerDni,
-          reservationDate: new Date(),
           paymentStatus: "pending" as any,
           paymentMethod: "mercadopago" as any,
         },
         select: { id: true, totalPrice: true },
       });
 
-      // Preferencia (1 ítem = total de mesas)
+      // Preferencia (1 ítem = total mesas)
       const mpItems = [
         {
-          id: createdRes.id,
+          id: createdVip.id,
           title:
             body.items?.[0]?.title ||
             `Mesa VIP - ${prettyLocation(location)} x${tables}`,
@@ -263,7 +323,7 @@ export async function POST(req: NextRequest) {
             body.items?.[0]?.description ||
             `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
           quantity: 1,
-          unit_price: Number(createdRes.totalPrice) || 0,
+          unit_price: Number(createdVip.totalPrice) || 0,
           currency_id: DEFAULT_CURRENCY,
         },
       ];
@@ -285,19 +345,20 @@ export async function POST(req: NextRequest) {
         },
         ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
         notification_url: new URL("/api/webhooks/mercadopago", base).toString(),
-        external_reference: `vip-table-res:${createdRes.id}`,
+        external_reference: `ticket:${createdVip.id}`, // 👈 ahora todo es Ticket
         binary_mode:
           (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
         payment_methods: {
           excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
         },
         metadata: {
-          type: "vip-table",
-          tableReservationId: createdRes.id, // 👈 el webhook lo lee
+          type: "ticket",
+          ticketType: "vip",
+          recordId: createdVip.id, // 👈 el webhook usa esto
           eventId: event.id,
           eventCode: event.code,
-          location,
-          tables,
+          vipLocation: location,
+          vipTables: tables,
           capacityPerTable: cap,
           pricePerTable: unitPriceFromDB,
         },
@@ -313,9 +374,7 @@ export async function POST(req: NextRequest) {
       try {
         createdPref = await pref.create({
           body: preferenceBody,
-          requestOptions: {
-            idempotencyKey: `pref:vip-table-res:${createdRes.id}`,
-          },
+          requestOptions: { idempotencyKey: `pref:ticket:${createdVip.id}` },
         });
       } catch (err: any) {
         console.error("[MP preference error][VIP]", {
@@ -326,8 +385,8 @@ export async function POST(req: NextRequest) {
           base,
           preferenceBody,
         });
-        await prisma.tableReservation.update({
-          where: { id: createdRes.id },
+        await prisma.ticket.update({
+          where: { id: createdVip.id },
           data: { paymentStatus: "failed_preference" as any },
         });
         return NextResponse.json(
@@ -346,8 +405,8 @@ export async function POST(req: NextRequest) {
           : undefined);
 
       if (!redirect_url) {
-        await prisma.tableReservation.update({
-          where: { id: createdRes.id },
+        await prisma.ticket.update({
+          where: { id: createdVip.id },
           data: { paymentStatus: "failed_preference" as any },
         });
         return NextResponse.json(
@@ -447,7 +506,7 @@ export async function POST(req: NextRequest) {
     const rules = await getActiveRulesFor(event.id, "general");
     const { total } = pickBestDiscount(qty, unitPriceFromDB, rules);
 
-    // Crear Ticket PENDING
+    // Crear Ticket GENERAL (PENDING)
     const created = await prisma.ticket.create({
       data: {
         eventId: event.id,
@@ -505,6 +564,7 @@ export async function POST(req: NextRequest) {
       },
       metadata: {
         type: "ticket",
+        ticketType: "general",
         recordId: created.id,
         eventId: event.id,
         eventCode: event.code,

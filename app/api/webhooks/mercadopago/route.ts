@@ -61,9 +61,7 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
   const sig = parseXSignature(req.headers.get("x-signature"));
   const requestId = req.headers.get("x-request-id") || "";
   const secret = process.env.MP_WEBHOOK_SECRET || "";
-
-  // En sandbox/desarrollo, si no seteaste secret, no bloqueamos
-  if (!secret) return true;
+  if (!secret) return true; // en dev no bloqueamos
   if (!sig || !requestId || !body?.data?.id) return false;
 
   const ts = sig.ts;
@@ -86,26 +84,30 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
 /* ========================= Utilidades ========================= */
 
 function extractRecordRef(payment: any): {
-  type?: "vip-table" | "ticket";
+  type?: "ticket";
   recordId?: string;
 } {
   const md = payment?.metadata || {};
-  let type: any = md.type;
-  let recordId: string | undefined =
-    md.recordId || md.record_id || md.tableReservationId;
+  let metaType: any = md.type; // esperamos "ticket"
+  let recordId: string | undefined = md.recordId || md.record_id;
 
-  // fallback: parsear external_reference "X:<id>"
-  if ((!type || !recordId) && typeof payment?.external_reference === "string") {
+  // compat: antes usábamos tableReservationId o external_reference vip-table-res:<id>
+  if (!recordId) recordId = md.tableReservationId;
+  if (
+    (!metaType || !recordId) &&
+    typeof payment?.external_reference === "string"
+  ) {
     const [t, id] = String(payment.external_reference).split(":");
-    if (!type && t) type = t;
+    if (!metaType && t) metaType = t;
     if (!recordId && id) recordId = id;
   }
 
-  // normalización legacy
-  if (type === "vip-table-res") type = "vip-table";
+  // normalización legacy -> siempre devolvemos "ticket"
+  if (metaType === "vip-table" || metaType === "vip-table-res")
+    metaType = "ticket";
 
-  if (type !== "vip-table" && type !== "ticket") return {};
-  return { type, recordId };
+  if (metaType !== "ticket" || !recordId) return {};
+  return { type: "ticket", recordId };
 }
 
 function nearlyEqual(a: number, b: number, eps = 0.01) {
@@ -220,17 +222,7 @@ async function fetchMerchantOrder(orderId: string) {
 }
 
 /* ========================= Persistencia (BD) ========================= */
-async function getExpectedAmount(
-  type: "vip-table" | "ticket",
-  recordId: string
-) {
-  if (type === "vip-table") {
-    const rec = await prisma.tableReservation.findUnique({
-      where: { id: recordId },
-      select: { totalPrice: true },
-    });
-    return Number(rec?.totalPrice ?? 0);
-  }
+async function getExpectedAmount(recordId: string) {
   const rec = await prisma.ticket.findUnique({
     where: { id: recordId },
     select: { totalPrice: true },
@@ -238,31 +230,7 @@ async function getExpectedAmount(
   return Number(rec?.totalPrice ?? 0);
 }
 
-async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
-  if (type === "vip-table") {
-    const prev = await prisma.tableReservation.findUnique({
-      where: { id: recordId },
-      select: { paymentStatus: true },
-    });
-    return (prev?.paymentStatus as string) ?? null;
-  }
-  const prev = await prisma.ticket.findUnique({
-    where: { id: recordId },
-    select: { paymentStatus: true },
-  });
-  return (prev?.paymentStatus as string) ?? null;
-}
-
-async function getPrevPaymentInfo(
-  type: "vip-table" | "ticket",
-  recordId: string
-) {
-  if (type === "vip-table") {
-    return prisma.tableReservation.findUnique({
-      where: { id: recordId },
-      select: { paymentId: true, paymentStatus: true },
-    });
-  }
+async function getPrevPaymentInfo(recordId: string) {
   return prisma.ticket.findUnique({
     where: { id: recordId },
     select: { paymentId: true, paymentStatus: true },
@@ -270,39 +238,42 @@ async function getPrevPaymentInfo(
 }
 
 /**
- * Ajusta soldCount en VipTableConfig por transición de estado:
- * +1 al pasar a approved por primera vez
- * -1 al pasar de approved -> refunded/cancelled/charged_back
+ * Ajusta soldCount en VipTableConfig por transición de estado de un Ticket VIP:
+ * +vipTables al pasar a approved por primera vez
+ * -vipTables al pasar de approved -> refunded/cancelled/charged_back
  * (con clamp 0..stockLimit)
  */
-async function adjustVipTableSoldCountByTransition(
+async function adjustVipSoldCountByTransition(
   tx: Tx,
-  recordId: string,
+  ticketId: string,
   opts: { fromApproved: boolean; toApproved: boolean }
 ) {
   const { fromApproved, toApproved } = opts;
-  if (fromApproved === toApproved) return; // no hay cambio neto
+  if (fromApproved === toApproved) return;
 
-  // data mínima de la reserva
-  const res = await tx.tableReservation.findUnique({
-    where: { id: recordId },
+  // Datos del ticket VIP
+  const t = await tx.ticket.findUnique({
+    where: { id: ticketId },
     select: {
-      vipTableConfigId: true,
-      tables: true,
+      ticketType: true,
       eventId: true,
-      location: true,
+      vipLocation: true,
+      vipTables: true,
     },
   });
-  if (!res) throw new Error("vip_table_reservation_not_found");
+  if (!t || t.ticketType !== "vip" || !t.vipLocation) return;
 
-  const tables = Math.max(1, res.tables || 1);
+  const tables = Math.max(1, Number(t.vipTables || 1));
+  // Buscar config por (eventId, location)
   const cfg = await tx.vipTableConfig.findUnique({
-    where: { id: res.vipTableConfigId! },
+    where: {
+      eventId_location: { eventId: t.eventId, location: t.vipLocation },
+    },
     select: { id: true, soldCount: true, stockLimit: true },
   });
-  if (!cfg) throw new Error("vip_table_config_not_found");
+  if (!cfg) return;
 
-  const delta = toApproved && !fromApproved ? +tables : -tables; // approved gain / approved loss
+  const delta = toApproved && !fromApproved ? +tables : -tables;
   const next = Math.max(0, Math.min(cfg.stockLimit, cfg.soldCount + delta));
 
   if (next !== cfg.soldCount) {
@@ -314,14 +285,13 @@ async function adjustVipTableSoldCountByTransition(
 }
 
 /**
- * Persistir estado de pago.
+ * Persistir estado de pago para Ticket.
  * - Actualiza paymentId, paymentStatus, paymentMethod="mercadopago".
  * - Si queda aprobado fuerte, asegura validationCode (idempotente).
- * - Para VIP, ajusta soldCount por transición de estado approved<->no-approved.
+ * - Si el ticket es VIP, ajusta soldCount en VipTableConfig según transición.
  * - Devuelve el validationCode (si quedó aprobado) para log/debug.
  */
 async function persistStatus(
-  type: "vip-table" | "ticket",
   recordId: string,
   payment: any,
   approvedStrong: boolean,
@@ -329,65 +299,44 @@ async function persistStatus(
 ) {
   return prisma.$transaction(async (tx: Tx) => {
     const newStatus = String(payment?.status ?? "pending") as PaymentStatus;
-    const baseUpdate = {
-      paymentId: String(payment?.id ?? ""),
-      paymentStatus: newStatus as any,
-      paymentMethod: "mercadopago" as const,
-    };
 
-    if (type === "vip-table") {
-      await tx.tableReservation.update({
-        where: { id: recordId },
-        data: baseUpdate,
-      });
+    await tx.ticket.update({
+      where: { id: recordId },
+      data: {
+        paymentId: String(payment?.id ?? ""),
+        paymentStatus: newStatus as any,
+        paymentMethod: "mercadopago",
+      },
+    });
 
-      const wasApproved = String(prevStatus) === "approved";
-      const isApprovedNow = approvedStrong && newStatus === "approved";
+    // Transición de stock si es VIP
+    const wasApproved = String(prevStatus) === "approved";
+    const isApprovedNow = approvedStrong && newStatus === "approved";
+    await adjustVipSoldCountByTransition(tx, recordId, {
+      fromApproved: wasApproved,
+      toApproved: isApprovedNow,
+    });
 
-      // Transición de stock por approved
-      await adjustVipTableSoldCountByTransition(tx, recordId, {
-        fromApproved: wasApproved,
-        toApproved: isApprovedNow,
-      });
-
-      // Código de validación sólo si terminó aprobado
-      if (isApprovedNow) {
-        await ensureSixDigitCode(tx, { type: "vip-table", id: recordId });
-      }
-
-      const r = await tx.tableReservation.findUnique({
-        where: { id: recordId },
-        select: { validationCode: true },
-      });
-      return normalizeSixDigitCode(r?.validationCode);
-    } else {
-      // === ticket (GENERAL)
-      await tx.ticket.update({ where: { id: recordId }, data: baseUpdate });
-
-      const isApprovedNow = approvedStrong && newStatus === "approved";
-      if (isApprovedNow) {
-        await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
-      }
-
-      const t = await tx.ticket.findUnique({
-        where: { id: recordId },
-        select: { validationCode: true },
-      });
-      return normalizeSixDigitCode(t?.validationCode);
+    // Código de validación si quedó aprobado
+    if (isApprovedNow) {
+      await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
     }
+
+    const t = await tx.ticket.findUnique({
+      where: { id: recordId },
+      select: { validationCode: true },
+    });
+    return normalizeSixDigitCode(t?.validationCode);
   });
 }
 
-async function sendConfirmation(
-  type: "vip-table" | "ticket",
-  recordId: string
-) {
+async function sendConfirmation(recordId: string) {
   try {
     const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
     await fetch(`${base.replace(/\/+$/, "")}/api/send-confirmation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, recordId }),
+      body: JSON.stringify({ type: "ticket", recordId }),
       cache: "no-store",
     });
   } catch (e) {
@@ -402,7 +351,7 @@ async function processPaymentById(paymentId: string) {
   const payment = await fetchPaymentWithRetry(paymentId);
 
   const { type, recordId } = extractRecordRef(payment);
-  if (!type || !recordId) {
+  if (type !== "ticket" || !recordId) {
     console.warn("[webhook] pago sin type/recordId válido. Ignoro.", {
       external_reference: payment?.external_reference,
       metadata: payment?.metadata,
@@ -410,39 +359,35 @@ async function processPaymentById(paymentId: string) {
     return { ok: true, ignored: true };
   }
 
-  const expectedAmount = await getExpectedAmount(type, recordId);
+  const expectedAmount = await getExpectedAmount(recordId);
   const approvedStrong = isApprovedStrong({
     payment,
     expectedAmount,
     expectedCurrency: EXPECTED_CURRENCY,
-    expectedRef: `${type}:${recordId}`,
+    expectedRef: `ticket:${recordId}`,
   });
 
-  // idempotencia real: si no cambia el status, devolvemos rápido
-  const prevInfo = await getPrevPaymentInfo(type, recordId);
+  // Idempotencia: si no cambia, salir
+  const prevInfo = await getPrevPaymentInfo(recordId);
   const prevStatus = (prevInfo?.paymentStatus as string) ?? null;
   const prevPaymentId = prevInfo?.paymentId || null;
 
   const newStatus = String(payment?.status ?? "pending") as PaymentStatus;
-
-  // Si ya tenemos ese paymentId y el status coinciden, nada que hacer
   if (prevPaymentId === String(payment?.id || "") && prevStatus === newStatus) {
     return { ok: true, idempotent: true, status: newStatus, id: payment?.id };
   }
 
   const validationCode = await persistStatus(
-    type,
     recordId,
     payment,
     approvedStrong,
     prevStatus
   );
 
-  // Enviar email sólo si la transición fue a approved (antes NO aprobado)
   const wasApprovedBefore = String(prevStatus) === "approved";
   const isApprovedNow = approvedStrong && newStatus === "approved";
   if (!wasApprovedBefore && isApprovedNow) {
-    await sendConfirmation(type, recordId);
+    await sendConfirmation(recordId);
   }
 
   return {
@@ -499,7 +444,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     console.log("[webhook] MP recibido:", body);
 
-    // Firma opcional (desactivada si no seteás MP_WEBHOOK_SECRET)
+    // Firma opcional
     const trusted = await isValidFromMercadoPago(req, body);
     if (!trusted) {
       console.warn(
@@ -516,7 +461,7 @@ export async function POST(req: NextRequest) {
       } catch (e: any) {
         if (String(e?.message) === "payment_not_found_after_retries") {
           console.warn(
-            "[webhook] payment 404 persistente; devuelvo 202, esperar próximo retry."
+            "[webhook] payment 404 persistente; devuelvo 202, retry luego."
           );
           return NextResponse.json(
             { ok: false, retry_later: true },

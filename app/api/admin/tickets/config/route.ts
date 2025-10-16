@@ -1,5 +1,10 @@
+// app/api/admin/tickets/config/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { TableLocation as TL } from "@prisma/client";
 
 // 1 mesa VIP = N personas (default 10) — clamp mínimo 1
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
@@ -15,6 +20,7 @@ function json(payload: any, init?: number | ResponseInit) {
   );
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
+  headers.set("Content-Type", "application/json; charset=utf-8");
   return NextResponse.json(payload, { ...initObj, headers });
 }
 
@@ -29,6 +35,16 @@ function clampNonNegative(n: number | undefined) {
 }
 
 const hasValue = (v: unknown) => v !== undefined && v !== null;
+
+function parseLocation(v: unknown): TL | null {
+  const s = String(v ?? "")
+    .toLowerCase()
+    .trim();
+  if (s === "dj") return TL.dj;
+  if (s === "piscina") return TL.piscina;
+  if (s === "general") return TL.general;
+  return null;
+}
 
 async function getOrCreateActiveEvent() {
   // Busca evento activo y trae sus configs
@@ -310,8 +326,8 @@ export async function PATCH(req: NextRequest) {
     const vipTables = Array.isArray(body?.vipTables) ? body.vipTables : [];
 
     for (const row of vipTables) {
-      const location = (row?.location || "").toString().toLowerCase();
-      if (!["dj", "piscina", "general"].includes(location)) continue;
+      const locEnum = parseLocation(row?.location);
+      if (!locEnum) continue;
 
       const price = clampNonNegative(toNumber(row?.price, 0));
       const stockLimit = clampNonNegative(toNumber(row?.stockLimit, 0));
@@ -322,7 +338,7 @@ export async function PATCH(req: NextRequest) {
 
       // upsert POR ÍNDICE COMPUESTO del schema: @@unique([eventId, location])
       const existing = await prisma.vipTableConfig.findUnique({
-        where: { eventId_location: { eventId: event.id, location } },
+        where: { eventId_location: { eventId: event.id, location: locEnum } },
         select: { id: true, soldCount: true },
       });
 
@@ -336,7 +352,7 @@ export async function PATCH(req: NextRequest) {
         await prisma.vipTableConfig.create({
           data: {
             eventId: event.id,
-            location,
+            location: locEnum,
             price,
             stockLimit,
             capacityPerTable,

@@ -6,9 +6,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { MercadoPagoConfig, Preference } from "mercadopago";
 
-/* ========================= Config / helpers ========================= */
 const DEFAULT_CURRENCY = "ARS";
 
+/* ========== helpers url ========== */
 function isHttps(url?: string | null) {
   return !!url && /^https:\/\/[^ ]+$/i.test((url || "").trim());
 }
@@ -28,14 +28,29 @@ function getBaseUrl(req: NextRequest) {
   return isHttps(guessed) || isLocalHttp(guessed) ? guessed : "";
 }
 
-// Normaliza a 2 decimales (MP espera number)
+/* ========== helpers varios ========== */
+const s = (v: unknown) =>
+  v === undefined || v === null ? undefined : String(v).trim();
+
 function toMoney2(n: unknown) {
   const x = Number(n || 0);
   return Math.round(x * 100) / 100;
 }
 
+function prettyVipLocation(loc?: string | null) {
+  switch ((loc || "").toLowerCase()) {
+    case "dj":
+      return "DJ";
+    case "piscina":
+      return "Piscina";
+    default:
+      return "General";
+  }
+}
+
 /** Tipado del payload del frontend (precio SIEMPRE sale de BD) */
 type CreatePreferencePayload = {
+  /** Preferí "ticket". Se acepta "vip-table" por compat pero igual se usa Ticket. */
   type: "ticket" | "vip-table";
   recordId: string;
 
@@ -91,15 +106,16 @@ export async function POST(req: NextRequest) {
     }
     const canAutoReturn = isHttps(BASE_URL);
 
-    const payload = (await req.json()) as Partial<CreatePreferencePayload>;
-
-    // Validaciones mínimas
+    const raw = (await req.json()) as Partial<CreatePreferencePayload>;
     const errors: string[] = [];
-    if (!payload?.type) errors.push("type");
-    if (payload?.type && !["vip-table", "ticket"].includes(payload.type)) {
+    const rawType = s(raw.type)?.toLowerCase();
+    const recordId = s(raw.recordId);
+
+    if (!rawType) errors.push("type");
+    if (rawType && !["vip-table", "ticket"].includes(rawType)) {
       errors.push("type inválido");
     }
-    if (!payload?.recordId) errors.push("recordId");
+    if (!recordId) errors.push("recordId");
     if (errors.length) {
       return NextResponse.json(
         { error: "Campos faltantes/invalidos", details: errors },
@@ -107,91 +123,40 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { type, recordId } = payload as CreatePreferencePayload;
+    // A efectos del nuevo modelo, siempre trabajamos con Ticket.
+    // Aceptamos "vip-table" por compatibilidad pero leemos el Ticket (que puede ser 'vip' o 'general').
+    const { title, pictureUrl, categoryId, currency, itemId, backUrls } =
+      raw as CreatePreferencePayload;
 
-    // ===== Leer TOTAL desde BD (NUNCA del cliente)
-    let dbTotal = 0;
-    let visualTitle = (payload.title || "").trim();
-    const mpItemId = String(payload.itemId ?? recordId);
+    // ===== Leer ticket desde BD
+    const t = await prisma.ticket.findUnique({
+      where: { id: recordId },
+      select: {
+        id: true,
+        paymentStatus: true,
+        totalPrice: true,
+        ticketType: true, // "general" | "vip"
+        gender: true, // para general
+        quantity: true, // para general
+        vipLocation: true, // para vip
+        vipTables: true, // para vip
+      },
+    });
 
-    if (type === "ticket") {
-      // GENERAL vive en Ticket (estado pending)
-      const t = await prisma.ticket.findUnique({
-        where: { id: recordId },
-        select: {
-          id: true,
-          totalPrice: true,
-          ticketType: true, // en tu esquema es String ("general")
-          gender: true, // "hombre" | "mujer" | null
-          quantity: true,
-          paymentStatus: true,
-        },
-      });
-      if (!t) {
-        return NextResponse.json(
-          { error: "ticket no encontrado" },
-          { status: 404 }
-        );
-      }
-      if (t.paymentStatus !== "pending") {
-        return NextResponse.json(
-          { error: "estado inválido para crear preferencia" },
-          { status: 409 }
-        );
-      }
-
-      dbTotal = toMoney2(t.totalPrice);
-
-      // Título por defecto coherente (Tickets actuales: tipo "general")
-      if (!visualTitle) {
-        const gen =
-          t.gender === "mujer"
-            ? "Mujer"
-            : t.gender === "hombre"
-              ? "Hombre"
-              : "General";
-        const qty = t.quantity || 1;
-        visualTitle = `Entrada General - ${gen} x${qty}`;
-      }
-    } else {
-      // VIP vive en TableReservation (estado pending)
-      const r = await prisma.tableReservation.findUnique({
-        where: { id: recordId },
-        select: {
-          id: true,
-          totalPrice: true,
-          tables: true,
-          paymentStatus: true,
-          location: true, // enum: 'piscina' | 'dj' | 'general'
-        },
-      });
-      if (!r) {
-        return NextResponse.json(
-          { error: "reserva no encontrada" },
-          { status: 404 }
-        );
-      }
-      if (r.paymentStatus !== "pending") {
-        return NextResponse.json(
-          { error: "estado inválido para crear preferencia" },
-          { status: 409 }
-        );
-      }
-
-      dbTotal = toMoney2(r.totalPrice);
-
-      if (!visualTitle) {
-        const loc =
-          r.location === "piscina"
-            ? "Piscina"
-            : r.location === "dj"
-              ? "DJ"
-              : "General";
-        const qty = r.tables || 1;
-        visualTitle = `Mesa VIP (Ubicación: ${loc}) x${qty}`;
-      }
+    if (!t) {
+      return NextResponse.json(
+        { error: "ticket no encontrado" },
+        { status: 404 }
+      );
+    }
+    if (t.paymentStatus !== "pending") {
+      return NextResponse.json(
+        { error: "estado inválido para crear preferencia" },
+        { status: 409 }
+      );
     }
 
+    const dbTotal = toMoney2(t.totalPrice);
     if (!(dbTotal > 0)) {
       return NextResponse.json(
         { error: "total en BD inválido" },
@@ -199,27 +164,48 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ===== Armado de preferencia MP =====
-    const currency = (payload.currency || DEFAULT_CURRENCY).toUpperCase();
-    const resolvedCategory =
-      mapInternalCategoryToMpCategory(payload.categoryId) || payload.categoryId;
-    const externalRef = `${type}:${recordId}`;
+    // ===== Título visual por defecto coherente con el tipo real
+    let visualTitle = (title || "").trim();
+    if (!visualTitle) {
+      if (t.ticketType === "vip") {
+        const loc = prettyVipLocation(t.vipLocation);
+        const qty = Math.max(1, Number(t.vipTables || 1));
+        visualTitle = `Mesa VIP (Ubicación: ${loc}) x${qty}`;
+      } else {
+        // general
+        const gen =
+          t.gender === "mujer"
+            ? "Mujer"
+            : t.gender === "hombre"
+              ? "Hombre"
+              : "General";
+        const qty = Math.max(1, Number(t.quantity || 1));
+        visualTitle = `Entrada General - ${gen} x${qty}`;
+      }
+    }
 
-    // Un solo ítem por el total de la orden (precio SIEMPRE desde BD)
+    // ===== MP preference
+    const mpItemId = String(itemId ?? recordId);
+    const resolvedCurrency = (currency || DEFAULT_CURRENCY).toUpperCase();
+    const resolvedCategory =
+      mapInternalCategoryToMpCategory(categoryId) || categoryId;
+
+    // External ref + metadata estandarizados al nuevo modelo
+    const externalRef = `ticket:${recordId}`;
     const preferenceBody = {
       items: [
         {
           id: mpItemId,
-          title: visualTitle || "Compra",
+          title: visualTitle,
           quantity: 1,
           unit_price: dbTotal,
-          currency_id: currency,
-          picture_url: payload.pictureUrl || undefined,
+          currency_id: resolvedCurrency,
+          picture_url: pictureUrl || undefined,
           category_id: resolvedCategory || undefined,
         },
       ],
       external_reference: externalRef,
-      metadata: { type, recordId },
+      metadata: { type: "ticket", recordId },
 
       notification_url: `${BASE_URL}/api/webhooks/mercadopago`,
       ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
@@ -227,15 +213,13 @@ export async function POST(req: NextRequest) {
         (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
 
       back_urls: {
-        success: payload.backUrls?.success || `${BASE_URL}/payment/success`,
-        pending: payload.backUrls?.pending || `${BASE_URL}/payment/pending`,
-        failure: payload.backUrls?.failure || `${BASE_URL}/payment/failure`,
+        success: backUrls?.success || `${BASE_URL}/payment/success`,
+        pending: backUrls?.pending || `${BASE_URL}/payment/pending`,
+        failure: backUrls?.failure || `${BASE_URL}/payment/failure`,
       },
-
-      // statement_descriptor: "ALLDATA*EVENTOS", // opcional
+      // statement_descriptor: "ALLDATA*EVENTOS",
     };
 
-    // ===== SDK + idempotencia =====
     const mp = new MercadoPagoConfig({
       accessToken: MP_TOKEN,
       options: { timeout: 5000 },
@@ -245,7 +229,8 @@ export async function POST(req: NextRequest) {
     const created = await pref.create({
       body: preferenceBody as any,
       requestOptions: {
-        idempotencyKey: `pref-${externalRef}`, // evita duplicados por reintentos
+        // Idempotencia por ticket
+        idempotencyKey: `pref:ticket:${recordId}`,
       },
     });
 

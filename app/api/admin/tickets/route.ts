@@ -12,15 +12,14 @@ import {
   TicketType as TT,
   Gender as G,
   TableLocation as TL,
-  PackageType as PKG,
 } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client"; // <- tipos
+import type { PrismaClient } from "@prisma/client";
 import {
   ensureSixDigitCode,
   normalizeSixDigitCode,
 } from "@/lib/validation-code";
 
-/* ========================= Alias de DB (PrismaClient | TransactionClient) ========================= */
+/* ========================= Alias DB ========================= */
 type DB = Prisma.TransactionClient | PrismaClient;
 
 /* ========================= Auth ========================= */
@@ -38,7 +37,7 @@ async function verifyAuth(request: NextRequest) {
   }
 }
 
-/* ========================= Helpers (autocontenidos) ========================= */
+/* ========================= Helpers ========================= */
 const normString = (v: unknown): string | undefined => {
   if (v == null) return undefined;
   const s = String(v).trim();
@@ -72,19 +71,26 @@ const parsePaymentMethod = (v?: string): PM | undefined => {
 };
 const parsePaymentStatus = (v?: string): PS | undefined => {
   const s = (v || "").toLowerCase();
-  if ((PS as any)[s]) return (PS as any)[s] as PS;
+  switch (s) {
+    case "pending":
+      return PS.pending;
+    case "approved":
+      return PS.approved;
+    case "rejected":
+      return PS.rejected;
+    case "in_process":
+      return PS.in_process;
+    case "failed_preference":
+      return PS.failed_preference;
+    case "cancelled":
+      return PS.cancelled;
+    case "refunded":
+      return PS.refunded;
+    case "charged_back":
+      return PS.charged_back;
+  }
   return undefined;
 };
-const ALL_STATUSES: PS[] = [
-  PS.pending,
-  PS.approved,
-  PS.rejected,
-  PS.in_process,
-  PS.failed_preference,
-  PS.cancelled,
-  PS.refunded,
-  PS.charged_back,
-];
 const parseGender = (v?: string): G | undefined => {
   const s = (v || "").toLowerCase();
   if (s === "hombre") return G.hombre;
@@ -99,7 +105,18 @@ const parseLocation = (v?: string): TL | undefined => {
   return undefined;
 };
 
-/* ========================= Servicios inline (DRY) ========================= */
+const ALL_STATUSES: PS[] = [
+  PS.pending,
+  PS.approved,
+  PS.rejected,
+  PS.in_process,
+  PS.failed_preference,
+  PS.cancelled,
+  PS.refunded,
+  PS.charged_back,
+];
+
+/* ========================= Dominio / Stock ========================= */
 async function getActiveEventBasic() {
   return prisma.event.findFirst({
     where: { isActive: true },
@@ -107,140 +124,74 @@ async function getActiveEventBasic() {
   });
 }
 
-async function checkVipAvailability(cfgId: string, wantTables: number, db: DB) {
-  const fresh = await db.vipTableConfig.findUnique({
-    where: { id: cfgId },
-    select: { stockLimit: true, soldCount: true },
+async function priceForGeneral(
+  eventId: string,
+  gender: G,
+  qty: number
+): Promise<{ ticketConfigId: string; total: Prisma.Decimal }> {
+  const cfg = await prisma.ticketConfig.findFirst({
+    where: { eventId, ticketType: "general", gender },
+    select: { id: true, price: true },
   });
-  const remaining = Math.max(
-    0,
-    (fresh?.stockLimit || 0) - (fresh?.soldCount || 0)
-  );
-  if (wantTables > remaining) throw new Error("stock_insuficiente");
+  if (!cfg) throw new Error("price_cfg_not_found");
+  const unit = new Prisma.Decimal(cfg.price);
+  return { ticketConfigId: cfg.id, total: unit.mul(qty) };
 }
 
-async function createTableReservationInline(params: {
-  eventId: string;
-  cfgId: string;
-  location: TL;
-  tables: number;
-  capacity: number;
-  totalPrice: Prisma.Decimal;
-  customer: { name: string; email: string; phone: string; dni: string };
-  status: PS;
-  method: PM;
-}) {
-  const {
-    eventId,
-    cfgId,
-    location,
-    tables,
-    capacity,
-    totalPrice,
-    customer,
-    status,
-    method,
-  } = params;
-
-  return prisma.$transaction(async (tx) => {
-    if (status === PS.approved) await checkVipAvailability(cfgId, tables, tx); // <- ahora tipa
-    const res = await tx.tableReservation.create({
-      data: {
-        eventId,
-        packageType: PKG.mesa,
-        location,
-        tables,
-        capacity,
-        guests: 0,
-        totalPrice,
-        customerName: customer.name,
-        customerEmail: customer.email,
-        customerPhone: customer.phone,
-        customerDni: customer.dni,
-        reservationDate: new Date(),
-        paymentMethod: method,
-        paymentStatus: status,
-        qrCode: generateQr("VIP"),
-        vipTableConfigId: cfgId,
-      },
-      select: { id: true },
-    });
-
-    if (status === PS.approved) {
-      await tx.vipTableConfig.update({
-        where: { id: cfgId },
-        data: { soldCount: { increment: tables } },
-      });
-    }
-
-    return res;
+async function priceForVip(
+  eventId: string,
+  location: TL,
+  tables: number
+): Promise<{
+  vipConfigId: string;
+  capacityPerTable: number;
+  total: Prisma.Decimal;
+  remainingTables: number;
+}> {
+  const cfg = await prisma.vipTableConfig.findUnique({
+    where: { eventId_location: { eventId, location } },
+    select: {
+      id: true,
+      price: true,
+      capacityPerTable: true,
+      stockLimit: true,
+      soldCount: true,
+    },
   });
+  if (!cfg) throw new Error("vip_cfg_not_found");
+  const remaining = Math.max(0, cfg.stockLimit - cfg.soldCount);
+  const unit = new Prisma.Decimal(cfg.price);
+  return {
+    vipConfigId: cfg.id,
+    capacityPerTable: Number(cfg.capacityPerTable || 10),
+    total: unit.mul(tables),
+    remainingTables: remaining,
+  };
 }
 
-async function createGeneralTicketInline(params: {
-  eventId: string;
-  eventDate: Date | null;
-  gender: G | null;
-  quantity: number;
-  totalPrice: Prisma.Decimal;
-  customer: { name: string; email: string; phone: string; dni: string };
-  method: PM;
-  status: PS;
-  ticketConfigId?: string;
-}) {
-  const {
-    eventId,
-    eventDate,
-    gender,
-    quantity,
-    totalPrice,
-    customer,
-    method,
-    status,
-    ticketConfigId,
-  } = params;
-
-  let attempts = 0;
-  while (attempts < 5) {
-    const qr = generateQr("TICKET");
-    try {
-      const created = await prisma.ticket.create({
-        data: {
-          eventId,
-          eventDate: eventDate || undefined,
-          ticketType: TT.general,
-          ...(gender ? { gender } : {}),
-          quantity,
-          totalPrice,
-          customerName: customer.name,
-          customerEmail: customer.email,
-          customerPhone: customer.phone,
-          customerDni: customer.dni,
-          paymentMethod: method,
-          paymentStatus: status,
-          qrCode: qr,
-          ...(ticketConfigId ? { ticketConfigId } : {}),
-        },
-        select: { id: true, paymentStatus: true },
-      });
-
-      if (status === PS.approved) {
-        await ensureSixDigitCode(prisma, { type: "ticket", id: created.id });
-      }
-      return prisma.ticket.findUnique({ where: { id: created.id } });
-    } catch (e: any) {
-      if (e?.code === "P2002") {
-        attempts++;
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw new Error("unique_collision");
+async function adjustVipSoldCount(
+  tx: DB,
+  eventId: string,
+  location: TL,
+  delta: number
+) {
+  if (!delta) return;
+  const cfg = await tx.vipTableConfig.findUnique({
+    where: { eventId_location: { eventId, location } },
+    select: { id: true, stockLimit: true, soldCount: true },
+  });
+  if (!cfg) throw new Error("vip_cfg_not_found");
+  const next = cfg.soldCount + delta;
+  if (next < 0) throw new Error("vip_sold_negative");
+  if (next > cfg.stockLimit) throw new Error("vip_sold_exceeds_stock");
+  await tx.vipTableConfig.update({
+    where: { id: cfg.id },
+    data: { soldCount: next },
+  });
 }
 
 /* =========================================================
-   GET /api/admin/tickets — unificado (Tickets + TableReservations)
+   GET /api/admin/tickets  — SOLO Ticket (general y VIP)
 ========================================================= */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -252,18 +203,11 @@ export async function GET(request: NextRequest) {
 
     const status = searchParams.get("status");
     const q = normString(searchParams.get("q"));
-    const typeFilter = (normString(searchParams.get("type")) || "") as
-      | "ticket"
-      | "vip-table"
-      | "";
+    const typeFilter = normString(searchParams.get("type")); // "general" | "vip" | undefined
 
-    const orderByRaw = (searchParams.get("orderBy") || "date").toLowerCase();
     const orderByField =
-      orderByRaw === "totalprice"
-        ? "totalPrice"
-        : orderByRaw === "purchasedate" || orderByRaw === "reservationdate"
-          ? "date"
-          : "date";
+      (searchParams.get("orderBy") as "purchaseDate" | "totalPrice" | null) ||
+      "purchaseDate";
     const order: "asc" | "desc" =
       (searchParams.get("order") as any) === "asc" ? "asc" : "desc";
 
@@ -274,174 +218,57 @@ export async function GET(request: NextRequest) {
     );
     const skip = (page - 1) * pageSize;
 
-    const whereTicket: any = {};
-    const whereVip: any = {};
+    const where: Prisma.TicketWhereInput = {};
     if (status && ALL_STATUSES.includes(status as PS)) {
-      whereTicket.paymentStatus = status as PS;
-      whereVip.paymentStatus = status as PS;
+      where.paymentStatus = status as PS;
     }
+    if (typeFilter === "general") where.ticketType = TT.general;
+    if (typeFilter === "vip") where.ticketType = TT.vip;
     if (q) {
-      const orQ = [
+      where.OR = [
         { customerName: { contains: q, mode: "insensitive" } },
         { customerEmail: { contains: q, mode: "insensitive" } },
         { customerDni: { contains: q, mode: "insensitive" } },
       ];
-      whereTicket.OR = orQ;
-      whereVip.OR = orQ;
     }
 
-    const wantTickets = typeFilter !== "vip-table";
-    const wantVip = typeFilter !== "ticket";
+    const [total, tickets] = await Promise.all([
+      prisma.ticket.count({ where }),
+      prisma.ticket.findMany({
+        where,
+        orderBy: { [orderByField]: order },
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          ticketType: true,
+          gender: true,
+          quantity: true,
+          // VIP fields
+          vipLocation: true,
+          vipTables: true,
+          capacityPerTable: true,
 
-    const [tickets, reservations] = await Promise.all([
-      wantTickets
-        ? prisma.ticket.findMany({
-            where: whereTicket,
-            select: {
-              id: true,
-              eventId: true,
-              ticketType: true,
-              gender: true,
-              quantity: true,
-              totalPrice: true,
-              customerName: true,
-              customerEmail: true,
-              customerPhone: true,
-              customerDni: true,
-              paymentId: true,
-              paymentStatus: true,
-              paymentMethod: true,
-              qrCode: true,
-              validationCode: true,
-              validated: true,
-              validatedAt: true,
-              purchaseDate: true,
-            },
-          })
-        : Promise.resolve([]),
-      wantVip
-        ? prisma.tableReservation.findMany({
-            where: whereVip,
-            select: {
-              id: true,
-              eventId: true,
-              packageType: true,
-              location: true,
-              tables: true,
-              capacity: true,
-              guests: true,
-              totalPrice: true,
-              customerName: true,
-              customerEmail: true,
-              customerPhone: true,
-              customerDni: true,
-              paymentId: true,
-              paymentStatus: true,
-              paymentMethod: true,
-              qrCode: true,
-              validationCode: true,
-              validated: true,
-              validatedAt: true,
-              reservationDate: true,
-            },
-          })
-        : Promise.resolve([]),
+          totalPrice: true,
+          customerName: true,
+          customerEmail: true,
+          customerPhone: true,
+          customerDni: true,
+          paymentMethod: true,
+          paymentStatus: true,
+          qrCode: true,
+          validationCode: true,
+          validated: true,
+          purchaseDate: true,
+        },
+      }),
     ]);
 
-    type Unified = {
-      type: "ticket" | "vip-table";
-      id: string;
-      eventId: string;
-      date: Date;
-      totalPrice: number;
-      customerName: string;
-      customerEmail: string;
-      customerPhone: string;
-      customerDni: string;
-      paymentId?: string | null;
-      paymentStatus: PS;
-      paymentMethod: PM;
-      qrCode?: string | null;
-      validationCode?: string | null;
-      validated: boolean;
-      validatedAt?: Date | null;
-
-      ticketType?: TT | null;
-      gender?: G | null;
-      quantity?: number | null;
-
-      location?: TL | null;
-      tables?: number | null;
-      capacity?: number | null;
-      guests?: number | null;
-    };
-
-    const unified: Unified[] = [
-      ...tickets.map((t) => ({
-        type: "ticket" as const,
-        id: t.id,
-        eventId: t.eventId,
-        date: t.purchaseDate ?? new Date(0),
-        totalPrice: Number(t.totalPrice || 0),
-        customerName: t.customerName,
-        customerEmail: t.customerEmail,
-        customerPhone: t.customerPhone,
-        customerDni: t.customerDni,
-        paymentId: t.paymentId || null,
-        paymentStatus: t.paymentStatus,
-        paymentMethod: t.paymentMethod,
-        qrCode: t.qrCode || null,
-        validationCode: t.validationCode || null,
-        validated: t.validated,
-        validatedAt: t.validatedAt,
-        ticketType: t.ticketType,
-        gender: t.gender ?? null,
-        quantity: t.quantity ?? 1,
-        location: null,
-        tables: null,
-        capacity: null,
-        guests: null,
-      })),
-      ...reservations.map((r) => ({
-        type: "vip-table" as const,
-        id: r.id,
-        eventId: r.eventId,
-        date: r.reservationDate ?? new Date(0),
-        totalPrice: Number(r.totalPrice || 0),
-        customerName: r.customerName,
-        customerEmail: r.customerEmail,
-        customerPhone: r.customerPhone,
-        customerDni: r.customerDni,
-        paymentId: r.paymentId || null,
-        paymentStatus: r.paymentStatus,
-        paymentMethod: r.paymentMethod,
-        qrCode: r.qrCode || null,
-        validationCode: r.validationCode || null,
-        validated: r.validated,
-        validatedAt: r.validatedAt,
-        ticketType: null,
-        gender: null,
-        quantity: r.tables ?? 1, // N mesas; cupo global se descuenta al emitir Ticket vip
-        location: r.location,
-        tables: r.tables ?? 1,
-        capacity: r.capacity ?? null,
-        guests: r.guests ?? null,
-      })),
-    ];
-
-    unified.sort((a, b) => {
-      if (orderByField === "totalPrice") {
-        const cmp = (a.totalPrice || 0) - (b.totalPrice || 0);
-        return order === "asc" ? cmp : -cmp;
-      }
-      const da = a.date?.valueOf() || 0;
-      const db = b.date?.valueOf() || 0;
-      const cmp = da - db;
-      return order === "asc" ? cmp : -cmp;
-    });
-
-    const total = unified.length;
-    const pageItems = unified.slice(skip, skip + pageSize);
+    // Compat para el dashboard (alias de ubicación)
+    const normalized = tickets.map((t) => ({
+      ...t,
+      tableLocation: t.vipLocation ?? null, // alias para UI
+    }));
 
     return NextResponse.json({
       ok: true,
@@ -451,19 +278,23 @@ export async function GET(request: NextRequest) {
         total,
         totalPages: Math.ceil(total / pageSize),
       },
-      items: pageItems,
+      tickets: normalized,
     });
   } catch (error) {
-    console.error("[tickets][GET unified] Error:", error);
+    console.error("[tickets][GET] Error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch sales" },
+      { error: "Failed to fetch tickets" },
       { status: 500 }
     );
   }
 }
 
 /* =========================================================
-   POST /api/admin/tickets — crea GENERAL o VIP (reserva)
+   POST /api/admin/tickets — crea GENERAL o VIP (mismo modelo)
+   body:
+     - ticketType: "general" | "vip"
+     - GENERAL: gender, quantity
+     - VIP: location, tables
 ========================================================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -473,6 +304,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as any;
 
+    // Evento activo
     const event = await getActiveEventBasic();
     if (!event)
       return NextResponse.json(
@@ -480,6 +312,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
 
+    // Cliente
     const customerName = normString(body.customerName);
     const customerEmail = normEmail(body.customerEmail);
     const customerPhone = normString(body.customerPhone);
@@ -505,31 +338,34 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
 
+    // Pago
     const paymentMethod =
       parsePaymentMethod(normString(body.paymentMethod)) ?? PM.mercadopago;
     const paymentStatus =
       parsePaymentStatus(normString(body.paymentStatus)) ?? PS.approved;
 
-    const rawType = (normString(body.type) || "general").toLowerCase();
-    const type: "general" | "vip-table" =
-      rawType === "vip" || rawType === "vip-table" ? "vip-table" : "general";
+    // Tipo
+    const ttRaw = (normString(body.ticketType) ||
+      normString(body.type) ||
+      "general")!.toLowerCase();
+    const isVip = ttRaw === "vip" || ttRaw === "vip-table";
 
     // ---------- GENERAL ----------
-    if (type === "general") {
+    if (!isVip) {
       const genderEnum = parseGender(normString(body.gender));
-      const quantity = Math.max(1, normNumber(body.quantity) ?? 1);
+      if (!genderEnum)
+        return NextResponse.json(
+          { error: "gender inválido (hombre|mujer)" },
+          { status: 400 }
+        );
 
-      // TicketConfig es String (permitimos "total"); buscamos "general"
-      const cfg = await prisma.ticketConfig.findFirst({
-        where: { eventId: event.id, ticketType: "general", gender: genderEnum },
-        select: { id: true, price: true },
-      });
+      const quantity = Math.max(1, normNumber(body.quantity) ?? 1);
 
       const overrideTotal = normNumber(body.totalPrice);
       const forceOverride =
         body.forceTotalPrice === true || body.forceTotalPrice === "true";
 
-      let totalPriceDecimal: Prisma.Decimal;
+      let totalPrice: Prisma.Decimal;
       let ticketConfigId: string | undefined;
 
       if (forceOverride && overrideTotal !== undefined) {
@@ -538,98 +374,151 @@ export async function POST(request: NextRequest) {
             { error: "totalPrice no puede ser negativo" },
             { status: 400 }
           );
-        totalPriceDecimal = new Prisma.Decimal(overrideTotal);
+        totalPrice = new Prisma.Decimal(overrideTotal);
+        // igual capturamos la config si existe (trazabilidad)
+        const cfg = await prisma.ticketConfig.findFirst({
+          where: {
+            eventId: event.id,
+            ticketType: "general",
+            gender: genderEnum,
+          },
+          select: { id: true },
+        });
         if (cfg) ticketConfigId = cfg.id;
-      } else if (cfg) {
-        const unit = new Prisma.Decimal(cfg.price);
-        totalPriceDecimal = unit.mul(quantity);
-        ticketConfigId = cfg.id;
       } else {
-        return NextResponse.json(
-          { error: "No existe configuración de precio en BD para el género" },
-          { status: 400 }
-        );
+        const priced = await priceForGeneral(event.id, genderEnum, quantity);
+        totalPrice = priced.total;
+        ticketConfigId = priced.ticketConfigId;
       }
 
-      const ticket = await createGeneralTicketInline({
-        eventId: event.id,
-        eventDate: event.date,
-        gender: genderEnum ?? null,
-        quantity,
-        totalPrice: totalPriceDecimal,
-        customer: {
-          name: customerName,
-          email: customerEmail,
-          phone: customerPhone,
-          dni: customerDni,
-        },
-        method: paymentMethod,
-        status: paymentStatus,
-        ticketConfigId,
-      });
+      // Crear ticket general
+      let attempts = 0;
+      while (attempts < 5) {
+        const qr = generateQr("TICKET");
+        try {
+          const created = await prisma.ticket.create({
+            data: {
+              eventId: event.id,
+              eventDate: event.date,
+              ticketType: TT.general,
+              gender: genderEnum,
+              quantity,
+              totalPrice,
+              customerName,
+              customerEmail,
+              customerPhone,
+              customerDni,
+              paymentMethod,
+              paymentStatus,
+              qrCode: qr,
+              ...(ticketConfigId ? { ticketConfigId } : {}),
+            },
+            select: { id: true },
+          });
 
-      return NextResponse.json({ ok: true, type: "ticket", ticket });
+          if (paymentStatus === PS.approved) {
+            await ensureSixDigitCode(prisma, {
+              type: "ticket",
+              id: created.id,
+            });
+          }
+
+          const ticket = await prisma.ticket.findUnique({
+            where: { id: created.id },
+          });
+          return NextResponse.json({ ok: true, ticketType: "general", ticket });
+        } catch (e: any) {
+          if (e?.code === "P2002") {
+            attempts++;
+            continue;
+          }
+          throw e;
+        }
+      }
+      return NextResponse.json(
+        { error: "Colisión de unicidad." },
+        { status: 500 }
+      );
     }
 
-    // ---------- VIP (reserva por ubicación) ----------
+    // ---------- VIP ----------
     const locEnum = parseLocation(normString(body.location) || "");
     if (!locEnum)
       return NextResponse.json({ error: "location inválida" }, { status: 400 });
     const tables = Math.max(1, normNumber(body.tables) ?? 1);
 
-    const cfg = await prisma.vipTableConfig.findFirst({
-      where: { eventId: event.id, location: locEnum },
-      select: { id: true, price: true, capacityPerTable: true },
+    const priced = await priceForVip(event.id, locEnum, tables);
+    if (tables > priced.remainingTables) {
+      return NextResponse.json(
+        { error: "No hay mesas suficientes en esa ubicación" },
+        { status: 409 }
+      );
+    }
+
+    const vipCapacity = priced.capacityPerTable; // snapshot
+    const totalPrice = priced.total;
+
+    // Transacción para: ajustar stock (si approved) + crear ticket
+    const created = await prisma.$transaction(async (tx) => {
+      if (paymentStatus === PS.approved) {
+        await adjustVipSoldCount(tx, event.id, locEnum, +tables);
+      }
+
+      let attempts = 0;
+      while (attempts < 5) {
+        const qr = generateQr("VIP");
+        try {
+          const t = await tx.ticket.create({
+            data: {
+              eventId: event.id,
+              eventDate: event.date,
+              ticketType: TT.vip,
+              // VIP snapshot
+              vipLocation: locEnum,
+              vipTables: tables,
+              capacityPerTable: vipCapacity,
+
+              totalPrice,
+              customerName,
+              customerEmail,
+              customerPhone,
+              customerDni,
+              paymentMethod,
+              paymentStatus,
+              qrCode: qr,
+            },
+            select: { id: true },
+          });
+          return t;
+        } catch (e: any) {
+          if (e?.code === "P2002") {
+            attempts++;
+            continue;
+          }
+          throw e;
+        }
+      }
+      throw new Error("unique_collision");
     });
-    if (!cfg)
+
+    if (paymentStatus === PS.approved) {
+      await ensureSixDigitCode(prisma, { type: "ticket", id: created.id });
+    }
+
+    const ticket = await prisma.ticket.findUnique({
+      where: { id: created.id },
+    });
+    return NextResponse.json({ ok: true, ticketType: "vip", ticket });
+  } catch (error: any) {
+    if (error?.message === "vip_cfg_not_found") {
       return NextResponse.json(
         { error: "No hay configuración VIP para esa ubicación" },
         { status: 400 }
       );
-
-    const pricePerTable = Number(cfg.price || 0);
-    if (!(pricePerTable >= 0))
-      return NextResponse.json(
-        { error: "Precio por mesa inválido en configuración" },
-        { status: 400 }
-      );
-
-    const capacityPerTable = Math.max(1, Number(cfg.capacityPerTable || 10));
-    const totalPrice = new Prisma.Decimal(pricePerTable).mul(tables);
-    const capacity = tables * capacityPerTable;
-
-    const createdRes = await createTableReservationInline({
-      eventId: event.id,
-      cfgId: cfg.id,
-      location: locEnum,
-      tables,
-      capacity,
-      totalPrice,
-      customer: {
-        name: customerName,
-        email: customerEmail,
-        phone: customerPhone,
-        dni: customerDni,
-      },
-      status: paymentStatus,
-      method: paymentMethod,
-    });
-
-    if (paymentStatus === PS.approved) {
-      await ensureSixDigitCode(prisma, {
-        type: "vip-table",
-        id: createdRes.id,
-      });
     }
-
-    const reservation = await prisma.tableReservation.findUnique({
-      where: { id: createdRes.id },
-    });
-    return NextResponse.json({ ok: true, type: "vip-table", reservation });
-  } catch (error: any) {
-    if (error?.message === "stock_insuficiente") {
+    if (error?.message === "vip_sold_exceeds_stock") {
       return NextResponse.json(
-        { error: "No hay stock suficiente en esa ubicación" },
+        { error: "Stock VIP excedido" },
         { status: 409 }
       );
     }
@@ -641,14 +530,15 @@ export async function POST(request: NextRequest) {
     }
     console.error("[tickets][POST unified] Error:", error);
     return NextResponse.json(
-      { error: "Failed to create sale" },
+      { error: "Failed to create ticket" },
       { status: 500 }
     );
   }
 }
 
 /* =========================================================
-   PUT /api/admin/tickets — SOLO Ticket (general)
+   PUT /api/admin/tickets — actualizar Ticket (general o vip)
+   Maneja transición de estado para VIP (stock mesas).
 ========================================================= */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -661,47 +551,67 @@ export async function PUT(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    const current = await prisma.ticket.findUnique({
-      where: { id },
-      select: {
-        ticketType: true,
-        paymentStatus: true,
-        validationCode: true,
-        qrCode: true,
-      },
-    });
+    const current = await prisma.ticket.findUnique({ where: { id } });
     if (!current)
       return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    const dataToUpdate: any = {};
+    // Build changes
+    const dataToUpdate: Prisma.TicketUpdateInput = {};
 
+    // GENERAL fields
     if (body.ticketType !== undefined) {
       const tt = (normString(body.ticketType) || "").toLowerCase();
-      if (tt && tt !== "general")
+      if (tt === "general") dataToUpdate.ticketType = TT.general;
+      else if (tt === "vip") dataToUpdate.ticketType = TT.vip;
+      else
         return NextResponse.json(
-          {
-            error:
-              "ticketType inválido. Solo 'general' aquí. VIP es vip-table.",
-          },
+          { error: "ticketType inválido (general|vip)" },
           { status: 400 }
         );
-      dataToUpdate.ticketType = TT.general;
     }
 
     if (body.gender !== undefined) {
       const g = parseGender(normString(body.gender));
       dataToUpdate.gender = g ?? null;
     }
+    const quantity = normNumber(body.quantity);
+    if (quantity !== undefined) dataToUpdate.quantity = Math.max(1, quantity);
 
+    // VIP fields (solo permitimos cambiar si el ticket NO está approved)
+    const wantsLocation = body.location !== undefined;
+    const wantsTables = body.tables !== undefined;
+    const wantsCapacity = body.capacityPerTable !== undefined;
+
+    if (current.paymentStatus !== PS.approved) {
+      if (wantsLocation) {
+        const loc = parseLocation(normString(body.location));
+        dataToUpdate.vipLocation = loc ?? null;
+      }
+      if (wantsTables) {
+        const t = normNumber(body.tables);
+        if (t !== undefined) dataToUpdate.vipTables = Math.max(1, t);
+      }
+      if (wantsCapacity) {
+        const c = normNumber(body.capacityPerTable);
+        if (c !== undefined) dataToUpdate.capacityPerTable = Math.max(1, c);
+      }
+    } else if (wantsLocation || wantsTables || wantsCapacity) {
+      return NextResponse.json(
+        {
+          error:
+            "No se puede modificar VIP aprobado (ubicación/mesas/capacidad)",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Datos cliente / precio / fechas
     const customerName = normString(body.customerName);
     if (customerName) dataToUpdate.customerName = customerName;
-
     const customerEmail = normEmail(body.customerEmail);
     if (customerEmail) dataToUpdate.customerEmail = customerEmail;
-
     const customerPhone = normString(body.customerPhone);
     if (customerPhone) dataToUpdate.customerPhone = customerPhone;
-
     const customerDni = extractCustomerDni(body);
     if (customerDni) dataToUpdate.customerDni = customerDni;
 
@@ -718,26 +628,58 @@ export async function PUT(request: NextRequest) {
       dataToUpdate.totalPrice = new Prisma.Decimal(totalPrice);
     }
 
-    const quantity = normNumber(body.quantity);
-    if (quantity !== undefined) dataToUpdate.quantity = Math.max(1, quantity);
-
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
     }
 
-    const nextPs = parsePaymentStatus(normString(body.paymentStatus));
-    if (nextPs) dataToUpdate.paymentStatus = nextPs;
+    // Estado (manejar transición VIP para stock)
+    let nextStatus = current.paymentStatus as PS;
+    if (body.paymentStatus !== undefined) {
+      const ps = parsePaymentStatus(normString(body.paymentStatus));
+      if (ps) nextStatus = ps;
+    }
+    dataToUpdate.paymentStatus = nextStatus;
 
-    await prisma.ticket.update({ where: { id }, data: dataToUpdate });
+    const updated = await prisma.$transaction(async (tx) => {
+      // Si hay transición de estado que cruce a/from approved y es VIP => ajustar stock
+      if (
+        current.ticketType === TT.vip &&
+        current.vipLocation &&
+        current.vipTables
+      ) {
+        const wasApproved = current.paymentStatus === PS.approved;
+        const willBeApproved = nextStatus === PS.approved;
 
-    const finalPs = nextPs ?? current.paymentStatus;
-    const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
-    if (finalPs === PS.approved && !hasValidCode) {
+        if (!wasApproved && willBeApproved) {
+          // aprobar VIP
+          await adjustVipSoldCount(
+            tx,
+            current.eventId,
+            current.vipLocation,
+            +current.vipTables
+          );
+        } else if (wasApproved && !willBeApproved) {
+          // des-approbar VIP
+          await adjustVipSoldCount(
+            tx,
+            current.eventId,
+            current.vipLocation,
+            -current.vipTables
+          );
+        }
+      }
+
+      await tx.ticket.update({ where: { id }, data: dataToUpdate });
+      return tx.ticket.findUnique({ where: { id } });
+    });
+
+    // asegurar código si quedó approved
+    const hadValid = !!normalizeSixDigitCode(current.validationCode);
+    if (updated?.paymentStatus === PS.approved && !hadValid) {
       await ensureSixDigitCode(prisma, { type: "ticket", id });
     }
 
-    const ticket = await prisma.ticket.findUnique({ where: { id } });
-    return NextResponse.json({ ok: true, ticket });
+    return NextResponse.json({ ok: true, ticket: updated });
   } catch (error) {
     console.error("[tickets][PUT] Error:", error);
     return NextResponse.json(
@@ -748,7 +690,7 @@ export async function PUT(request: NextRequest) {
 }
 
 /* =========================================================
-   PATCH /api/admin/tickets — SOLO Ticket (general)
+   PATCH /api/admin/tickets — idem PUT pero parcial
 ========================================================= */
 export async function PATCH(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -761,88 +703,14 @@ export async function PATCH(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    const current = await prisma.ticket.findUnique({ where: { id } });
-    if (!current)
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    const dataToUpdate: any = {};
-
-    if (body.ticketType !== undefined) {
-      const tt = (normString(body.ticketType) ?? current.ticketType)
-        ?.toString()
-        .toLowerCase();
-      if (tt !== "general")
-        return NextResponse.json(
-          { error: "ticketType inválido. Solo 'general'." },
-          { status: 400 }
-        );
-      dataToUpdate.ticketType = TT.general;
-    }
-
-    if (body.gender !== undefined) {
-      const g = parseGender(normString(body.gender));
-      dataToUpdate.gender = g ?? null;
-    }
-
-    if (body.customerName !== undefined)
-      dataToUpdate.customerName =
-        normString(body.customerName) ?? current.customerName;
-    if (body.customerEmail !== undefined)
-      dataToUpdate.customerEmail =
-        normEmail(body.customerEmail) ?? current.customerEmail;
-    if (body.customerPhone !== undefined)
-      dataToUpdate.customerPhone =
-        normString(body.customerPhone) ?? current.customerPhone;
-
-    const customerDni = extractCustomerDni(body);
-    if (
-      body.customerDni !== undefined ||
-      body.customerDNI !== undefined ||
-      body.customer_dni !== undefined ||
-      body.dni !== undefined
-    ) {
-      dataToUpdate.customerDni = customerDni ?? current.customerDni;
-    }
-
-    const pm = parsePaymentMethod(normString(body.paymentMethod));
-    if (pm) dataToUpdate.paymentMethod = pm;
-
-    if (body.totalPrice !== undefined) {
-      const tp = normNumber(body.totalPrice);
-      if (tp !== undefined) {
-        if (tp < 0)
-          return NextResponse.json(
-            { error: "totalPrice no puede ser negativo" },
-            { status: 400 }
-          );
-        dataToUpdate.totalPrice = new Prisma.Decimal(tp);
-      }
-    }
-    if (body.quantity !== undefined) {
-      const qty = normNumber(body.quantity);
-      if (qty !== undefined) dataToUpdate.quantity = Math.max(1, qty);
-    }
-
-    if (body.eventDate !== undefined) {
-      dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
-    }
-
-    let nextStatus = current.paymentStatus as PS;
-    if (body.paymentStatus !== undefined) {
-      const ps = parsePaymentStatus(normString(body.paymentStatus));
-      if (ps) nextStatus = ps;
-    }
-    dataToUpdate.paymentStatus = nextStatus;
-
-    await prisma.ticket.update({ where: { id }, data: dataToUpdate });
-
-    const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
-    if (nextStatus === PS.approved && !hasValidCode) {
-      await ensureSixDigitCode(prisma, { type: "ticket", id });
-    }
-
-    const ticket = await prisma.ticket.findUnique({ where: { id } });
-    return NextResponse.json({ ok: true, ticket });
+    // Reusar PUT (misma lógica). Mantengo PATCH como alias semántico.
+    const req2 = new Request(new URL(request.url), {
+      method: "PUT",
+      headers: request.headers,
+      body: JSON.stringify(body),
+    });
+    // @ts-ignore Next.js route handlers allow reusing the same function body
+    return await PUT(req2 as any);
   } catch (error) {
     console.error("[tickets][PATCH] Error:", error);
     return NextResponse.json(
@@ -853,7 +721,8 @@ export async function PATCH(request: NextRequest) {
 }
 
 /* =========================================================
-   DELETE /api/admin/tickets?id=xxx — SOLO Ticket (general)
+   DELETE /api/admin/tickets?id=xxx — borra Ticket
+   Si es VIP aprobado, devuelve stock.
 ========================================================= */
 export async function DELETE(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -866,7 +735,27 @@ export async function DELETE(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    await prisma.ticket.delete({ where: { id } });
+    const current = await prisma.ticket.findUnique({ where: { id } });
+    if (!current)
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    await prisma.$transaction(async (tx) => {
+      if (
+        current.ticketType === TT.vip &&
+        current.paymentStatus === PS.approved &&
+        current.vipLocation &&
+        current.vipTables
+      ) {
+        await adjustVipSoldCount(
+          tx,
+          current.eventId,
+          current.vipLocation,
+          -current.vipTables
+        );
+      }
+      await tx.ticket.delete({ where: { id } });
+    });
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[tickets][DELETE] Error:", error);
