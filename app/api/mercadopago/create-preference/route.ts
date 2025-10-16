@@ -1,5 +1,4 @@
-///api/mercadopago/create-preference/route.ts
-1;
+// app/api/mercadopago/create-preference/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -28,6 +27,18 @@ function getBaseUrl(req: NextRequest) {
     req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   const guessed = `${proto}://${host}`;
   return isHttps(guessed) || isLocalHttp(guessed) ? guessed : "";
+}
+
+// Normaliza a 2 decimales (MP espera number)
+function toMoney2(n: unknown) {
+  const x = Number(n || 0);
+  return Math.round(x * 100) / 100;
+}
+
+// Capitaliza primera letra
+function cap(s?: string | null) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Tipado de payload que envía tu frontend */
@@ -107,7 +118,7 @@ export async function POST(req: NextRequest) {
 
     // ===== Leer TOTAL desde BD (NUNCA del cliente)
     let dbTotal = 0;
-    let visualTitle = payload.title || "";
+    let visualTitle = (payload.title || "").trim();
     const mpItemId = String(payload.itemId ?? recordId);
 
     if (type === "ticket") {
@@ -133,12 +144,19 @@ export async function POST(req: NextRequest) {
           { status: 409 }
         );
       }
-      dbTotal = Number(t.totalPrice || 0);
+      dbTotal = toMoney2(t.totalPrice);
+
+      // Título por defecto coherente
       if (!visualTitle) {
         if (t.ticketType === "vip") {
-          visualTitle = `Mesa VIP x${t.quantity || 1}`;
+          visualTitle = `Entrada VIP x${t.quantity || 1}`;
         } else {
-          const gen = t.gender === "mujer" ? "Mujer" : "Hombre";
+          const gen =
+            t.gender === "mujer"
+              ? "Mujer"
+              : t.gender === "hombre"
+                ? "Hombre"
+                : "General";
           visualTitle = `Entrada General - ${gen} x${t.quantity || 1}`;
         }
       }
@@ -151,6 +169,7 @@ export async function POST(req: NextRequest) {
           totalPrice: true,
           tables: true,
           paymentStatus: true,
+          location: true, // usamos TableLocation para el título
         },
       });
       if (!r) {
@@ -165,8 +184,19 @@ export async function POST(req: NextRequest) {
           { status: 409 }
         );
       }
-      dbTotal = Number(r.totalPrice || 0);
-      if (!visualTitle) visualTitle = `Mesa VIP x${r.tables || 1}`;
+      dbTotal = toMoney2(r.totalPrice);
+
+      // Título default con ubicación
+      if (!visualTitle) {
+        // location: 'piscina' | 'dj' | 'general'
+        const loc =
+          r.location === "piscina"
+            ? "Piscina"
+            : r.location === "dj"
+              ? "DJ"
+              : "General";
+        visualTitle = `Mesa VIP (Ubicación: ${loc}) x${r.tables || 1}`;
+      }
     }
 
     if (!(dbTotal > 0)) {
@@ -177,7 +207,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ===== Armado de preferencia MP =====
-    const currency = payload.currency || DEFAULT_CURRENCY;
+    const currency = (payload.currency || DEFAULT_CURRENCY).toUpperCase();
     const resolvedCategory =
       mapInternalCategoryToMpCategory(payload.categoryId) || payload.categoryId;
     const externalRef = `${type}:${recordId}`;
@@ -186,13 +216,13 @@ export async function POST(req: NextRequest) {
     const preferenceBody = {
       items: [
         {
-          id: mpItemId, // 👍 items.id recomendado
+          id: mpItemId, // items.id recomendado
           title: visualTitle || "Compra",
           quantity: 1,
-          unit_price: dbTotal, // 👍 total desde BD
+          unit_price: dbTotal, // total desde BD
           currency_id: currency,
           picture_url: payload.pictureUrl || undefined,
-          category_id: resolvedCategory || undefined, // 👍 items.category_id
+          category_id: resolvedCategory || undefined,
         },
       ],
       external_reference: externalRef,
@@ -208,6 +238,9 @@ export async function POST(req: NextRequest) {
         pending: payload.backUrls?.pending || `${BASE_URL}/payment/pending`,
         failure: payload.backUrls?.failure || `${BASE_URL}/payment/failure`,
       },
+
+      // (Opcional) descriptor en resumen de tarjeta
+      // statement_descriptor: "ALLDATA*EVENTOS",
     };
 
     // ===== Llamado al SDK con idempotencia =====

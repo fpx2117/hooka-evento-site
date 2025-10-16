@@ -4,11 +4,15 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-// 👇 usamos normalización para lectura y el generador idempotente
+// Normalización y generador idempotente de códigos de validación
 import {
   normalizeSixDigitCode,
   ensureSixDigitCode,
 } from "@/lib/validation-code";
+import { PaymentStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+
+type Tx = Prisma.TransactionClient;
 
 const EXPECTED_CURRENCY = "ARS";
 
@@ -199,6 +203,72 @@ async function getPrevStatus(type: "vip-table" | "ticket", recordId: string) {
   }
 }
 
+/**
+ * Ajusta soldCount en VipTableConfig usando TableLocation.
+ * - Si la reserva tiene vipTableConfigId, se usa directamente.
+ * - Si no, se resuelve por (eventId, location).
+ * - Aplica delta positivo (al aprobar) o negativo (al revertir).
+ * - Garantiza que no supere stockLimit ni baje de 0.
+ */
+async function adjustVipTableSoldCount(
+  tx: Tx,
+  recordId: string,
+  opts: { delta: number }
+) {
+  const { delta } = opts;
+
+  // Traer datos mínimos para resolver el config y el delta (tables)
+  const res = await tx.tableReservation.findUnique({
+    where: { id: recordId },
+    select: {
+      eventId: true,
+      location: true,
+      tables: true,
+      vipTableConfigId: true,
+    },
+  });
+
+  if (!res) throw new Error("vip_table_reservation_not_found");
+
+  const tablesDelta = (res.tables ?? 1) * delta;
+  if (tablesDelta === 0) return;
+
+  // Resolver VipTableConfig
+  let config: null | { id: string; soldCount: number; stockLimit: number } =
+    null;
+
+  if (res.vipTableConfigId) {
+    config = await tx.vipTableConfig.findUnique({
+      where: { id: res.vipTableConfigId },
+      select: { id: true, soldCount: true, stockLimit: true },
+    });
+  } else {
+    // Resolver por eventId + location (usa TableLocation)
+    config = await tx.vipTableConfig.findUnique({
+      where: {
+        eventId_location: { eventId: res.eventId, location: res.location },
+      },
+      select: { id: true, soldCount: true, stockLimit: true },
+    });
+  }
+
+  if (!config) throw new Error("vip_table_config_not_found_for_location");
+
+  // Nuevo soldCount con límites (0..stockLimit)
+  const next = Math.max(
+    0,
+    Math.min(config.stockLimit, config.soldCount + tablesDelta)
+  );
+
+  // Si no cambia, evitamos escribir
+  if (next === config.soldCount) return;
+
+  await tx.vipTableConfig.update({
+    where: { id: config.id },
+    data: { soldCount: next },
+  });
+}
+
 /* ========================= Core ========================= */
 
 async function processPaymentById(paymentId: string) {
@@ -219,7 +289,7 @@ async function processPaymentById(paymentId: string) {
   }
 
   const expectedAmount = await getExpectedAmount(type, recordId);
-  const approved = isApprovedStrongOrSandbox({
+  const approvedStrong = isApprovedStrongOrSandbox({
     payment,
     expectedAmount,
     expectedCurrency: EXPECTED_CURRENCY,
@@ -227,15 +297,17 @@ async function processPaymentById(paymentId: string) {
   });
 
   const prevStatus = await getPrevStatus(type, recordId);
+  const newStatus = String(payment?.status ?? "pending") as PaymentStatus;
 
   // === Transacción única:
   // 1) Actualiza paymentId/status
-  // 2) Si approved -> garantiza validationCode (6 dígitos) idempotente
-  // 3) Lee el validationCode resultante
-  const result = await prisma.$transaction(async (tx) => {
+  // 2) Ajusta soldCount de VipTableConfig por TableLocation si corresponde
+  // 3) Si approved -> garantiza validationCode (6 dígitos) idempotente
+  // 4) Lee el validationCode resultante
+  const result = await prisma.$transaction(async (tx: Tx) => {
     const baseUpdate = {
       paymentId: String(payment?.id ?? ""),
-      paymentStatus: String(payment?.status ?? "pending") as any,
+      paymentStatus: newStatus as any,
     };
 
     if (type === "vip-table") {
@@ -244,7 +316,25 @@ async function processPaymentById(paymentId: string) {
         data: baseUpdate,
       });
 
-      if (approved) {
+      // Ajuste idempotente de stock por transición de estado
+      const wasApproved = String(prevStatus) === "approved";
+      const nowApproved = approvedStrong && newStatus === "approved";
+
+      if (!wasApproved && nowApproved) {
+        // de NO aprobado -> aprobado : +tables
+        await adjustVipTableSoldCount(tx, recordId, { delta: +1 });
+      } else if (
+        wasApproved &&
+        (newStatus === "refunded" ||
+          newStatus === "cancelled" ||
+          newStatus === "charged_back")
+      ) {
+        // de aprobado -> revertido : -tables
+        await adjustVipTableSoldCount(tx, recordId, { delta: -1 });
+      }
+
+      // Generar código de validación solo si quedó aprobado
+      if (nowApproved) {
         await ensureSixDigitCode(tx, { type: "vip-table", id: recordId });
       }
 
@@ -254,12 +344,13 @@ async function processPaymentById(paymentId: string) {
       });
       return r?.validationCode ?? null;
     } else {
+      // === ticket (entradas individuales)
       await tx.ticket.update({
         where: { id: recordId },
         data: baseUpdate,
       });
 
-      if (approved) {
+      if (approvedStrong && newStatus === "approved") {
         await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
       }
 
@@ -276,7 +367,7 @@ async function processPaymentById(paymentId: string) {
 
   return {
     ok: true,
-    approvedStrong: approved,
+    approvedStrong,
     status: payment?.status,
     status_detail: payment?.status_detail,
     id: payment?.id,

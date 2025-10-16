@@ -1,4 +1,3 @@
-// app/api/admin/tickets/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { jwtVerify } from "jose";
@@ -8,15 +7,12 @@ import {
   PaymentStatus as PS,
 } from "@prisma/client";
 
-// 👇 Helpers centralizados para el validationCode
 import {
   ensureSixDigitCode,
   normalizeSixDigitCode,
 } from "@/lib/validation-code";
 
-/* =========================
-   Auth
-========================= */
+/* ========================= Auth ========================= */
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "your-secret-key-change-in-production"
 );
@@ -32,9 +28,7 @@ async function verifyAuth(request: NextRequest) {
   }
 }
 
-/* =========================
-   Helpers
-========================= */
+/* ========================= Helpers ========================= */
 function normString(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
   const s = String(v).trim();
@@ -55,7 +49,6 @@ function normNumber(v: unknown): number | undefined {
   return n;
 }
 
-/** Acepta customerDni en múltiples variantes */
 function extractCustomerDni(obj: any): string | undefined {
   return (
     normString(obj?.customerDni) ??
@@ -69,9 +62,7 @@ function generateQr(): string {
   return `TICKET-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/* =========================
-   Enum mappers
-========================= */
+/* ========================= Enum mappers ========================= */
 function toPaymentMethod(v?: string): PM | undefined {
   switch ((v || "").toLowerCase()) {
     case "mercadopago":
@@ -107,9 +98,7 @@ function toPaymentStatus(v?: string): PS | undefined {
   }
 }
 
-/* =========================
-   GET /api/admin/tickets
-========================= */
+/* ========================= GET ========================= */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
@@ -135,7 +124,17 @@ export async function GET(request: NextRequest) {
     const skip = (page - 1) * pageSize;
 
     const where: any = {};
-    if (status && ["pending", "approved", "rejected"].includes(status)) {
+    const allowedStatuses: PS[] = [
+      PS.pending,
+      PS.approved,
+      PS.rejected,
+      PS.in_process,
+      PS.failed_preference,
+      PS.cancelled,
+      PS.refunded,
+      PS.charged_back,
+    ];
+    if (status && allowedStatuses.includes(status as PS)) {
       where.paymentStatus = status as PS;
     }
     if (q) {
@@ -175,11 +174,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/* =========================
-   POST /api/admin/tickets
+/* ========================= POST =========================
+   - Tickets SOLO "general" (no VIP global)
    - Genera SIEMPRE qrCode
-   - El validationCode de 6 dígitos se asegura con ensureSixDigitCode()
-========================= */
+   - Asegura validationCode (6 dígitos) si queda approved
+========================================================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
@@ -188,7 +187,6 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json().catch(() => ({}))) as any;
 
-    // Usar SIEMPRE el evento activo
     const event = await prisma.event.findFirst({
       where: { isActive: true },
       select: { id: true, date: true },
@@ -200,16 +198,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const ticketType = (normString(body.ticketType) || "general").toLowerCase(); // "general" | "vip"
+    const ticketType = (normString(body.ticketType) || "general").toLowerCase();
+    if (ticketType !== "general") {
+      return NextResponse.json(
+        {
+          error:
+            "No existe VIP global. VIP se vende como reserva de mesa por ubicación (vip-table).",
+        },
+        { status: 400 }
+      );
+    }
+
     const rawGender = normString(body.gender);
     const gender: "hombre" | "mujer" | undefined =
-      ticketType === "general"
-        ? rawGender === "mujer"
-          ? "mujer"
-          : rawGender === "hombre"
-            ? "hombre"
-            : undefined
-        : undefined;
+      rawGender === "mujer"
+        ? "mujer"
+        : rawGender === "hombre"
+          ? "hombre"
+          : undefined;
 
     const quantity = Math.max(1, normNumber(body.quantity) ?? 1);
 
@@ -223,44 +229,38 @@ export async function POST(request: NextRequest) {
     const paymentStatusEnum =
       toPaymentStatus(normString(body.paymentStatus)) ?? PS.approved;
 
-    if (!customerName) {
+    if (!customerName)
       return NextResponse.json(
         { error: "customerName requerido" },
         { status: 400 }
       );
-    }
-    if (!customerEmail) {
+    if (!customerEmail)
       return NextResponse.json(
         { error: "customerEmail inválido" },
         { status: 400 }
       );
-    }
-    if (!customerPhone) {
+    if (!customerPhone)
       return NextResponse.json(
         { error: "customerPhone requerido" },
         { status: 400 }
       );
-    }
-    if (!customerDni) {
+    if (!customerDni)
       return NextResponse.json(
         { error: "customerDni requerido" },
         { status: 400 }
       );
-    }
 
-    // Precio desde BD
+    // Precio desde BD (general + gender)
     const cfg = await prisma.ticketConfig.findFirst({
       where: {
         eventId: event.id,
-        ticketType,
-        ...(ticketType === "general"
-          ? { gender: (gender as any) ?? undefined }
-          : { gender: null }),
+        ticketType: "general",
+        gender: (gender as any) ?? undefined,
       },
       select: { id: true, price: true },
     });
 
-    // Permitir override de total (para cargas manuales con descuentos)
+    // override opcional
     const overrideTotal = normNumber(body.totalPrice);
     const forceOverride =
       body.forceTotalPrice === true || body.forceTotalPrice === "true";
@@ -269,6 +269,12 @@ export async function POST(request: NextRequest) {
     let ticketConfigId: string | undefined;
 
     if (forceOverride && overrideTotal !== undefined) {
+      if (overrideTotal < 0) {
+        return NextResponse.json(
+          { error: "totalPrice no puede ser negativo" },
+          { status: 400 }
+        );
+      }
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
       if (cfg) ticketConfigId = cfg.id;
     } else if (cfg) {
@@ -280,15 +286,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "No existe configuración de precio en BD para el tipo/género y no se envió totalPrice",
+              "No existe configuración de precio en BD para el género y no se envió totalPrice",
           },
+          { status: 400 }
+        );
+      }
+      if (overrideTotal < 0) {
+        return NextResponse.json(
+          { error: "totalPrice no puede ser negativo" },
           { status: 400 }
         );
       }
       totalPriceDecimal = new Prisma.Decimal(overrideTotal);
     }
 
-    // Crear ticket con qrCode; validationCode se asegura luego con el helper
+    // Crear ticket con qrCode
     let attempts = 0;
     while (attempts < 5) {
       const qrCode = generateQr();
@@ -298,10 +310,8 @@ export async function POST(request: NextRequest) {
           data: {
             eventId: event.id,
             eventDate: event.date,
-            ticketType,
-            ...(ticketType === "general" && gender
-              ? { gender: gender as any }
-              : {}),
+            ticketType: "general",
+            ...(gender ? { gender: gender as any } : {}),
             quantity,
             totalPrice: totalPriceDecimal,
             customerName,
@@ -311,30 +321,22 @@ export async function POST(request: NextRequest) {
             paymentMethod: paymentMethodEnum,
             paymentStatus: paymentStatusEnum,
             qrCode,
-            // 👉 NO seteamos validationCode acá: lo asegura ensureSixDigitCode
             ...(ticketConfigId ? { ticketConfigId } : {}),
           },
           select: { id: true },
         });
 
-        // Asegurar código de 6 dígitos de forma idempotente y sin carreras
-        const code = await ensureSixDigitCode(prisma, {
-          type: "ticket",
-          id: created.id,
-        });
+        if (paymentStatusEnum === PS.approved) {
+          await ensureSixDigitCode(prisma, { type: "ticket", id: created.id });
+        }
 
-        // Devolver ticket completo ya con el validationCode
         const ticket = await prisma.ticket.findUnique({
           where: { id: created.id },
         });
 
-        return NextResponse.json({
-          ok: true,
-          ticket: { ...ticket, validationCode: code },
-        });
+        return NextResponse.json({ ok: true, ticket });
       } catch (e: any) {
         if (e?.code === "P2002") {
-          // Colisión en índice único (p.ej. qrCode)
           attempts++;
           continue;
         }
@@ -355,9 +357,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/* =========================
-   PUT /api/admin/tickets
-========================= */
+/* ========================= PUT ========================= */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
@@ -369,7 +369,6 @@ export async function PUT(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    // Leer ticket actual para decidir tratamiento de gender / status
     const current = await prisma.ticket.findUnique({
       where: { id },
       select: {
@@ -384,20 +383,24 @@ export async function PUT(request: NextRequest) {
 
     const dataToUpdate: any = {};
 
-    const ticketType = normString(body.ticketType);
-    if (ticketType) dataToUpdate.ticketType = ticketType;
+    // ticketType: SOLO "general"
+    if (body.ticketType !== undefined) {
+      const tt = (normString(body.ticketType) || "").toLowerCase();
+      if (tt && tt !== "general") {
+        return NextResponse.json(
+          {
+            error:
+              "ticketType inválido. Solo 'general'. VIP se gestiona como vip-table.",
+          },
+          { status: 400 }
+        );
+      }
+      dataToUpdate.ticketType = "general";
+    }
 
     if (body.gender !== undefined) {
-      const effectiveType = (ticketType || current.ticketType || "")
-        .toString()
-        .toLowerCase();
-      if (effectiveType === "general") {
-        const g = normString(body.gender);
-        if (g === "hombre" || g === "mujer") dataToUpdate.gender = g;
-        else dataToUpdate.gender = null;
-      } else {
-        dataToUpdate.gender = null;
-      }
+      const g = normString(body.gender);
+      dataToUpdate.gender = g === "hombre" || g === "mujer" ? g : null;
     }
 
     const customerName = normString(body.customerName);
@@ -417,11 +420,16 @@ export async function PUT(request: NextRequest) {
 
     const totalPrice = normNumber(body.totalPrice);
     if (totalPrice !== undefined) {
+      if (totalPrice < 0)
+        return NextResponse.json(
+          { error: "totalPrice no puede ser negativo" },
+          { status: 400 }
+        );
       dataToUpdate.totalPrice = new Prisma.Decimal(totalPrice);
     }
 
     const quantity = normNumber(body.quantity);
-    if (quantity !== undefined) dataToUpdate.quantity = quantity;
+    if (quantity !== undefined) dataToUpdate.quantity = Math.max(1, quantity);
 
     if (body.eventDate !== undefined) {
       dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
@@ -430,13 +438,8 @@ export async function PUT(request: NextRequest) {
     const nextPs = toPaymentStatus(normString(body.paymentStatus));
     if (nextPs) dataToUpdate.paymentStatus = nextPs;
 
-    // Guardar cambios básicos
-    await prisma.ticket.update({
-      where: { id },
-      data: dataToUpdate,
-    });
+    await prisma.ticket.update({ where: { id }, data: dataToUpdate });
 
-    // Si queda aprobado y NO tiene un code de 6 dígitos, asegurarlo
     const finalPs = nextPs ?? current.paymentStatus;
     const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
     if (finalPs === PS.approved && !hasValidCode) {
@@ -454,9 +457,7 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-/* =========================
-   PATCH /api/admin/tickets
-========================= */
+/* ========================= PATCH ========================= */
 export async function PATCH(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
@@ -474,20 +475,22 @@ export async function PATCH(request: NextRequest) {
 
     const dataToUpdate: any = {};
 
-    if (body.ticketType !== undefined)
-      dataToUpdate.ticketType =
-        normString(body.ticketType) ?? current.ticketType;
+    if (body.ticketType !== undefined) {
+      const tt = (
+        normString(body.ticketType) ?? current.ticketType
+      ).toLowerCase();
+      if (tt !== "general") {
+        return NextResponse.json(
+          { error: "ticketType inválido. Solo 'general'." },
+          { status: 400 }
+        );
+      }
+      dataToUpdate.ticketType = "general";
+    }
 
     if (body.gender !== undefined) {
-      const nextType = (
-        dataToUpdate.ticketType || current.ticketType
-      ).toLowerCase();
-      if (nextType === "general") {
-        const g = normString(body.gender);
-        dataToUpdate.gender = g === "hombre" || g === "mujer" ? g : null;
-      } else {
-        dataToUpdate.gender = null;
-      }
+      const g = normString(body.gender);
+      dataToUpdate.gender = g === "hombre" || g === "mujer" ? g : null;
     }
 
     if (body.customerName !== undefined)
@@ -515,11 +518,18 @@ export async function PATCH(request: NextRequest) {
 
     if (body.totalPrice !== undefined) {
       const tp = normNumber(body.totalPrice);
-      if (tp !== undefined) dataToUpdate.totalPrice = new Prisma.Decimal(tp);
+      if (tp !== undefined) {
+        if (tp < 0)
+          return NextResponse.json(
+            { error: "totalPrice no puede ser negativo" },
+            { status: 400 }
+          );
+        dataToUpdate.totalPrice = new Prisma.Decimal(tp);
+      }
     }
     if (body.quantity !== undefined) {
       const qty = normNumber(body.quantity);
-      if (qty !== undefined) dataToUpdate.quantity = qty;
+      if (qty !== undefined) dataToUpdate.quantity = Math.max(1, qty);
     }
 
     if (body.eventDate !== undefined) {
@@ -534,13 +544,8 @@ export async function PATCH(request: NextRequest) {
     }
     dataToUpdate.paymentStatus = nextStatus;
 
-    // Guardar cambios
-    await prisma.ticket.update({
-      where: { id },
-      data: dataToUpdate,
-    });
+    await prisma.ticket.update({ where: { id }, data: dataToUpdate });
 
-    // Si queda approved y el code NO es válido, asegurarlo
     const hasValidCode = !!normalizeSixDigitCode(current.validationCode);
     if (nextStatus === PS.approved && !hasValidCode) {
       await ensureSixDigitCode(prisma, { type: "ticket", id });
@@ -557,9 +562,7 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
-/* =========================
-   DELETE /api/admin/tickets?id=xxx
-========================= */
+/* ========================= DELETE ========================= */
 export async function DELETE(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
