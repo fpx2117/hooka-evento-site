@@ -95,7 +95,7 @@ const DEFAULT_BRAND: Brand = {
     textOnDark: "#FFFFFF",
     textOnLight: "#1A1A2E",
     bg: "#5b0d0d", // fondo liso
-    card: "#1f0606",
+    card: "#120202", // MÁS OSCURO para mejor contraste
     qrDark: "#1A1A2E",
     qrLight: "#FFFFFF",
   },
@@ -220,15 +220,15 @@ function emailTemplate({
               </tr>
             </table>
 
-            <!-- TARJETA PRINCIPAL -->
+            <!-- TARJETA PRINCIPAL (más oscura) -->
             <div class="card" bgcolor="${colors.card}" style="position:relative; background:${colors.card}; border-radius:24px; overflow:hidden; margin-top:16px;
-                                   box-shadow:0 12px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05);
-                                   border:2px solid rgba(255,255,255,0.08);">
+                                   box-shadow:0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
+                                   border:2px solid rgba(255,255,255,0.12);">
               ${watermark}
               <div style="height:6px; background:linear-gradient(90deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%);"></div>
 
               <div style="position:relative; padding:32px 24px;">
-                <div style="background:linear-gradient(135deg, rgba(91,13,13,0.28) 0%, rgba(63,10,10,0.24) 100%);
+                <div style="background:linear-gradient(135deg, rgba(91,13,13,0.30) 0%, rgba(63,10,10,0.26) 100%);
                             border-left:5px solid ${colors.accent};
                             border-radius:12px;
                             padding:18px 20px;
@@ -236,7 +236,7 @@ function emailTemplate({
                   <h2 style="margin:0 0 8px 0; font-size:24px; font-weight:800;">
                     ¡Hola ${name}! 🎉
                   </h2>
-                  <p style="margin:0; font-size:15px; color:rgba(255,255,255,0.92); line-height:1.55;">
+                  <p style="margin:0; font-size:15px; color:rgba(255,255,255,0.94); line-height:1.55;">
                     Tu compra fue procesada exitosamente. ¡Prepárate para la fiesta! 🔥
                   </p>
                 </div>
