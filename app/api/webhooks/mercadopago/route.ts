@@ -13,18 +13,16 @@ import {
 } from "@/lib/validation-code";
 
 type Tx = Prisma.TransactionClient;
-
 const EXPECTED_CURRENCY = "ARS";
 
-/* ========================= MP SDK client ========================= */
+/* ========================= Mercado Pago SDK ========================= */
 const MP_TOKEN =
   process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
-
 const mpClient = MP_TOKEN
   ? new MercadoPagoConfig({ accessToken: MP_TOKEN, options: { timeout: 5000 } })
   : null;
 
-/* ========================= Firma (opcional) ========================= */
+/* ========================= Firma opcional ========================= */
 function parseXSignature(sig: string | null) {
   if (!sig) return null;
   const parts = sig.split(",").reduce<Record<string, string>>((acc, kv) => {
@@ -53,7 +51,6 @@ function buildSignatureCandidates(opts: {
     `id:${paymentId};request-id:${requestId};ts:${ts};path:${urlPath};`,
     `id:${paymentId};request-id:${requestId};ts:${ts};url:${urlFull};`,
     `${paymentId}:${requestId}:${ts}`,
-    `${requestId}:{ts}:${paymentId}`,
   ];
   return bases.map((b) => hmac(secret, b));
 }
@@ -81,17 +78,16 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
   return candidates.some((c) => c === v1);
 }
 
-/* ========================= Utilidades ========================= */
-
+/* ========================= Utils ========================= */
 function extractRecordRef(payment: any): {
   type?: "ticket";
   recordId?: string;
 } {
   const md = payment?.metadata || {};
-  let metaType: any = md.type; // esperamos "ticket"
+  let metaType: any = md.type;
   let recordId: string | undefined = md.recordId || md.record_id;
 
-  // compat: antes usábamos tableReservationId o external_reference vip-table-res:<id>
+  // compat: legacy
   if (!recordId) recordId = md.tableReservationId;
   if (
     (!metaType || !recordId) &&
@@ -101,11 +97,8 @@ function extractRecordRef(payment: any): {
     if (!metaType && t) metaType = t;
     if (!recordId && id) recordId = id;
   }
-
-  // normalización legacy -> siempre devolvemos "ticket"
   if (metaType === "vip-table" || metaType === "vip-table-res")
     metaType = "ticket";
-
   if (metaType !== "ticket" || !recordId) return {};
   return { type: "ticket", recordId };
 }
@@ -114,7 +107,6 @@ function nearlyEqual(a: number, b: number, eps = 0.01) {
   return Math.abs(a - b) <= eps;
 }
 
-/** Aprobación fuerte, con relajación en sandbox si aún no está "accredited". */
 function isApprovedStrong(opts: {
   payment: any;
   expectedAmount: number;
@@ -142,14 +134,13 @@ function isApprovedStrong(opts: {
 
   // Relajar en SANDBOX
   if (!liveMode) {
-    const relaxed =
+    return (
       status === "approved" &&
       currencyId === expectedCurrency &&
       nearlyEqual(amountPaid, expectedAmount) &&
-      refOk;
-    return relaxed;
+      refOk
+    );
   }
-
   return false;
 }
 
@@ -157,58 +148,45 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-/* ========================= MP fetchers con retry (SDK) ========================= */
+/* ========================= SDK helpers ========================= */
 async function sdkGetPayment(paymentId: string) {
   if (!mpClient) throw new Error("missing_token");
   const sdk = new Payment(mpClient);
   return sdk.get({ id: paymentId });
 }
-
 async function fetchPaymentWithRetry(paymentId: string) {
-  const attempts = 10;
+  const attempts = 8;
   for (let i = 0; i < attempts; i++) {
     try {
       const p = await sdkGetPayment(paymentId);
-      console.log("[webhook] payment fetched:", {
+      // Log breve para debug
+      console.log("[webhook] payment:", {
         id: p?.id,
         status: p?.status,
         status_detail: p?.status_detail,
-        live_mode: p?.live_mode,
-        collector_id: p?.collector_id,
         external_reference: p?.external_reference,
-        transaction_amount: p?.transaction_amount,
-        currency_id: p?.currency_id,
+        amount: p?.transaction_amount,
+        currency: p?.currency_id,
+        live_mode: p?.live_mode,
       });
       return p as any;
     } catch (e: any) {
       const msg = String(e?.message || e);
-      const wait =
-        Math.min(1000 * Math.pow(1.25, i), 2000) + Math.random() * 150;
-
-      if (
-        msg.includes("404") ||
-        msg.includes("Not Found") ||
-        msg.includes("network")
-      ) {
-        console.warn(
-          `[webhook] Payment.get retry ${i + 1}/${attempts} (${msg})`
-        );
-        await sleep(wait);
+      if (msg.includes("404") || msg.includes("Not Found")) {
+        await sleep(400 + i * 200);
         continue;
       }
-
-      console.error("[webhook] Payment.get fallo no-retriable:", msg);
+      console.error("[webhook] Payment.get error:", msg);
       throw e;
     }
   }
   throw new Error("payment_not_found_after_retries");
 }
-
 async function fetchMerchantOrder(orderId: string) {
   if (!mpClient) throw new Error("missing_token");
   const mo = new MerchantOrder(mpClient);
   const order = await mo.get({ merchantOrderId: Number(orderId) });
-  console.log("[webhook] merchant_order fetched:", {
+  console.log("[webhook] merchant_order:", {
     id: order?.id,
     total_amount: order?.total_amount,
     paid_amount: order?.paid_amount,
@@ -221,7 +199,7 @@ async function fetchMerchantOrder(orderId: string) {
   return order as any;
 }
 
-/* ========================= Persistencia (BD) ========================= */
+/* ========================= Persistencia ========================= */
 async function getExpectedAmount(recordId: string) {
   const rec = await prisma.ticket.findUnique({
     where: { id: recordId },
@@ -229,7 +207,6 @@ async function getExpectedAmount(recordId: string) {
   });
   return Number(rec?.totalPrice ?? 0);
 }
-
 async function getPrevPaymentInfo(recordId: string) {
   return prisma.ticket.findUnique({
     where: { id: recordId },
@@ -242,6 +219,8 @@ async function getPrevPaymentInfo(recordId: string) {
  * +vipTables al pasar a approved por primera vez
  * -vipTables al pasar de approved -> refunded/cancelled/charged_back
  * (con clamp 0..stockLimit)
+ * Además, si hay tableNumber, verifica que no esté ocupada por OTRO ticket aprobado.
+ * (No guarda nada extra; usa Ticket como fuente de verdad)
  */
 async function adjustVipSoldCountByTransition(
   tx: Tx,
@@ -251,20 +230,21 @@ async function adjustVipSoldCountByTransition(
   const { fromApproved, toApproved } = opts;
   if (fromApproved === toApproved) return;
 
-  // Datos del ticket VIP
   const t = await tx.ticket.findUnique({
     where: { id: ticketId },
     select: {
+      id: true,
       ticketType: true,
       eventId: true,
       vipLocation: true,
       vipTables: true,
+      tableNumber: true,
     },
   });
   if (!t || t.ticketType !== "vip" || !t.vipLocation) return;
 
   const tables = Math.max(1, Number(t.vipTables || 1));
-  // Buscar config por (eventId, location)
+
   const cfg = await tx.vipTableConfig.findUnique({
     where: {
       eventId_location: { eventId: t.eventId, location: t.vipLocation },
@@ -282,14 +262,33 @@ async function adjustVipSoldCountByTransition(
       data: { soldCount: next },
     });
   }
+
+  // Validación de mesa única (si corresponde)
+  if (t.tableNumber && toApproved) {
+    const already = await tx.ticket.findFirst({
+      where: {
+        eventId: t.eventId,
+        ticketType: "vip",
+        vipLocation: t.vipLocation,
+        paymentStatus: "approved",
+        tableNumber: t.tableNumber,
+        NOT: { id: t.id },
+      },
+      select: { id: true },
+    });
+    if (already) {
+      console.warn(
+        `[VIP] Mesa #${t.tableNumber} (${t.vipLocation}) ya ocupada por ticket ${already.id}.`
+      );
+      // Si querés impedir el solapamiento, podrías lanzar error aquí.
+      // throw new Error("La mesa seleccionada ya fue asignada.");
+    }
+  }
 }
 
 /**
- * Persistir estado de pago para Ticket.
- * - Actualiza paymentId, paymentStatus, paymentMethod="mercadopago".
- * - Si queda aprobado fuerte, asegura validationCode (idempotente).
- * - Si el ticket es VIP, ajusta soldCount en VipTableConfig según transición.
- * - Devuelve el validationCode (si quedó aprobado) para log/debug.
+ * Actualiza el estado del ticket y ajusta stock/mesas.
+ * Genera el validationCode si el pago queda aprobado (fuerte).
  */
 async function persistStatus(
   recordId: string,
@@ -304,20 +303,19 @@ async function persistStatus(
       where: { id: recordId },
       data: {
         paymentId: String(payment?.id ?? ""),
-        paymentStatus: newStatus as any,
+        paymentStatus: newStatus,
         paymentMethod: "mercadopago",
       },
     });
 
-    // Transición de stock si es VIP
     const wasApproved = String(prevStatus) === "approved";
     const isApprovedNow = approvedStrong && newStatus === "approved";
+
     await adjustVipSoldCountByTransition(tx, recordId, {
       fromApproved: wasApproved,
       toApproved: isApprovedNow,
     });
 
-    // Código de validación si quedó aprobado
     if (isApprovedNow) {
       await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
     }
@@ -332,8 +330,10 @@ async function persistStatus(
 
 async function sendConfirmation(recordId: string) {
   try {
-    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    await fetch(`${base.replace(/\/+$/, "")}/api/send-confirmation`, {
+    const base = (
+      process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
+    ).replace(/\/+$/, "");
+    await fetch(`${base}/api/send-confirmation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "ticket", recordId }),
@@ -347,7 +347,6 @@ async function sendConfirmation(recordId: string) {
 /* ========================= Core ========================= */
 async function processPaymentById(paymentId: string) {
   if (!MP_TOKEN || !mpClient) throw new Error("missing_token");
-
   const payment = await fetchPaymentWithRetry(paymentId);
 
   const { type, recordId } = extractRecordRef(payment);
@@ -367,7 +366,7 @@ async function processPaymentById(paymentId: string) {
     expectedRef: `ticket:${recordId}`,
   });
 
-  // Idempotencia: si no cambia, salir
+  // Idempotencia básica
   const prevInfo = await getPrevPaymentInfo(recordId);
   const prevStatus = (prevInfo?.paymentStatus as string) ?? null;
   const prevPaymentId = prevInfo?.paymentId || null;
@@ -438,7 +437,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: webhook “nuevo” (payment.created, payment.updated, etc.)
+// POST: webhook “nuevo” (payment.created, payment.updated, merchant_order, etc.)
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -524,7 +523,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ignored: true });
   } catch (error) {
-    console.error("Error procesando webhook:", error);
+    console.error("[webhook][POST] error:", error);
     return NextResponse.json(
       { error: "Error procesando webhook" },
       { status: 500 }
