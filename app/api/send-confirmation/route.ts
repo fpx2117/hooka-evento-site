@@ -35,7 +35,7 @@ function absUrl(base: string, path?: string | null) {
   if (!path) return undefined;
   const p = path.trim();
   if (!p) return undefined;
-  if (/^https?:\/\//i.test(p)) return p; // ya absoluto
+  if (/^https?:\/\//i.test(p)) return p;
   const origin = base.replace(/\/+$/, "");
   const rel = p.startsWith("/") ? p : `/${p}`;
   return `${origin}${rel}`;
@@ -72,42 +72,37 @@ const prettyLocation = (loc?: string | null) => {
 type Brand = {
   name: string;
   logoUrl?: string | null;
-  /** Imagen de fondo del hero (patrón HOOKA + gradiente) */
-  heroBgUrl?: string | null;
-  /** Palma superior derecha */
-  palmsTopUrl?: string | null;
-  /** Palma inferior izquierda */
-  palmsBottomUrl?: string | null;
   colors: {
-    gradientFrom: string;
-    gradientTo: string;
-    accent: string;
+    gradientFrom: string; // #5b0d0d
+    gradientTo: string; // #3f0a0a
+    accent: string; // Beige
     textOnDark: string;
     textOnLight: string;
-    bg: string;
-    card: string;
+    bg: string; // Body
+    card: string; // Card
     qrDark?: string;
     qrLight?: string;
+    pattern?: string; // Texto HOOKA
+    patternOpacity?: number; // Opacidad pattern
   };
 };
 
 const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
-  logoUrl: process.env.HOOKA_LOGO_URL || undefined,
-  // Archivos en /public
-  heroBgUrl: process.env.HOOKA_HERO_BG_URL || "/hooka-hero-bg.png",
-  palmsTopUrl: process.env.HOOKA_PALMS_TOP_URL || "/palmeras1.png",
-  palmsBottomUrl: process.env.HOOKA_PALMS_BOTTOM_URL || "/palmeras2.png",
+  // 👉 labios como logo
+  logoUrl: "/logov2.png",
   colors: {
-    gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#FF006E",
-    gradientTo: process.env.HOOKA_GRADIENT_TO || "#FFBE0B",
-    accent: process.env.HOOKA_ACCENT || "#00F5FF",
+    gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#5b0d0d",
+    gradientTo: process.env.HOOKA_GRADIENT_TO || "#3f0a0a",
+    accent: process.env.HOOKA_ACCENT || "#E3CFBF",
     textOnDark: "#FFFFFF",
     textOnLight: "#1A1A2E",
-    bg: process.env.HOOKA_BG || "#0A0E27",
-    card: process.env.HOOKA_CARD || "#1A1F3A",
+    bg: process.env.HOOKA_BG || "#5b0d0d",
+    card: process.env.HOOKA_CARD || "#1f0606",
     qrDark: process.env.HOOKA_QR_DARK || "#1A1A2E",
     qrLight: "#FFFFFF",
+    pattern: "#E3CFBF",
+    patternOpacity: 0.35,
   },
 };
 
@@ -136,6 +131,50 @@ async function makeQrDataUrl(url: string | null, brand: Brand) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                              HOOKA PATTERN                                 */
+/* -------------------------------------------------------------------------- */
+
+function buildHookaPattern({
+  rows = 3,
+  cols = 3,
+  color = "#E3CFBF",
+  opacity = 0.35,
+  fontSizePx = 88,
+  cellPadX = 12,
+  cellPadY = 2,
+}: {
+  rows?: number;
+  cols?: number;
+  color?: string;
+  opacity?: number;
+  fontSizePx?: number;
+  cellPadX?: number;
+  cellPadY?: number;
+}) {
+  const cells = Array.from({ length: cols })
+    .map(
+      () =>
+        `<td align="center" valign="middle" style="padding:${cellPadY}px ${cellPadX}px;">
+           <div style="font-weight:900; line-height:1; letter-spacing:-0.02em; font-size:${fontSizePx}px; color:${color}; opacity:${opacity}; mso-line-height-rule:exactly;">
+             HOOKA
+           </div>
+         </td>`
+    )
+    .join("");
+
+  const rowsHtml = Array.from({ length: rows })
+    .map(() => `<tr>${cells}</tr>`)
+    .join("");
+
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+  <tbody>
+    ${rowsHtml}
+  </tbody>
+</table>`;
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                 TEMPLATE                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -156,13 +195,23 @@ function emailTemplate({
   validationCode?: string | null;
   qrCodeImage?: string | null;
 }) {
-  const { colors, logoUrl, heroBgUrl, palmsTopUrl, palmsBottomUrl } = brand;
+  const { colors, logoUrl } = brand;
 
   const watermark = logoUrl
-    ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.08;">
+    ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.06;">
          <img src="${logoUrl}" alt="${brand.name} logo" style="max-width:85%; max-height:85%; transform:rotate(-5deg); filter:none !important; mix-blend-mode:normal !important;"/>
        </div>`
     : "";
+
+  const patternHtml = buildHookaPattern({
+    rows: 3,
+    cols: 3,
+    color: colors.pattern || "#E3CFBF",
+    opacity: colors.patternOpacity ?? 0.35,
+    fontSizePx: 88,
+    cellPadX: 12,
+    cellPadY: 2,
+  });
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -184,94 +233,70 @@ function emailTemplate({
   <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
     <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
 
-      <!-- HERO con imagen de fondo (bulletproof) -->
+      <!-- HERO: bordó con degradé + pattern HOOKA + vignette -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
         <tr>
-          <td
-            background="${heroBgUrl || ""}"
-            style="
-              background:${colors.bg};
-              ${
-                heroBgUrl
-                  ? `background-image:url('${heroBgUrl}'); background-size:cover; background-position:center;`
-                  : `
-              background: linear-gradient(135deg, ${colors.gradientFrom} 0%, #FB5607 35%, ${colors.gradientTo} 70%, #8338EC 100%);`
-              }
-              border-radius:24px; text-align:center; padding:40px 24px; position:relative;
-            "
-          >
-            <!--[if gte mso 9]>
-            <v:rect xmlns:v='urn:schemas-microsoft-com:vml' fill='true' stroke='f' style='width:640px;height:280px;'>
-              <v:fill type='frame' src='${heroBgUrl || ""}' color='${colors.bg}' />
-              <v:textbox inset='0,0,0,0'>
-            <![endif]-->
+          <td style="
+                background: ${colors.bg};
+                background-image: linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
+                border-radius:24px; text-align:center; padding:34px 22px; position:relative;">
             <div style="position:relative; z-index:2;">
               ${
                 logoUrl
                   ? `
-              <div class="no-invert" style="background:rgba(255,255,255,0.15); backdrop-filter:blur(10px); border-radius:24px; padding:16px; display:inline-block; margin-bottom:16px; border:3px solid rgba(255,255,255,0.3);">
-                <img class="no-invert" src="${logoUrl}" width="100" height="100" alt="${brand.name} logo" style="border-radius:16px;"/>
+              <div class="no-invert" style="background:rgba(227,207,191,0.14); backdrop-filter:blur(8px); border-radius:18px; padding:10px; display:inline-block; margin-bottom:10px; border:2px solid rgba(227,207,191,0.35);">
+                <img class="no-invert" src="${logoUrl}" width="88" height="88" alt="${brand.name} logo" style="border-radius:12px;"/>
               </div>`
                   : ""
               }
 
-              <h1 style="margin:12px 0 8px 0; font-size:36px; font-weight:900; line-height:1.1; color:#fff;">
+              <h1 style="margin:10px 0 6px 0; font-size:32px; font-weight:900; line-height:1.15; color:#fff;">
                 ${title}
               </h1>
 
               ${
                 subtitle
                   ? `
-              <div class="no-invert" style="display:inline-block; background:rgba(0,245,255,0.2); border:2px solid ${colors.accent}; border-radius:50px; padding:8px 24px; margin-top:8px;">
-                <p style="margin:0; font-size:15px; font-weight:600; color:${colors.accent}; letter-spacing:0.5px;">${subtitle}</p>
-              </div>`
-                  : ""
-              }
-
-              <!-- Palmas superpuestas -->
-              ${
-                palmsTopUrl
-                  ? `
-              <div style="position:absolute; right:-10px; top:-6px; opacity:0.95;">
-                <img src="${palmsTopUrl}" alt="" width="220" style="max-width:40vw;height:auto;" />
-              </div>`
-                  : ""
-              }
-
-              ${
-                palmsBottomUrl
-                  ? `
-              <div style="position:absolute; left:-20px; bottom:-60px; opacity:0.95;">
-                <img src="${palmsBottomUrl}" alt="" width="260" style="max-width:42vw;height:auto;" />
+              <div class="no-invert" style="display:inline-block; background:rgba(227,207,191,0.18); border:2px solid ${colors.accent}; border-radius:999px; padding:6px 18px; margin-top:6px;">
+                <p style="margin:0; font-size:14px; font-weight:700; color:${colors.accent}; letter-spacing:0.4px;">${subtitle}</p>
               </div>`
                   : ""
               }
             </div>
-            <!--[if gte mso 9]>
-              </v:textbox>
-            </v:rect>
-            <![endif]-->
+
+            <!-- Pattern -->
+            <div aria-hidden="true" style="position:absolute; inset:0; padding:18px; z-index:1;">
+              ${patternHtml}
+            </div>
+
+            <!-- Vignette sutil -->
+            <div aria-hidden="true" style="
+                position:absolute; inset:0; z-index:0;
+                background:
+                  radial-gradient(800px 420px at 40% 50%, rgba(0,0,0,0.32), rgba(0,0,0,0) 55%);
+                opacity:.55;">
+            </div>
           </td>
         </tr>
       </table>
 
       <!-- Tarjeta principal -->
       <div class="card" bgcolor="${colors.card}" style="position:relative; background:${colors.card}; border-radius:24px; overflow:hidden; margin-top:16px;
-                                 box-shadow:0 12px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
-                                 border:2px solid rgba(255,0,110,0.2);">
+                                 box-shadow:0 12px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05);
+                                 border:2px solid rgba(255,255,255,0.08);">
         ${watermark}
         <div style="height:6px; background:linear-gradient(90deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%);"></div>
 
         <div style="position:relative; padding:32px 24px;">
-          <div style="background:linear-gradient(135deg, rgba(255,0,110,0.15) 0%, rgba(255,190,11,0.15) 100%);
+          <div style="background:linear-gradient(135deg, rgba(91,13,13,0.28) 0%, rgba(63,10,10,0.24) 100%);
                       border-left:5px solid ${colors.accent};
                       border-radius:12px;
-                      padding:20px 24px;
-                      margin-bottom:24px;">
-            <h2 style="margin:0 0 8px 0; font-size:26px; font-weight:800;">
+                      padding:18px 20px;
+                      margin-bottom:20px;">
+            <h2 style="margin:0 0 8px 0; font-size:24px; font-weight:800;">
               ¡Hola ${name}! 🎉
             </h2>
-            <p style="margin:0; font-size:16px; color:rgba(255,255,255,0.9); line-height:1.5;">
+            <p style="margin:0; font-size:15px; color:rgba(255,255,255,0.92); line-height:1.55;">
               Tu compra fue procesada exitosamente. ¡Prepárate para la fiesta! 🔥
             </p>
           </div>
@@ -282,20 +307,20 @@ function emailTemplate({
             validationCode
               ? `
             <div style="background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
-                        padding:28px 24px; text-align:center; border-radius:20px; margin:24px 0;
-                        box-shadow:0 12px 40px rgba(255,0,110,0.5), 0 0 60px rgba(255,190,11,0.3);
-                        border:3px solid rgba(255,255,255,0.2);">
-              <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${colors.accent};">
-                <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${colors.accent};">
+                        padding:24px 22px; text-align:center; border-radius:18px; margin:22px 0;
+                        box-shadow:0 12px 40px rgba(91,13,13,0.45), 0 0 60px rgba(63,10,10,0.28);
+                        border:3px solid rgba(255,255,255,0.18);">
+              <div style="display:inline-block; background:rgba(227,207,191,0.22); border-radius:12px; padding:6px 16px; margin-bottom:10px; border:2px solid ${colors.accent};">
+                <p style="margin:0; font-size:12px; font-weight:800; letter-spacing:2px; text-transform:uppercase; color:${colors.accent};">
                   🫦 Código de Validación 🫦
                 </p>
               </div>
-              <div style="background:rgba(0,0,0,0.3); border-radius:16px; padding:20px; margin:12px auto; max-width:320px; border:2px solid rgba(255,255,255,0.15);">
-                <div style="font-size:36px; font-weight:900; letter-spacing:12px; line-height:1; color:#FFFFFF;">
+              <div style="background:rgba(0,0,0,0.3); border-radius:12px; padding:16px; margin:10px auto; max-width:320px; border:2px solid rgba(255,255,255,0.15);">
+                <div style="font-size:34px; font-weight:900; letter-spacing:10px; line-height:1; color:#FFFFFF;">
                   ${validationCode}
                 </div>
               </div>
-              <p style="margin:12px 0 0 0; font-size:14px; font-weight:600; color:rgba(255,255,255,0.95);">
+              <p style="margin:10px 0 0 0; font-size:13px; font-weight:700; color:rgba(255,255,255,0.96);">
                 ✨ Mostrá este código o tu QR al personal ✨
               </p>
             </div>`
@@ -307,52 +332,52 @@ function emailTemplate({
               ? `
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
                         background:#FFFFFF; border:4px solid transparent; position:relative;
-                        padding:24px; border-radius:20px; margin:24px auto;
+                        padding:22px; border-radius:18px; margin:22px auto;
                         box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
-              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
-              <div style="background:#FFFFFF; border-radius:12px; padding:12px 20px; margin-bottom:16px; display:inline-block;">
-                <h3 style="margin:0; font-size:20px; font-weight:800; color:${colors.gradientFrom};">
+              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%); border-radius:18px; z-index:-1;"></div>
+              <div style="background:#FFFFFF; border-radius:10px; padding:10px 18px; margin-bottom:14px; display:inline-block;">
+                <h3 style="margin:0; font-size:18px; font-weight:800; color:${colors.gradientFrom};">
                   🫦 Tu Código QR 🫦
                 </h3>
               </div>
-              <div style="background:#FFFFFF; border-radius:16px; padding:16px; display:inline-block; box-shadow:0 8px 24px rgba(0,0,0,0.15);">
+              <div style="background:#FFFFFF; border-radius:12px; padding:14px; display:inline-block; box-shadow:0 8px 24px rgba(0,0,0,0.15);">
                 <img src="${qrCodeImage}" alt="QR de validación" width="240" style="max-width:240px; height:auto; border-radius:8px;"/>
               </div>
-              <p style="font-size:13px; color:#555; margin:16px 0 0 0; font-weight:600; line-height:1.5;">
+              <p style="font-size:12px; color:#555; margin:14px 0 0 0; font-weight:700; line-height:1.5;">
                 📱 Mostrá este código o tu QR al personal 📱
               </p>
             </div>`
               : ""
           }
 
-          <div style="background:linear-gradient(135deg, rgba(0,245,255,0.1) 0%, rgba(131,56,236,0.1) 100%);
+          <div style="background:linear-gradient(135deg, rgba(227,207,191,0.10) 0%, rgba(131,56,236,0.10) 100%);
                       border:2px solid ${colors.accent};
-                      border-radius:16px; padding:20px 24px;">
-            <h3 style="margin:0 0 12px 0; font-size:18px; font-weight:800; color:${colors.accent};">📋 Instrucciones</h3>
-            <ol style="margin:0; padding-left:20px; color:${colors.textOnDark}; line-height:1.8; font-size:15px;">
-              <li style="margin-bottom:8px;"><strong>Mostrá este email</strong> al personal de seguridad</li>
-              <li style="margin-bottom:8px;">Pueden <strong>escanear tu QR</strong> o ingresar el código de 6 dígitos</li>
+                      border-radius:14px; padding:18px 20px;">
+            <h3 style="margin:0 0 10px 0; font-size:16px; font-weight:900; color:${colors.accent};">📋 Instrucciones</h3>
+            <ol style="margin:0; padding-left:20px; color:${colors.textOnDark}; line-height:1.75; font-size:14px;">
+              <li style="margin-bottom:6px;"><strong>Mostrá este email</strong> al personal de seguridad</li>
+              <li style="margin-bottom:6px;">Pueden <strong>escanear tu QR</strong> o ingresar el código de 6 dígitos</li>
               <li>Una vez validado, <strong>¡entrás directo a la fiesta!</strong> 🎊</li>
             </ol>
           </div>
 
-          <div style="text-align:center; margin:32px 0 0 0; padding:24px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%); border-radius:16px;">
-            <p style="margin:0; font-size:22px; font-weight:900; color:#FFFFFF;">
+          <div style="text-align:center; margin:26px 0 0 0; padding:20px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%); border-radius:14px;">
+            <p style="margin:0; font-size:20px; font-weight:900; color:#FFFFFF;">
               ¡Nos vemos en la fiesta! 🎉🔥
             </p>
-            <p style="margin:8px 0 0 0; font-size:14px; color:rgba(255,255,255,0.9); font-weight:600;">
+            <p style="margin:8px 0 0 0; font-size:13px; color:rgba(255,255,255,0.92); font-weight:700;">
               Prepárate para una noche inolvidable 🫦
             </p>
           </div>
         </div>
       </div>
 
-      <div style="text-align:center; padding:24px 16px; margin-top:16px;">
-        <div style="display:inline-block; background:rgba(255,255,255,0.05); border-radius:16px; padding:16px 32px; border:1px solid rgba(255,255,255,0.1);">
-          <p style="margin:0 0 8px 0; font-size:18px; font-weight:800; color:#FFFFFF;">
+      <div style="text-align:center; padding:20px 14px; margin-top:14px;">
+        <div style="display:inline-block; background:rgba(255,255,255,0.06); border-radius:14px; padding:14px 24px; border:1px solid rgba(255,255,255,0.10);">
+          <p style="margin:0 0 6px 0; font-size:16px; font-weight:900; color:#FFFFFF;">
             ${brand.name}
           </p>
-          <p style="margin:0; font-size:13px; color:#A7AABB; font-weight:500;">
+          <p style="margin:0; font-size:12px; color:#A7AABB; font-weight:700;">
             📍 La ubicación se confirmará 24hs antes del evento
           </p>
         </div>
@@ -367,9 +392,9 @@ function emailTemplate({
 /* -------------------------------------------------------------------------- */
 
 type Payload = {
-  type?: "ticket" | "vip-table"; // compat: "vip-table" se trata como ticket VIP
+  type?: "ticket" | "vip-table";
   recordId?: string;
-  force?: boolean; // reenviar aunque exista emailSentAt (omite lock)
+  force?: boolean;
 };
 
 export async function POST(request: NextRequest) {
@@ -382,7 +407,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Compat: si vino "vip-table", lo normalizamos a "ticket"
     if (type === "vip-table") type = "ticket";
     if (type !== "ticket") {
       return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });
@@ -424,12 +448,12 @@ export async function POST(request: NextRequest) {
       where: { id: recordId },
       select: {
         id: true,
-        ticketType: true, // "general" | "vip"
-        gender: true, // sólo general
-        quantity: true, // sólo general
-        vipLocation: true, // sólo vip
-        vipTables: true, // sólo vip
-        capacityPerTable: true, // sólo vip
+        ticketType: true,
+        gender: true,
+        quantity: true,
+        vipLocation: true,
+        vipTables: true,
+        capacityPerTable: true,
         validationCode: true,
         totalPrice: true,
         paymentStatus: true,
@@ -475,17 +499,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolvemos brand y absolutizamos URLs para email
+    // Brand + URL absoluta del logo (logov2.png)
     const brandRel = resolveBrand();
-    const brand = {
+    const brandAbs: Brand = {
       ...brandRel,
       logoUrl: absUrl(BASE, brandRel.logoUrl),
-      heroBgUrl: absUrl(BASE, brandRel.heroBgUrl) || undefined,
-      palmsTopUrl: absUrl(BASE, brandRel.palmsTopUrl) || undefined,
-      palmsBottomUrl: absUrl(BASE, brandRel.palmsBottomUrl) || undefined,
     };
 
-    const title = `🫦 ${t.event?.name || brand.name} 🫦`;
+    const title = `🫦 ${t.event?.name || brandRel.name} 🫦`;
     const dateStr = t.event?.date
       ? new Date(t.event.date).toLocaleDateString("es-AR")
       : "";
@@ -521,7 +542,6 @@ export async function POST(request: NextRequest) {
       const tables = Math.max(1, Number(t.vipTables ?? 1));
       const capPerTable = Math.max(0, Number(t.capacityPerTable ?? 0));
 
-      // Línea compacta
       let mesaCapLine = `<strong>Mesas:</strong> ${tables}`;
       if (capPerTable > 0) {
         if (tables > 1) {
@@ -543,10 +563,10 @@ export async function POST(request: NextRequest) {
     }
 
     const validateUrl = buildValidateUrl(BASE, normalizedCode);
-    const qrImage = await makeQrDataUrl(validateUrl, brand);
+    const qrImage = await makeQrDataUrl(validateUrl, brandRel);
 
     const html = emailTemplate({
-      brand,
+      brand: brandAbs,
       title,
       subtitle:
         t.ticketType === TicketType.vip
