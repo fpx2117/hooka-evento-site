@@ -73,20 +73,21 @@ type Brand = {
   name: string;
   logoUrl?: string | null;
   colors: {
-    gradientFrom: string; // #5b0d0d
-    gradientTo: string; // #3f0a0a
-    accent: string; // Beige
+    gradientFrom: string;
+    gradientTo: string;
+    accent: string;
     textOnDark: string;
     textOnLight: string;
-    bg: string; // Body
-    card: string; // Card
+    bg: string;
+    card: string;
     qrDark?: string;
     qrLight?: string;
-    pattern?: string; // Color del pattern HOOKA
-    patternOpacity?: number; // Opacidad del pattern
-    patternTileW?: number; // Ancho del tile SVG
-    patternTileH?: number; // Alto del tile SVG
-    patternFontSize?: number; // Tamaño de HOOKA
+    /* pattern */
+    pattern?: string;
+    patternOpacity?: number;
+    patternTileW?: number;
+    patternTileH?: number;
+    patternFontSize?: number;
   };
 };
 
@@ -94,20 +95,21 @@ const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
   logoUrl: "/logov2.png",
   colors: {
-    gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#5b0d0d",
-    gradientTo: process.env.HOOKA_GRADIENT_TO || "#3f0a0a",
-    accent: process.env.HOOKA_ACCENT || "#E3CFBF",
+    gradientFrom: "#5b0d0d",
+    gradientTo: "#3f0a0a",
+    accent: "#E3CFBF",
     textOnDark: "#FFFFFF",
     textOnLight: "#1A1A2E",
-    bg: process.env.HOOKA_BG || "#5b0d0d",
-    card: process.env.HOOKA_CARD || "#1f0606",
-    qrDark: process.env.HOOKA_QR_DARK || "#1A1A2E",
+    bg: "#5b0d0d",
+    card: "#1f0606",
+    qrDark: "#1A1A2E",
     qrLight: "#FFFFFF",
+    /* patrón legible */
     pattern: "#E3CFBF",
-    patternOpacity: 0.35,
-    patternTileW: 560, // tile grande para desktop (se repite)
-    patternTileH: 260,
-    patternFontSize: 200, // “HOOKA” bien grande como la captura
+    patternOpacity: 0.3,
+    patternTileW: 360, // ancho del “mosaico”
+    patternTileH: 180, // alto del “mosaico”
+    patternFontSize: 84, // tamaño del texto HOOKA
   },
 };
 
@@ -136,7 +138,7 @@ async function makeQrDataUrl(url: string | null, brand: Brand) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                PATTERN GLOBAL COMO BACKGROUND (SVG data URI)               */
+/*       PATTERN GLOBAL “HOOKA” COMO BACKGROUND (SVG con filas alternadas)    */
 /* -------------------------------------------------------------------------- */
 
 function buildHookaPatternDataURI({
@@ -152,21 +154,30 @@ function buildHookaPatternDataURI({
   tileH: number;
   fontSize: number;
 }) {
-  // SVG con <pattern> que repite "HOOKA" dos veces en X para continuidad
+  // 2 filas dentro del mismo tile; la fila de abajo se desplaza media baldosa
+  const baseline = Math.round(fontSize * 0.82);
+  const row2 = baseline + Math.round(tileH * 0.55);
+
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${tileW}" height="${tileH}">
   <defs>
-    <pattern id="p" patternUnits="userSpaceOnUse" width="${tileW}" height="${tileH}">
-      <rect width="100%" height="100%" fill="none"/>
-      <text x="0" y="${Math.floor(fontSize * 0.85)}"
-            font-family="Poppins, Arial, sans-serif"
-            font-size="${fontSize}" font-weight="900"
-            fill="${color}" fill-opacity="${opacity}">
-        HOOKA HOOKA
-      </text>
-    </pattern>
+    <style>
+      @font-face { font-family: Poppins; }
+    </style>
   </defs>
-  <rect width="100%" height="100%" fill="url(#p)"/>
+  <rect width="100%" height="100%" fill="none"/>
+  <!-- Fila 1 -->
+  <text x="0" y="${baseline}" font-family="Poppins, Arial, sans-serif"
+        font-size="${fontSize}" font-weight="900"
+        fill="${color}" fill-opacity="${opacity}">
+    HOOKA HOOKA HOOKA
+  </text>
+  <!-- Fila 2 (desplazada para efecto patrón) -->
+  <text x="${Math.round(tileW / 2)}" y="${row2}" font-family="Poppins, Arial, sans-serif"
+        font-size="${fontSize}" font-weight="900"
+        fill="${color}" fill-opacity="${opacity}">
+    HOOKA HOOKA HOOKA
+  </text>
 </svg>`.trim();
 
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
@@ -184,7 +195,6 @@ function emailTemplate({
   detailsHtml,
   validationCode,
   qrCodeImage,
-  baseOrigin,
 }: {
   brand: Brand;
   title: string;
@@ -193,21 +203,20 @@ function emailTemplate({
   detailsHtml?: string;
   validationCode?: string | null;
   qrCodeImage?: string | null;
-  baseOrigin: string; // para VML width-ish
 }) {
   const { colors, logoUrl } = brand;
 
   const bgPattern = buildHookaPatternDataURI({
     color: colors.pattern || "#E3CFBF",
-    opacity: colors.patternOpacity ?? 0.35,
-    tileW: colors.patternTileW ?? 560,
-    tileH: colors.patternTileH ?? 260,
-    fontSize: colors.patternFontSize ?? 200,
+    opacity: colors.patternOpacity ?? 0.3,
+    tileW: colors.patternTileW ?? 360,
+    tileH: colors.patternTileH ?? 180,
+    fontSize: colors.patternFontSize ?? 84,
   });
 
   const watermark = logoUrl
     ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.06;">
-         <img src="${logoUrl}" alt="${brand.name} logo" style="max-width:85%; max-height:85%; transform:rotate(-5deg); filter:none !important; mix-blend-mode:normal !important;"/>
+         <img src="${logoUrl}" alt="${brand.name} logo" style="max-width:85%; max-height:85%; transform:rotate(-5deg);"/>
        </div>`
     : "";
 
@@ -230,13 +239,12 @@ function emailTemplate({
   </head>
   <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
 
-    <!-- WRAPPER con BACKGROUND GLOBAL (pattern debajo de TODO) -->
+    <!-- WRAPPER con BACKGROUND GLOBAL (pattern legible debajo de TODO) -->
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${colors.bg}">
       <tr>
         <td align="center"
             background="${bgPattern}"
             style="background-image:url('${bgPattern}'); background-repeat:repeat; background-position:top center; background-size:${colors.patternTileW}px ${colors.patternTileH}px;">
-
           <!--[if gte mso 9]>
           <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:1000px; height:auto;">
             <v:fill type="tile" src="${bgPattern}" color="${colors.bg}" />
@@ -434,12 +442,11 @@ export async function POST(request: NextRequest) {
     const apiKey = s(process.env.RESEND_API_KEY);
     const from =
       s(process.env.RESEND_FROM) || "Hooka Party <info@hooka.com.ar>";
-    if (!apiKey) {
+    if (!apiKey)
       return NextResponse.json(
         { error: "RESEND_API_KEY no configurado" },
         { status: 500 }
       );
-    }
     const resend = new Resend(apiKey);
 
     async function enviar({
@@ -459,7 +466,7 @@ export async function POST(request: NextRequest) {
       return res;
     }
 
-    // ---- Cargamos el ticket ----
+    // Ticket
     const t = await prisma.ticket.findUnique({
       where: { id: recordId },
       select: {
@@ -499,14 +506,12 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
-
     if (!t.customerEmail) {
       return NextResponse.json(
         { error: "customerEmail vacío" },
         { status: 400 }
       );
     }
-
     if (t.emailSentAt && !force) {
       return NextResponse.json(
         { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
@@ -514,7 +519,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Brand + logo absoluto
     const brandRel = resolveBrand();
     const brandAbs: Brand = {
       ...brandRel,
@@ -538,6 +542,7 @@ export async function POST(request: NextRequest) {
         typeof t.quantity === "number"
           ? `<strong>Cantidad:</strong> ${t.quantity}<br/>`
           : "";
+
       detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `<strong>Tipo:</strong> Entrada General<br/>` +
@@ -586,7 +591,6 @@ export async function POST(request: NextRequest) {
       detailsHtml,
       validationCode: normalizedCode,
       qrCodeImage: qrImage || undefined,
-      baseOrigin: BASE,
     });
 
     let reservedAt: Date | null = null;
