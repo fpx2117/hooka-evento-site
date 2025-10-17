@@ -73,43 +73,31 @@ type Brand = {
   name: string;
   logoUrl?: string | null;
   colors: {
-    gradientFrom: string;
+    gradientFrom: string; // hero gradiente
     gradientTo: string;
-    accent: string;
+    accent: string; // beige acento
     textOnDark: string;
     textOnLight: string;
-    bg: string;
-    card: string;
+    bg: string; // fondo general
+    card: string; // tarjeta
     qrDark?: string;
     qrLight?: string;
-    /* pattern */
-    pattern?: string;
-    patternOpacity?: number;
-    patternTileW?: number;
-    patternTileH?: number;
-    patternFontSize?: number;
   };
 };
 
 const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
-  logoUrl: "/logov2.png",
+  logoUrl: "/logov2.png", // labios como logo
   colors: {
     gradientFrom: "#5b0d0d",
     gradientTo: "#3f0a0a",
     accent: "#E3CFBF",
     textOnDark: "#FFFFFF",
     textOnLight: "#1A1A2E",
-    bg: "#5b0d0d",
+    bg: "#5b0d0d", // fondo liso
     card: "#1f0606",
     qrDark: "#1A1A2E",
     qrLight: "#FFFFFF",
-    /* patrón legible */
-    pattern: "#E3CFBF",
-    patternOpacity: 0.3,
-    patternTileW: 360, // ancho del “mosaico”
-    patternTileH: 180, // alto del “mosaico”
-    patternFontSize: 84, // tamaño del texto HOOKA
   },
 };
 
@@ -138,52 +126,6 @@ async function makeQrDataUrl(url: string | null, brand: Brand) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*       PATTERN GLOBAL “HOOKA” COMO BACKGROUND (SVG con filas alternadas)    */
-/* -------------------------------------------------------------------------- */
-
-function buildHookaPatternDataURI({
-  color,
-  opacity,
-  tileW,
-  tileH,
-  fontSize,
-}: {
-  color: string;
-  opacity: number;
-  tileW: number;
-  tileH: number;
-  fontSize: number;
-}) {
-  // 2 filas dentro del mismo tile; la fila de abajo se desplaza media baldosa
-  const baseline = Math.round(fontSize * 0.82);
-  const row2 = baseline + Math.round(tileH * 0.55);
-
-  const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${tileW}" height="${tileH}">
-  <defs>
-    <style>
-      @font-face { font-family: Poppins; }
-    </style>
-  </defs>
-  <rect width="100%" height="100%" fill="none"/>
-  <!-- Fila 1 -->
-  <text x="0" y="${baseline}" font-family="Poppins, Arial, sans-serif"
-        font-size="${fontSize}" font-weight="900"
-        fill="${color}" fill-opacity="${opacity}">
-    HOOKA HOOKA HOOKA
-  </text>
-  <!-- Fila 2 (desplazada para efecto patrón) -->
-  <text x="${Math.round(tileW / 2)}" y="${row2}" font-family="Poppins, Arial, sans-serif"
-        font-size="${fontSize}" font-weight="900"
-        fill="${color}" fill-opacity="${opacity}">
-    HOOKA HOOKA HOOKA
-  </text>
-</svg>`.trim();
-
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-/* -------------------------------------------------------------------------- */
 /*                                 TEMPLATE                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -205,14 +147,6 @@ function emailTemplate({
   qrCodeImage?: string | null;
 }) {
   const { colors, logoUrl } = brand;
-
-  const bgPattern = buildHookaPatternDataURI({
-    color: colors.pattern || "#E3CFBF",
-    opacity: colors.patternOpacity ?? 0.3,
-    tileW: colors.patternTileW ?? 360,
-    tileH: colors.patternTileH ?? 180,
-    fontSize: colors.patternFontSize ?? 84,
-  });
 
   const watermark = logoUrl
     ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.06;">
@@ -239,21 +173,13 @@ function emailTemplate({
   </head>
   <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
 
-    <!-- WRAPPER con BACKGROUND GLOBAL (pattern legible debajo de TODO) -->
+    <!-- WRAPPER sin pattern: fondo bordó liso -->
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${colors.bg}">
       <tr>
-        <td align="center"
-            background="${bgPattern}"
-            style="background-image:url('${bgPattern}'); background-repeat:repeat; background-position:top center; background-size:${colors.patternTileW}px ${colors.patternTileH}px;">
-          <!--[if gte mso 9]>
-          <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:1000px; height:auto;">
-            <v:fill type="tile" src="${bgPattern}" color="${colors.bg}" />
-            <v:textbox inset="0,0,0,0">
-          <![endif]-->
-
+        <td align="center">
           <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
 
-            <!-- HERO LIMPIO (sin pattern) -->
+            <!-- HERO LIMPIO (solo gradiente + vignette) -->
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
               <tr>
                 <td style="
@@ -398,12 +324,6 @@ function emailTemplate({
             </div>
 
           </div>
-
-          <!--[if gte mso 9]>
-            </v:textbox>
-          </v:rect>
-          <![endif]-->
-
         </td>
       </tr>
     </table>
@@ -416,7 +336,7 @@ function emailTemplate({
 /* -------------------------------------------------------------------------- */
 
 type Payload = {
-  type?: "ticket" | "vip-table";
+  type?: "ticket" | "vip-table"; // compat
   recordId?: string;
   force?: boolean;
 };
@@ -442,11 +362,12 @@ export async function POST(request: NextRequest) {
     const apiKey = s(process.env.RESEND_API_KEY);
     const from =
       s(process.env.RESEND_FROM) || "Hooka Party <info@hooka.com.ar>";
-    if (!apiKey)
+    if (!apiKey) {
       return NextResponse.json(
         { error: "RESEND_API_KEY no configurado" },
         { status: 500 }
       );
+    }
     const resend = new Resend(apiKey);
 
     async function enviar({
@@ -466,7 +387,7 @@ export async function POST(request: NextRequest) {
       return res;
     }
 
-    // Ticket
+    // Buscar ticket
     const t = await prisma.ticket.findUnique({
       where: { id: recordId },
       select: {
@@ -487,11 +408,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!t)
+    if (!t) {
       return NextResponse.json(
         { error: "Ticket no encontrado" },
         { status: 404 }
       );
+    }
     if (t.paymentStatus !== PS.approved) {
       return NextResponse.json(
         { error: "El pago no está aprobado para este ticket" },
@@ -506,12 +428,14 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+
     if (!t.customerEmail) {
       return NextResponse.json(
         { error: "customerEmail vacío" },
         { status: 400 }
       );
     }
+
     if (t.emailSentAt && !force) {
       return NextResponse.json(
         { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
@@ -519,6 +443,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Brand + logo absoluto
     const brandRel = resolveBrand();
     const brandAbs: Brand = {
       ...brandRel,
@@ -534,6 +459,7 @@ export async function POST(request: NextRequest) {
     let detailsHtml = "";
 
     if (t.ticketType === TicketType.general) {
+      // General
       subject = `🫦 Entrada General — Código: ${normalizedCode}`;
       const genderLine = t.gender
         ? `<strong>Género:</strong> ${cap(t.gender)}<br/>`
@@ -546,11 +472,13 @@ export async function POST(request: NextRequest) {
       detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `<strong>Tipo:</strong> Entrada General<br/>` +
-        `${genderLine}${qtyLine}` +
+        `${genderLine}` +
+        `${qtyLine}` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
     } else {
+      // VIP (compacto sin duplicar)
       const locLabel = prettyLocation(t.vipLocation);
       subject = `🫦 Mesa VIP — ${locLabel} — Código: ${normalizedCode}`;
 
@@ -609,13 +537,19 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const result = await enviar({ to: t.customerEmail, subject, html });
+      const result = await enviar({
+        to: t.customerEmail,
+        subject,
+        html,
+      });
+
       if (force) {
         await prisma.ticket.update({
           where: { id: t.id },
           data: { emailSentAt: new Date() },
         });
       }
+
       return NextResponse.json({
         success: true,
         validateUrl,
