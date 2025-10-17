@@ -89,8 +89,7 @@ type Brand = {
 
 const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
-  // 👉 labios como logo
-  logoUrl: "/logov2.png",
+  logoUrl: "/logov2.png", // labios como logo
   colors: {
     gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#5b0d0d",
     gradientTo: process.env.HOOKA_GRADIENT_TO || "#3f0a0a",
@@ -131,7 +130,7 @@ async function makeQrDataUrl(url: string | null, brand: Brand) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              HOOKA PATTERN                                 */
+/*                         PATTERN (FUERA DEL HERO)                           */
 /* -------------------------------------------------------------------------- */
 
 function buildHookaPattern({
@@ -233,11 +232,26 @@ function emailTemplate({
   <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
     <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
 
-      <!-- HERO: bordó con degradé + pattern HOOKA + vignette -->
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
+      <!-- SECCIÓN DE FONDO CON PATTERN (fuera del hero) -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden; margin:0 0 10px 0;">
         <tr>
           <td style="
                 background: ${colors.bg};
+                background-image: linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
+                padding:16px; position:relative;">
+            <!-- Pattern visible en el fondo -->
+            <div aria-hidden="true">
+              ${patternHtml}
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- HERO LIMPIO (sin pattern) -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
+        <tr>
+          <td style="
+                background:${colors.bg};
                 background-image: linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
                 border-radius:24px; text-align:center; padding:34px 22px; position:relative;">
             <div style="position:relative; z-index:2;">
@@ -264,17 +278,12 @@ function emailTemplate({
               }
             </div>
 
-            <!-- Pattern -->
-            <div aria-hidden="true" style="position:absolute; inset:0; padding:18px; z-index:1;">
-              ${patternHtml}
-            </div>
-
-            <!-- Vignette sutil -->
+            <!-- Vignette sutil dentro del hero, sin pattern -->
             <div aria-hidden="true" style="
                 position:absolute; inset:0; z-index:0;
                 background:
-                  radial-gradient(800px 420px at 40% 50%, rgba(0,0,0,0.32), rgba(0,0,0,0) 55%);
-                opacity:.55;">
+                  radial-gradient(800px 420px at 40% 50%, rgba(0,0,0,0.25), rgba(0,0,0,0) 55%);
+                opacity:.45;">
             </div>
           </td>
         </tr>
@@ -499,7 +508,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Brand + URL absoluta del logo (logov2.png)
+    // Absolutizamos logo
     const brandRel = resolveBrand();
     const brandAbs: Brand = {
       ...brandRel,
@@ -515,7 +524,6 @@ export async function POST(request: NextRequest) {
     let detailsHtml = "";
 
     if (t.ticketType === TicketType.general) {
-      // ------ General ------
       const typeLabel = "Entrada General";
       subject = `🫦 ${typeLabel} — Código: ${normalizedCode}`;
       const genderLine = t.gender
@@ -535,7 +543,6 @@ export async function POST(request: NextRequest) {
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
     } else {
-      // ------ VIP (línea compacta Mesas + Capacidad) ------
       const locLabel = prettyLocation(t.vipLocation);
       subject = `🫦 Mesa VIP — ${locLabel} — Código: ${normalizedCode}`;
 
