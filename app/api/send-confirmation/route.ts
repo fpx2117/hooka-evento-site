@@ -31,6 +31,16 @@ function getPublicBaseUrl(req: NextRequest) {
   return `${proto}://${host}`.replace(/\/+$/, "");
 }
 
+function absUrl(base: string, path?: string | null) {
+  if (!path) return undefined;
+  const p = path.trim();
+  if (!p) return undefined;
+  if (/^https?:\/\//i.test(p)) return p; // ya absoluto
+  const origin = base.replace(/\/+$/, "");
+  const rel = p.startsWith("/") ? p : `/${p}`;
+  return `${origin}${rel}`;
+}
+
 function buildValidateUrl(base: string, code: string) {
   const origin = base.replace(/\/+$/, "");
   return `${origin}/validate?code=${encodeURIComponent(code)}`;
@@ -62,6 +72,12 @@ const prettyLocation = (loc?: string | null) => {
 type Brand = {
   name: string;
   logoUrl?: string | null;
+  /** Imagen de fondo del hero (patrón HOOKA + gradiente) */
+  heroBgUrl?: string | null;
+  /** Palma superior derecha */
+  palmsTopUrl?: string | null;
+  /** Palma inferior izquierda */
+  palmsBottomUrl?: string | null;
   colors: {
     gradientFrom: string;
     gradientTo: string;
@@ -78,6 +94,10 @@ type Brand = {
 const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
   logoUrl: process.env.HOOKA_LOGO_URL || undefined,
+  // Archivos en /public
+  heroBgUrl: process.env.HOOKA_HERO_BG_URL || "/hooka-hero-bg.png",
+  palmsTopUrl: process.env.HOOKA_PALMS_TOP_URL || "/palmeras1.png",
+  palmsBottomUrl: process.env.HOOKA_PALMS_BOTTOM_URL || "/palmeras2.png",
   colors: {
     gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#FF006E",
     gradientTo: process.env.HOOKA_GRADIENT_TO || "#FFBE0B",
@@ -136,7 +156,7 @@ function emailTemplate({
   validationCode?: string | null;
   qrCodeImage?: string | null;
 }) {
-  const { colors, logoUrl } = brand;
+  const { colors, logoUrl, heroBgUrl, palmsTopUrl, palmsBottomUrl } = brand;
 
   const watermark = logoUrl
     ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.08;">
@@ -164,31 +184,78 @@ function emailTemplate({
   <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
     <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
 
-      <div bgcolor="${colors.bg}" style="position:relative; border-radius:24px; padding:40px 24px; text-align:center; color:${colors.textOnDark};
-                  background: linear-gradient(135deg, ${colors.gradientFrom} 0%, #FB5607 35%, ${colors.gradientTo} 70%, #8338EC 100%);
-                  box-shadow: 0 20px 60px rgba(255, 0, 110, 0.4), 0 0 80px rgba(255, 190, 11, 0.3);
-                  overflow:hidden;">
-        <div style="position:relative; z-index:2;">
-          ${
-            logoUrl
-              ? `<div class="no-invert" style="background:rgba(255,255,255,0.15); backdrop-filter:blur(10px); border-radius:24px; padding:16px; display:inline-block; margin-bottom:16px; border:3px solid rgba(255,255,255,0.3);">
-                  <img class="no-invert" src="${logoUrl}" width="100" height="100" alt="${brand.name} logo" style="border-radius:16px;"/>
-                 </div>`
-              : ""
-          }
-          <h1 style="margin:12px 0 8px 0; font-size:36px; font-weight:900; line-height:1.1;">
-            ${title}
-          </h1>
-          ${
-            subtitle
-              ? `<div class="no-invert" style="display:inline-block; background:rgba(0,245,255,0.2); border:2px solid ${brand.colors.accent}; border-radius:50px; padding:8px 24px; margin-top:8px;">
-                   <p style="margin:0; font-size:15px; font-weight:600; color:${brand.colors.accent}; letter-spacing:0.5px;">${subtitle}</p>
-                 </div>`
-              : ""
-          }
-        </div>
-      </div>
+      <!-- HERO con imagen de fondo (bulletproof) -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
+        <tr>
+          <td
+            background="${heroBgUrl || ""}"
+            style="
+              background:${colors.bg};
+              ${
+                heroBgUrl
+                  ? `background-image:url('${heroBgUrl}'); background-size:cover; background-position:center;`
+                  : `
+              background: linear-gradient(135deg, ${colors.gradientFrom} 0%, #FB5607 35%, ${colors.gradientTo} 70%, #8338EC 100%);`
+              }
+              border-radius:24px; text-align:center; padding:40px 24px; position:relative;
+            "
+          >
+            <!--[if gte mso 9]>
+            <v:rect xmlns:v='urn:schemas-microsoft-com:vml' fill='true' stroke='f' style='width:640px;height:280px;'>
+              <v:fill type='frame' src='${heroBgUrl || ""}' color='${colors.bg}' />
+              <v:textbox inset='0,0,0,0'>
+            <![endif]-->
+            <div style="position:relative; z-index:2;">
+              ${
+                logoUrl
+                  ? `
+              <div class="no-invert" style="background:rgba(255,255,255,0.15); backdrop-filter:blur(10px); border-radius:24px; padding:16px; display:inline-block; margin-bottom:16px; border:3px solid rgba(255,255,255,0.3);">
+                <img class="no-invert" src="${logoUrl}" width="100" height="100" alt="${brand.name} logo" style="border-radius:16px;"/>
+              </div>`
+                  : ""
+              }
 
+              <h1 style="margin:12px 0 8px 0; font-size:36px; font-weight:900; line-height:1.1; color:#fff;">
+                ${title}
+              </h1>
+
+              ${
+                subtitle
+                  ? `
+              <div class="no-invert" style="display:inline-block; background:rgba(0,245,255,0.2); border:2px solid ${colors.accent}; border-radius:50px; padding:8px 24px; margin-top:8px;">
+                <p style="margin:0; font-size:15px; font-weight:600; color:${colors.accent}; letter-spacing:0.5px;">${subtitle}</p>
+              </div>`
+                  : ""
+              }
+
+              <!-- Palmas superpuestas -->
+              ${
+                palmsTopUrl
+                  ? `
+              <div style="position:absolute; right:-10px; top:-6px; opacity:0.95;">
+                <img src="${palmsTopUrl}" alt="" width="220" style="max-width:40vw;height:auto;" />
+              </div>`
+                  : ""
+              }
+
+              ${
+                palmsBottomUrl
+                  ? `
+              <div style="position:absolute; left:-20px; bottom:-60px; opacity:0.95;">
+                <img src="${palmsBottomUrl}" alt="" width="260" style="max-width:42vw;height:auto;" />
+              </div>`
+                  : ""
+              }
+            </div>
+            <!--[if gte mso 9]>
+              </v:textbox>
+            </v:rect>
+            <![endif]-->
+          </td>
+        </tr>
+      </table>
+
+      <!-- Tarjeta principal -->
       <div class="card" bgcolor="${colors.card}" style="position:relative; background:${colors.card}; border-radius:24px; overflow:hidden; margin-top:16px;
                                  box-shadow:0 12px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
                                  border:2px solid rgba(255,0,110,0.2);">
@@ -197,7 +264,7 @@ function emailTemplate({
 
         <div style="position:relative; padding:32px 24px;">
           <div style="background:linear-gradient(135deg, rgba(255,0,110,0.15) 0%, rgba(255,190,11,0.15) 100%);
-                      border-left:5px solid ${brand.colors.accent};
+                      border-left:5px solid ${colors.accent};
                       border-radius:12px;
                       padding:20px 24px;
                       margin-bottom:24px;">
@@ -218,8 +285,8 @@ function emailTemplate({
                         padding:28px 24px; text-align:center; border-radius:20px; margin:24px 0;
                         box-shadow:0 12px 40px rgba(255,0,110,0.5), 0 0 60px rgba(255,190,11,0.3);
                         border:3px solid rgba(255,255,255,0.2);">
-              <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${brand.colors.accent};">
-                <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${brand.colors.accent};">
+              <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${colors.accent};">
+                <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${colors.accent};">
                   🫦 Código de Validación 🫦
                 </p>
               </div>
@@ -242,9 +309,9 @@ function emailTemplate({
                         background:#FFFFFF; border:4px solid transparent; position:relative;
                         padding:24px; border-radius:20px; margin:24px auto;
                         box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
-              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${brand.colors.gradientFrom} 0%, ${brand.colors.accent} 50%, ${brand.colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
+              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
               <div style="background:#FFFFFF; border-radius:12px; padding:12px 20px; margin-bottom:16px; display:inline-block;">
-                <h3 style="margin:0; font-size:20px; font-weight:800; color:${brand.colors.gradientFrom};">
+                <h3 style="margin:0; font-size:20px; font-weight:800; color:${colors.gradientFrom};">
                   🫦 Tu Código QR 🫦
                 </h3>
               </div>
@@ -408,7 +475,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const brand = resolveBrand();
+    // Resolvemos brand y absolutizamos URLs para email
+    const brandRel = resolveBrand();
+    const brand = {
+      ...brandRel,
+      logoUrl: absUrl(BASE, brandRel.logoUrl),
+      heroBgUrl: absUrl(BASE, brandRel.heroBgUrl) || undefined,
+      palmsTopUrl: absUrl(BASE, brandRel.palmsTopUrl) || undefined,
+      palmsBottomUrl: absUrl(BASE, brandRel.palmsBottomUrl) || undefined,
+    };
+
     const title = `🫦 ${t.event?.name || brand.name} 🫦`;
     const dateStr = t.event?.date
       ? new Date(t.event.date).toLocaleDateString("es-AR")
@@ -431,27 +507,37 @@ export async function POST(request: NextRequest) {
 
       detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
-        `<strong>Tipo:</strong> ${typeLabel}<br/>` +
+        `<strong>Tipo:</strong> Entrada General<br/>` +
         `${genderLine}` +
         `${qtyLine}` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
     } else {
-      // ------ VIP ------
+      // ------ VIP (línea compacta Mesas + Capacidad) ------
       const locLabel = prettyLocation(t.vipLocation);
       subject = `🫦 Mesa VIP — ${locLabel} — Código: ${normalizedCode}`;
+
       const tables = Math.max(1, Number(t.vipTables ?? 1));
-      const capPerTable = Math.max(1, Number(t.capacityPerTable ?? 0));
-      const totalCap = capPerTable ? capPerTable * tables : undefined;
+      const capPerTable = Math.max(0, Number(t.capacityPerTable ?? 0));
+
+      // Línea compacta
+      let mesaCapLine = `<strong>Mesas:</strong> ${tables}`;
+      if (capPerTable > 0) {
+        if (tables > 1) {
+          const totalCap = capPerTable * tables;
+          mesaCapLine += ` — <strong>Capacidad:</strong> ${totalCap} <span style="opacity:.9">(${capPerTable}/mesa)</span>`;
+        } else {
+          mesaCapLine += ` — <strong>Capacidad:</strong> ${capPerTable}`;
+        }
+      }
+      mesaCapLine += "<br/>";
 
       detailsHtml =
         `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
         `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
         `<strong>Ubicación:</strong> ${locLabel}<br/>` +
-        `<strong>Mesas:</strong> ${tables}<br/>` +
-        `${capPerTable ? `<strong>Capacidad por mesa (ref):</strong> ${capPerTable} personas<br/>` : ""}` +
-        `${totalCap ? `<strong>Capacidad total (ref):</strong> ${totalCap} personas<br/>` : ""}` +
+        mesaCapLine +
         `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
         `</div>`;
     }

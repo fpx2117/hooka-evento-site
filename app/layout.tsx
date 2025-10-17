@@ -47,7 +47,7 @@ export default function RootLayout({
     <html lang="es" suppressHydrationWarning>
       <head>
         {/* Favicon clásico desde /public */}
-        <link rel="icon" href="/logo.png" />
+        <link rel="icon" href="/logov1.png" />
         {/* Si preferís PNG en /public/icon.png, usá esta en lugar de la anterior: */}
         {/* <link rel="icon" href="/icon.png" type="image/png" sizes="32x32" /> */}
 
