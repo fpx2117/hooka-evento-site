@@ -83,6 +83,17 @@ function useIsMobile(breakpoint: number = 640) {
 ========================= */
 type TableLocation = "piscina" | "dj" | "general";
 
+type VipAvailability = {
+  ok: boolean;
+  eventId: string;
+  location: TableLocation;
+  limit: number | null;
+  taken: number[];
+  remainingTables: number | null;
+  price: number | null;
+  capacityPerTable: number | null;
+};
+
 interface AdminTicket {
   id: string;
   ticketType: "general" | "vip";
@@ -99,7 +110,9 @@ interface AdminTicket {
   validationCode?: string | null;
   validated: boolean;
   purchaseDate: string;
-  // opcional, si tu API ya lo devuelve en VIP:
+
+  tableNumber?: number | null;
+  tableNumbers?: number[] | null; // 👈 nuevo
   tableLocation?: TableLocation | null;
 }
 
@@ -151,7 +164,7 @@ type TicketsConfig = {
   eventDate: string;
   isActive: boolean;
   totals: {
-    unitVipSize: number; // tamaño default si hiciera falta (puede variar por ubicación con capacityPerTable)
+    unitVipSize: number;
     limitPersons: number;
     soldPersons: number;
     remainingPersons: number;
@@ -166,12 +179,11 @@ type TicketsConfig = {
       };
       mujer?: { price: number; limit: number; sold: number; remaining: number };
     };
-    // vip global (legacy) puede venir, pero NO lo usamos más en UI
     vip?: {
       price: number;
-      limit: number; // PERSONAS
-      sold: number; // PERSONAS
-      remaining: number; // PERSONAS
+      limit: number;
+      sold: number;
+      remaining: number;
       unitSize: number;
       remainingTables: number;
     } | null;
@@ -191,9 +203,7 @@ type TicketsConfig = {
 ========================= */
 function buildValidateUrl(code: string) {
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/validate?code=${encodeURIComponent(
-      code
-    )}`;
+    return `${window.location.origin}/validate?code=${encodeURIComponent(code)}`;
   }
   return `/validate?code=${encodeURIComponent(code)}`;
 }
@@ -436,6 +446,29 @@ function TicketRow({
         </div>
       </td>
       <td className="p-4">
+        {ticket.ticketType === "vip" ? (
+          ticket.tableNumbers && ticket.tableNumbers.length > 0 ? (
+            <span
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-purple-400/50 text-purple-700 bg-purple-50"
+              title="Número(s) de mesa asignada(s)"
+            >
+              #{ticket.tableNumbers.join(", ")}
+            </span>
+          ) : ticket.tableNumber ? (
+            <span
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-purple-400/50 text-purple-700 bg-purple-50"
+              title="Número de mesa asignada"
+            >
+              # {ticket.tableNumber}
+            </span>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          )
+        ) : (
+          <span className="text-sm text-muted-foreground">—</span>
+        )}
+      </td>
+      <td className="p-4">
         <span className="capitalize text-sm text-muted-foreground">
           {ticket.gender || "—"}
         </span>
@@ -549,6 +582,16 @@ export default function AdminDashboard() {
   // Export (modal)
   const [showExportModal, setShowExportModal] = useState(false);
 
+  // Modal para elegir mesas
+  const [showTablesModal, setShowTablesModal] = useState(false);
+  const [availability, setAvailability] = useState<VipAvailability | null>(
+    null
+  );
+  const [availableNumbers, setAvailableNumbers] = useState<number[]>([]);
+  const [selectedTables, setSelectedTables] = useState<number[]>([]);
+  const [loadingAvail, setLoadingAvail] = useState(false);
+  const [availError, setAvailError] = useState<string | null>(null);
+
   // Discounts (API dedicada)
   const [discounts, setDiscounts] = useState<DiscountCfg[]>([]);
   const [showDiscountsModal, setShowDiscountsModal] = useState(false);
@@ -609,6 +652,18 @@ export default function AdminDashboard() {
     totalPrice: 0,
   });
 
+  // ✅ Reset selección si cambia ubicación
+  useEffect(() => {
+    setSelectedTables([]);
+  }, [formVip.tableLocation]);
+
+  // ✅ Si la cantidad bajó, recortar la selección
+  useEffect(() => {
+    setSelectedTables((prev) =>
+      prev.length > formVip.quantity ? prev.slice(0, formVip.quantity) : prev
+    );
+  }, [formVip.quantity]);
+
   // ✅ Form configuración (TOTAL + precios H/M + VIP por ubicación)
   const [configForm, setConfigForm] = useState({
     totalLimitPersons: 0,
@@ -649,19 +704,98 @@ export default function AdminDashboard() {
         router.push("/admin/login");
         return;
       }
+
       const data = await response.json();
-      const normalized: AdminTicket[] = (data.tickets || []).map((t: any) => ({
-        ...t,
-        customerDni:
-          t.customerDni ?? t.customerDNI ?? t.customer_dni ?? t.dni ?? "",
-        qrCode: t.qrCode ?? t.Code ?? undefined,
-        tableLocation: t.tableLocation ?? t.location ?? null,
-      }));
+
+      const normalized: AdminTicket[] = (data?.tickets ?? []).map((t: any) => {
+        // posibles nombres para número único
+        const singleRaw =
+          t.tableNumber ??
+          t.table_number ??
+          t.vipTableNumber ??
+          t.table ??
+          t.mesa ??
+          null;
+
+        const single =
+          typeof singleRaw === "number"
+            ? singleRaw
+            : parseInt(singleRaw, 10) || null;
+
+        // posibles nombres para arreglo
+        const pluralRaw =
+          t.tableNumbers ??
+          t.table_numbers ??
+          t.vipTables ??
+          t.tables ??
+          t.mesas ??
+          null;
+
+        const plural =
+          Array.isArray(pluralRaw) && pluralRaw.length > 0
+            ? pluralRaw.map((n) => Number(n)).filter((n) => !isNaN(n))
+            : null;
+
+        return {
+          ...t,
+          customerDni:
+            t.customerDni ?? t.customerDNI ?? t.customer_dni ?? t.dni ?? "",
+          qrCode: t.qrCode ?? t.Code ?? undefined,
+          tableLocation: t.tableLocation ?? t.location ?? null,
+
+          // normalización final
+          tableNumber: single,
+          tableNumbers:
+            plural && plural.length > 0
+              ? plural
+              : single != null
+                ? [single]
+                : null,
+        } as AdminTicket;
+      });
+
       setTickets(normalized);
     } catch (error) {
       console.error("[dashboard] Error fetching tickets:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ✅ Fetch disponibilidad mesas VIP por ubicación
+  const fetchVipAvailability = async (loc: TableLocation) => {
+    setLoadingAvail(true);
+    setAvailError(null);
+    try {
+      const r = await fetch(
+        `/api/vip-tables/availability?location=${encodeURIComponent(loc)}`,
+        { cache: "no-store" }
+      );
+      const data: VipAvailability = await r.json();
+      if (!r.ok || !data?.ok) {
+        throw new Error(
+          (data as any)?.error || "No se pudo obtener disponibilidad"
+        );
+      }
+
+      const limit = Number.isFinite(data.limit) ? Number(data.limit) : 0;
+      const takenSet = new Set<number>(
+        Array.isArray(data.taken) ? data.taken : []
+      );
+      const libres: number[] = [];
+      for (let n = 1; n <= limit; n++) {
+        if (!takenSet.has(n)) libres.push(n);
+      }
+
+      setAvailability(data);
+      setAvailableNumbers(libres);
+    } catch (e: any) {
+      console.error("[VIP availability] error", e);
+      setAvailError(e?.message || "Error obteniendo disponibilidad");
+      setAvailability(null);
+      setAvailableNumbers([]);
+    } finally {
+      setLoadingAvail(false);
     }
   };
 
@@ -679,7 +813,6 @@ export default function AdminDashboard() {
           genMPrice: data.tickets.general.mujer?.price ?? 0,
         });
 
-        // mapear vipTables -> vipTablesForm (aseguramos dj y piscina existan)
         const byLoc = new Map<TableLocation, VipTableFormRow>();
         for (const c of data.vipTables || []) {
           byLoc.set(c.location, {
@@ -703,7 +836,6 @@ export default function AdminDashboard() {
               capacityPerTable: data.totals?.unitVipSize ?? 10,
             });
         });
-        // si hay "general", también lo incluimos editable
         if (byLoc.has("general")) merged.push(byLoc.get("general")!);
 
         setVipTablesForm(merged);
@@ -943,6 +1075,16 @@ export default function AdminDashboard() {
       );
       return;
     }
+
+    if (selectedTables.length !== formVip.quantity) {
+      alert(
+        `Seleccioná ${formVip.quantity} mesa${
+          formVip.quantity > 1 ? "s" : ""
+        } (actualmente ${selectedTables.length}).`
+      );
+      return;
+    }
+
     try {
       const payload = {
         ticketType: "vip" as const,
@@ -954,9 +1096,15 @@ export default function AdminDashboard() {
         paymentMethod: formVip.paymentMethod,
         totalPrice: vipTotalInfo.total,
         forceTotalPrice: true,
+        location: formVip.tableLocation,
 
-        location: formVip.tableLocation, // <<< ubicación elegida
+        // 👇 compat: mandamos plural y, si es 1, también singular
+        tableNumbers: selectedTables,
+        ...(selectedTables.length === 1
+          ? { tableNumber: selectedTables[0] }
+          : {}),
       };
+
       const r = await fetch("/api/admin/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -965,6 +1113,7 @@ export default function AdminDashboard() {
       if (r.ok) {
         setShowAddVip(false);
         resetVip();
+        setSelectedTables([]);
         fetchTickets();
         fetchConfig();
       } else {
@@ -1047,7 +1196,6 @@ export default function AdminDashboard() {
           hombre: { price: Number(configForm.genHPrice) },
           mujer: { price: Number(configForm.genMPrice) },
         },
-        // VIP por ubicación
         vipTables: vipTablesForm.map((row) => ({
           location: row.location,
           price: Number(row.price),
@@ -1531,7 +1679,7 @@ export default function AdminDashboard() {
             ) : (
               <div className="overflow-x-auto">
                 {/* Ancho mínimo para buena UX en móviles */}
-                <table className="w-full min-w-[1060px]">
+                <table className="w-full min-w-[1140px]">
                   <thead className="bg-muted/50 border-b border-border/50">
                     <tr>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
@@ -1542,6 +1690,9 @@ export default function AdminDashboard() {
                       </th>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Tipo
+                      </th>
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
+                        Mesa
                       </th>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Género
@@ -1742,9 +1893,7 @@ export default function AdminDashboard() {
                     <b className="text-emerald-900 dark:text-emerald-100">
                       {generalDiscountRule.type === "percent"
                         ? `${generalDiscountRule.value}%`
-                        : `$ ${generalDiscountRule.value.toLocaleString(
-                            "es-AR"
-                          )}`}
+                        : `$ ${generalDiscountRule.value.toLocaleString("es-AR")}`}
                     </b>
                   </div>
                   <div className="mt-1 text-xs text-emerald-800/80 dark:text-emerald-200/80">
@@ -1930,6 +2079,30 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {/* Selección de mesas */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm text-muted-foreground">
+                {selectedTables.length > 0 ? (
+                  <>
+                    Mesas seleccionadas: <b>#{selectedTables.join(", ")}</b>
+                  </>
+                ) : (
+                  <>No seleccionaste mesas todavía</>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-border/50"
+                onClick={async () => {
+                  await fetchVipAvailability(formVip.tableLocation);
+                  setShowTablesModal(true);
+                }}
+              >
+                Ver / Elegir mesa(s)
+              </Button>
+            </div>
+
             <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/50 dark:to-orange-950/50 p-4 flex items-center justify-between border border-amber-200/50 dark:border-amber-800/50">
               <span className="text-base font-semibold text-amber-900 dark:text-amber-100">
                 Total a cobrar
@@ -1956,6 +2129,112 @@ export default function AdminDashboard() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Modal: Selección de Mesas ===== */}
+      <Dialog open={showTablesModal} onOpenChange={setShowTablesModal}>
+        <DialogContent className={modalClass("max-w-2xl")}>
+          <DialogHeader className="pb-2">
+            <DialogTitle>
+              Seleccionar mesas — {locationLabel(formVip.tableLocation)}
+            </DialogTitle>
+            <DialogDescription>
+              Elegí exactamente {formVip.quantity} mesa
+              {formVip.quantity > 1 ? "s" : ""} disponibles para esta reserva.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {loadingAvail ? (
+              <div className="flex items-center justify-center py-10">
+                <div className="inline-block w-8 h-8 border-4 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : availError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+                {availError}
+              </div>
+            ) : !availability ? (
+              <div className="text-sm text-muted-foreground">
+                Sin datos de disponibilidad.
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  {availableNumbers.length === 0 ? (
+                    <span className="text-sm text-muted-foreground">
+                      No hay mesas libres en esta ubicación.
+                    </span>
+                  ) : (
+                    availableNumbers.map((n) => {
+                      const active = selectedTables.includes(n);
+                      const canPick =
+                        active || selectedTables.length < formVip.quantity; // limita a la cantidad
+                      return (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => {
+                            // toggle con límite
+                            setSelectedTables((prev) => {
+                              if (prev.includes(n)) {
+                                return prev.filter((x) => x !== n);
+                              }
+                              if (prev.length >= formVip.quantity) return prev;
+                              return [...prev, n].sort((a, b) => a - b);
+                            });
+                          }}
+                          disabled={!canPick}
+                          className={`px-3 py-1.5 rounded-md border text-sm transition ${
+                            active
+                              ? "bg-amber-600 text-white border-amber-700"
+                              : canPick
+                                ? "bg-white border-border/60 hover:bg-amber-50"
+                                : "bg-muted/50 border-border/50 opacity-50"
+                          }`}
+                          title={active ? "Quitar" : "Agregar"}
+                        >
+                          #{n}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="text-xs text-muted-foreground">
+                  Seleccionadas: {selectedTables.length} / {formVip.quantity}
+                </div>
+
+                <div className="flex gap-2 justify-end pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-border/50"
+                    onClick={() => setShowTablesModal(false)}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      if (selectedTables.length !== formVip.quantity) {
+                        alert(
+                          `Debés elegir ${formVip.quantity} mesa${
+                            formVip.quantity > 1 ? "s" : ""
+                          } (seleccionadas: ${selectedTables.length}).`
+                        );
+                        return;
+                      }
+                      setShowTablesModal(false);
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700"
+                  >
+                    Confirmar selección
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

@@ -20,18 +20,22 @@ type Filters = {
 };
 
 type FlatRow = {
+  // Básicos
   type: "general" | "vip";
   customerName: string;
   gender: string | null;
   customerEmail: string;
   customerPhone: string;
   customerDni: string;
+  quantity: number; // ✅ Cantidad de entradas (general) o 1 (vip)
   paymentMethod: string;
   paymentStatus: string;
   validationCode: string;
   totalPrice: number;
-  // Campos VIP (solo se completan si type === "vip")
+
+  // VIP
   vipLocation?: string | null;
+  tableNumber?: number | null; // ✅ número de mesa
   vipTables?: number | null;
   capacityPerTable?: number | null;
 };
@@ -99,13 +103,16 @@ function findLogoPath(): string | null {
   ].map((f) => path.join(process.cwd(), "public", f));
   return candidates.find((p) => fs.existsSync(p)) || null;
 }
+
 function readLogoBase64(): { base64: string; ext: "png" | "jpeg" } | null {
   const file = findLogoPath();
   if (!file) return null;
   const buf = fs.readFileSync(file);
   const isPng = file.toLowerCase().endsWith(".png");
+  // ✅ ext estrictamente tipado (evita "string is not assignable to 'png'|'jpeg'|'gif'")
   return { base64: buf.toString("base64"), ext: isPng ? "png" : "jpeg" };
 }
+
 function readLogoBytes(): { bytes: Uint8Array; isPng: boolean } | null {
   const file = findLogoPath();
   if (!file) return null;
@@ -114,6 +121,16 @@ function readLogoBytes(): { bytes: Uint8Array; isPng: boolean } | null {
     bytes: new Uint8Array(buf),
     isPng: file.toLowerCase().endsWith(".png"),
   };
+}
+
+// ✅ Sector formateado para VIP
+function formatSector(location: string | null | undefined): string {
+  if (!location) return "—";
+  const upper = location.trim().toLowerCase();
+  if (upper === "dj") return "SECTOR - DJ";
+  if (upper === "piscina") return "SECTOR - PISCINA";
+  if (upper === "general") return "SECTOR - GENERAL";
+  return `SECTOR - ${upper.toUpperCase()}`;
 }
 
 /* =========================
@@ -133,7 +150,8 @@ export async function POST(req: NextRequest) {
     const whereTickets: any = {};
     if (filters.eventId) whereTickets.eventId = filters.eventId;
 
-    // IMPORTANTE: si tu modelo usa createdAt en lugar de purchaseDate, cambia aquí "purchaseDate" por "createdAt"
+    // IMPORTANTE: si tu modelo usa createdAt en lugar de purchaseDate,
+    // cambia aquí "purchaseDate" por "createdAt"
     Object.assign(
       whereTickets,
       buildDateFilter("purchaseDate", {
@@ -152,32 +170,41 @@ export async function POST(req: NextRequest) {
         customerEmail: true,
         customerPhone: true,
         customerDni: true,
+        quantity: true, // ✅ cantidad para General
         paymentMethod: true,
         paymentStatus: true,
         validationCode: true,
         totalPrice: true,
         // VIP
         vipLocation: true,
+        tableNumber: true, // ✅ número de mesa
         vipTables: true,
         capacityPerTable: true,
       },
     });
 
-    const rows: FlatRow[] = ticketsRaw.map((r) => ({
-      type: (r.ticketType as any) === "vip" ? "vip" : "general",
-      customerName: r.customerName ?? "",
-      gender: (r.gender as any) ?? null,
-      customerEmail: r.customerEmail ?? "",
-      customerPhone: r.customerPhone ?? "",
-      customerDni: r.customerDni ?? "",
-      paymentMethod: (r.paymentMethod as any) ?? "",
-      paymentStatus: (r.paymentStatus as any) ?? "",
-      validationCode: r.validationCode ?? "",
-      totalPrice: Number(r.totalPrice ?? 0),
-      vipLocation: r.vipLocation ?? null,
-      vipTables: r.vipTables ?? null,
-      capacityPerTable: r.capacityPerTable ?? null,
-    }));
+    const rows: FlatRow[] = ticketsRaw.map((r) => {
+      const isVip = (r.ticketType as any) === "vip";
+      return {
+        type: isVip ? "vip" : "general",
+        customerName: r.customerName ?? "",
+        gender: (r.gender as any) ?? null,
+        customerEmail: r.customerEmail ?? "",
+        customerPhone: r.customerPhone ?? "",
+        customerDni: r.customerDni ?? "",
+        // ✅ cantidad: para VIP usamos 1 (una mesa por compra); para General, el quantity almacenado
+        quantity: isVip ? 1 : Number(r.quantity ?? 0),
+        paymentMethod: (r.paymentMethod as any) ?? "",
+        paymentStatus: (r.paymentStatus as any) ?? "",
+        validationCode: r.validationCode ?? "",
+        totalPrice: Number(r.totalPrice ?? 0),
+        // VIP
+        vipLocation: r.vipLocation ?? null,
+        tableNumber: r.tableNumber ?? null,
+        vipTables: r.vipTables ?? null,
+        capacityPerTable: r.capacityPerTable ?? null,
+      };
+    });
 
     // Export
     if (format === "excel") {
@@ -208,8 +235,8 @@ async function toExcel(
   const ws = wb.addWorksheet(sheetName);
 
   // Portada
-  ws.mergeCells("A1:M1");
-  ws.mergeCells("A2:M2");
+  ws.mergeCells("A1:N1");
+  ws.mergeCells("A2:N2");
 
   const title = ws.getCell("A1");
   title.value = "Reporte";
@@ -228,7 +255,7 @@ async function toExcel(
   // Logo (arriba-derecha)
   const logo = readLogoBase64();
   if (logo) {
-    const imgId = wb.addImage({ base64: logo.base64, extension: logo.ext });
+    const imgId = wb.addImage({ base64: logo.base64, extension: logo.ext }); // ext: "png" | "jpeg"
     ws.addImage(imgId, {
       tl: { col: 12.2, row: 0.2 }, // fuera de la tabla
       ext: { width: 240, height: 180 },
@@ -236,7 +263,7 @@ async function toExcel(
     });
   }
 
-  // Columnas (agrego campos VIP opcionales)
+  // Columnas visibles (keys para formatos; la tabla se arma abajo)
   ws.columns = [
     { header: "Tipo", key: "type", width: 12 },
     { header: "Nombre", key: "customerName", width: 30 },
@@ -244,13 +271,13 @@ async function toExcel(
     { header: "Email", key: "customerEmail", width: 34 },
     { header: "Teléfono", key: "customerPhone", width: 18 },
     { header: "DNI", key: "customerDni", width: 16 },
+    { header: "Cantidad", key: "quantity", width: 12 }, // ✅ cantidad
     { header: "Método Pago", key: "paymentMethod", width: 16 },
     { header: "Estado Pago", key: "paymentStatus", width: 16 },
     { header: "Código Validación", key: "validationCode", width: 22 },
     { header: "Total", key: "totalPrice", width: 14 },
-    // VIP
-    { header: "Ubicación VIP", key: "vipLocation", width: 16 },
-    { header: "Mesas VIP", key: "vipTables", width: 12 },
+    { header: "Ubicación VIP", key: "vipLocation", width: 22 }, // ✅ SECTOR - DJ/PISCINA/GENERAL
+    { header: "Número de Mesa", key: "tableNumber", width: 16 }, // ✅ mesa
     { header: "Capacidad/Mesa", key: "capacityPerTable", width: 16 },
   ];
 
@@ -278,27 +305,29 @@ async function toExcel(
       { name: "Email", filterButton: true },
       { name: "Teléfono", filterButton: true },
       { name: "DNI", filterButton: true },
+      { name: "Cantidad", filterButton: true, totalsRowFunction: "sum" }, // ✅ sumatoria cantidad
       { name: "Método Pago", filterButton: true },
       { name: "Estado Pago", filterButton: true },
       { name: "Código Validación", filterButton: true },
       { name: "Total", filterButton: true, totalsRowFunction: "sum" },
       { name: "Ubicación VIP", filterButton: true },
-      { name: "Mesas VIP", filterButton: true },
+      { name: "Número de Mesa", filterButton: true },
       { name: "Capacidad/Mesa", filterButton: true },
     ],
     rows: rows.map((r) => [
-      r.type,
+      r.type === "vip" ? "VIP" : "General",
       r.customerName,
       r.gender ?? "—",
       r.customerEmail,
       r.customerPhone,
       r.customerDni,
+      Number(r.quantity || 0), // ✅ cantidad
       r.paymentMethod,
       r.paymentStatus,
       r.validationCode || "—",
       Number(r.totalPrice || 0),
-      r.type === "vip" ? (r.vipLocation ?? "—") : "—",
-      r.type === "vip" ? Number(r.vipTables ?? 0) : null,
+      r.type === "vip" ? formatSector(r.vipLocation) : "—", // ✅ SECTOR formateado
+      r.type === "vip" ? (r.tableNumber ?? "—") : "—", // ✅ mesa
       r.type === "vip" ? Number(r.capacityPerTable ?? 0) : null,
     ]),
   });
@@ -308,12 +337,14 @@ async function toExcel(
   ws.getColumn("customerPhone").numFmt = "@";
   ws.getColumn("customerDni").numFmt = "@";
   ws.getColumn("totalPrice").numFmt = '"$"#,##0';
+  ws.getColumn("quantity").numFmt = "0";
+  ws.getColumn("tableNumber").numFmt = "0";
   ws.getRow(tableStartRow).height = 24;
 
   // Color por estado
   const firstDataRow = tableStartRow + 1;
   const lastDataRow = firstDataRow + rows.length - 1;
-  const statusColIdx = 8; // "Estado Pago"
+  const statusColIdx = 9; // "Estado Pago" (contando desde A=1)
   for (let r = firstDataRow; r <= lastDataRow; r++) {
     const c = ws.getRow(r).getCell(statusColIdx);
     const val = String(c.value ?? "").toLowerCase();
@@ -338,7 +369,7 @@ async function toExcel(
     fgColor: { argb: "FFFFFFFF" },
   };
   // línea suave separadora
-  const maxHeader = 13;
+  const maxHeader = 14;
   for (let i = 0; i < maxHeader; i++) {
     const col = String.fromCharCode("A".charCodeAt(0) + i);
     const addr = `${col}3`;
@@ -418,15 +449,19 @@ async function toPdf(rows: FlatRow[], title: string): Promise<Uint8Array> {
 
   // Contenido
   rows.forEach((r, i) => {
-    const headerRight =
-      r.type === "vip" ? `VIP (${r.vipLocation ?? "—"})` : "GENERAL";
+    const tipo = r.type === "vip" ? "VIP" : "General";
+    const sector = r.type === "vip" ? ` — ${formatSector(r.vipLocation)}` : "";
+    const mesa =
+      r.type === "vip" && r.tableNumber ? ` · Mesa #${r.tableNumber}` : "";
+    const cantidad = ` · Cantidad: ${Number(r.quantity || 0)}`;
 
     draw(
-      `${i + 1}. ${r.customerName} — ${headerRight}`,
+      `${i + 1}. ${r.customerName} — ${tipo}${sector}${mesa}${cantidad}`,
       12,
       true,
       rgb(0.06, 0.09, 0.16)
     );
+
     draw(
       `Género: ${r.gender ?? "—"}   •   Email: ${r.customerEmail}   •   Tel: ${r.customerPhone}`,
       10,
@@ -434,23 +469,20 @@ async function toPdf(rows: FlatRow[], title: string): Promise<Uint8Array> {
       rgb(0.22, 0.27, 0.35)
     );
 
-    const vipLine =
-      r.type === "vip"
-        ? `   •   Mesas: ${r.vipTables ?? "—"}   •   Cap/mesa: ${r.capacityPerTable ?? "—"}`
-        : "";
-
     draw(
-      `DNI: ${r.customerDni}   •   Pago: ${r.paymentStatus} (${r.paymentMethod})${vipLine}`,
+      `DNI: ${r.customerDni}   •   Pago: ${r.paymentStatus} (${r.paymentMethod})`,
       10,
       false,
       rgb(0.22, 0.27, 0.35)
     );
+
     draw(
       `Código: ${r.validationCode || "—"}   •   Total: $${Number(r.totalPrice || 0).toFixed(2)}`,
       10,
       false,
       rgb(0.0, 0.45, 0.26)
     );
+
     y -= 6;
   });
 
