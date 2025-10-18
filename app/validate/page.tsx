@@ -1,4 +1,5 @@
 // app/validate/page.tsx
+export const dynamic = "force-dynamic";
 
 // UI (shadcn)
 import { Card } from "@/components/ui/card";
@@ -13,10 +14,14 @@ import {
   XCircle,
   User,
   IdCard,
-  Ticket,
+  Ticket as TicketIcon,
   Calendar,
   Hash,
+  MapPin,
 } from "lucide-react";
+
+// Fondo (client component)
+import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
 // Helpers (server)
 import { getTicketByCode, validateTicket } from "@/lib/api";
@@ -30,12 +35,18 @@ type ApiTicket = {
   customerEmail: string;
   customerPhone: string;
   customerDni: string;
-  ticketType: string;
+  ticketType: "general" | "vip";
+  quantity: number;
   paymentStatus: "pending" | "approved" | "rejected";
   validated: boolean;
   validatedAt?: string | null;
   purchaseDate: string;
   eventDate?: string | null;
+
+  // VIP
+  vipLocation?: "dj" | "piscina" | "general" | null;
+  tableNumber?: number | null;
+  vipTables?: number | null;
 };
 
 type UiTicket = {
@@ -45,16 +56,33 @@ type UiTicket = {
   customerPhone: string;
   customerDni: string;
   type: "ticket";
-  ticketType: string;
+  ticketType: "general" | "vip";
+  quantity: number;
   paymentStatus: "pending" | "approved" | "rejected";
   validated: boolean;
   validatedAt?: string | null;
   eventDate?: string | null;
+
+  // VIP
+  vipLocation?: "dj" | "piscina" | "general" | null;
+  tableNumber?: number | null;
+  vipTables?: number | null;
 };
 
 /* ======================
    Util
 ====================== */
+const BORDO = "#5b0d0d";
+const BEIGE = "#e3cfbf";
+
+function prettyVipLocation(loc?: UiTicket["vipLocation"]) {
+  if (!loc) return "—";
+  if (loc === "dj") return "DJ";
+  if (loc === "piscina") return "Piscina";
+  if (loc === "general") return "General";
+  return loc;
+}
+
 function toUiTicket(t: ApiTicket, code?: string): UiTicket {
   return {
     validationCode: code,
@@ -64,10 +92,15 @@ function toUiTicket(t: ApiTicket, code?: string): UiTicket {
     customerDni: t.customerDni,
     type: "ticket",
     ticketType: t.ticketType,
+    quantity: t.quantity ?? 1,
     paymentStatus: t.paymentStatus,
     validated: t.validated,
     validatedAt: t.validatedAt ?? null,
     eventDate: t.eventDate ?? null,
+    // VIP
+    vipLocation: t.vipLocation ?? null,
+    tableNumber: t.tableNumber ?? null,
+    vipTables: t.vipTables ?? null,
   };
 }
 
@@ -76,11 +109,11 @@ async function runValidationFlow(
   code: string
 ): Promise<{ ticket?: UiTicket; error?: string }> {
   try {
-    let t: ApiTicket | undefined;
-
     // 1) Obtenemos detalle por código (si falla, devolvemos el error real del backend)
+    let t: ApiTicket;
     try {
-      t = await getTicketByCode(code);
+      const t0 = await getTicketByCode(code);
+      t = t0 as ApiTicket;
     } catch (e: any) {
       return {
         error: e?.code ? `Error backend: ${e.code}` : "Código no encontrado",
@@ -96,7 +129,7 @@ async function runValidationFlow(
     if (!t.validated) {
       try {
         const res = await validateTicket(code);
-        if (res?.ticket) t = res.ticket;
+        if (res?.ticket) t = res.ticket as ApiTicket;
       } catch (e: any) {
         if (e?.code !== "already_validated") {
           // cualquier otro error: seguimos con el detalle que ya tenemos
@@ -116,25 +149,37 @@ async function runValidationFlow(
 ====================== */
 function EmptyState() {
   return (
-    <Card className="p-6">
+    <Card
+      className="p-6 backdrop-blur-xl"
+      style={{
+        backgroundColor: `${BORDO}20`,
+        borderColor: `${BEIGE}26`,
+        color: BEIGE,
+      }}
+    >
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="code">Código de validación</Label>
+          <Label htmlFor="code" className="text-[color:var(--beige,#e3cfbf)]">
+            Código de validación
+          </Label>
           {/* GET directo para no generar POST/303 adicionales */}
           <form method="GET" action="/admin/validate">
             <Input
               id="code"
               name="code"
-              inputMode="text" // permite alfanuméricos si existieran
-              // sin pattern: no bloqueamos letras
+              inputMode="text"
               maxLength={32}
               placeholder="123456"
-              className="text-center text-2xl tracking-widest font-mono"
+              className="text-center text-2xl tracking-widest font-mono bg-white/10 border border-white/20 text-white placeholder:text-white/60"
               required
             />
             <Button
               type="submit"
-              className="w-full text-lg py-6 bg-gradient-to-r from-primary to-secondary mt-4"
+              className="w-full text-lg py-6 mt-4"
+              style={{
+                backgroundColor: BEIGE,
+                color: BORDO,
+              }}
             >
               Validar Código
             </Button>
@@ -147,79 +192,124 @@ function EmptyState() {
 
 function ErrorCard({ message }: { message: string }) {
   return (
-    <Card className="p-8 border-destructive">
-      <div className="text-center space-y-4">
-        <XCircle className="w-16 h-16 text-destructive mx-auto" />
-        <h2 className="text-2xl font-bold text-destructive">Error</h2>
-        <p className="text-muted-foreground">{message}</p>
-        {/* GET otra vez para reintentar */}
-        <form method="GET" action="/admin/validate">
-          <Input
-            name="code"
-            inputMode="text"
-            maxLength={32}
-            placeholder="Ingresá otro código"
-            className="text-center text-lg font-mono mb-3"
-            required
-          />
-          <Button type="submit" variant="outline">
-            Intentar de nuevo
-          </Button>
-        </form>
-      </div>
+    <Card
+      className="p-8 text-center space-y-4 backdrop-blur-xl"
+      style={{
+        backgroundColor: `${BORDO}26`,
+        borderColor: `${BEIGE}26`,
+        color: BEIGE,
+      }}
+    >
+      <XCircle className="w-16 h-16 text-red-400 mx-auto" />
+      <h2 className="text-2xl font-bold" style={{ color: BEIGE }}>
+        Error
+      </h2>
+      <p className="text-white/85">{message}</p>
+      {/* GET otra vez para reintentar */}
+      <form method="GET" action="/admin/validate">
+        <Input
+          name="code"
+          inputMode="text"
+          maxLength={32}
+          placeholder="Ingresá otro código"
+          className="text-center text-lg font-mono mb-3 bg-white/10 border border-white/20 text-white placeholder:text-white/60"
+          required
+        />
+        <Button
+          type="submit"
+          variant="outline"
+          className="border"
+          style={{
+            borderColor: `${BEIGE}33`,
+            color: BEIGE,
+          }}
+        >
+          Intentar de nuevo
+        </Button>
+      </form>
     </Card>
   );
 }
 
 function TicketCard({ t }: { t: UiTicket }) {
+  const isVip = t.ticketType === "vip";
+  const qtyLabel =
+    isVip && (t.vipTables ?? 0) > 1
+      ? `${t.quantity} entradas (${t.vipTables} mesas)`
+      : `${t.quantity} ${t.quantity === 1 ? "entrada" : "entradas"}`;
+
+  const TitleBlock = () => {
+    if (t.validated) {
+      return (
+        <>
+          <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold mb-2" style={{ color: BEIGE }}>
+            Entrada Válida
+          </h2>
+          {t.validatedAt && (
+            <p className="text-white/85">
+              Validada el {new Date(t.validatedAt).toLocaleString("es-AR")}
+            </p>
+          )}
+        </>
+      );
+    }
+    if (t.paymentStatus !== "approved") {
+      return (
+        <>
+          <XCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold mb-2" style={{ color: BEIGE }}>
+            Pago no aprobado
+          </h2>
+          <p className="text-white/85">
+            Esta entrada aún no figura como aprobada.
+          </p>
+        </>
+      );
+    }
+    return (
+      <>
+        <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
+        <h2 className="text-2xl font-bold mb-2" style={{ color: BEIGE }}>
+          Entrada Válida
+        </h2>
+        <p className="text-white/85">
+          La entrada está aprobada y fue validada correctamente.
+        </p>
+      </>
+    );
+  };
+
   return (
-    <Card className="p-8 border-primary">
+    <Card
+      className="p-8 backdrop-blur-xl"
+      style={{
+        backgroundColor: `${BORDO}26`,
+        borderColor: `${BEIGE}26`,
+        color: BEIGE,
+      }}
+    >
       <div className="space-y-6">
         <div className="text-center">
-          {t.validated ? (
-            <>
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-green-500 mb-2">
-                Entrada Válida
-              </h2>
-              {t.validatedAt && (
-                <p className="text-muted-foreground">
-                  Validada el {new Date(t.validatedAt).toLocaleString("es-AR")}
-                </p>
-              )}
-            </>
-          ) : t.paymentStatus !== "approved" ? (
-            <>
-              <XCircle className="w-16 h-16 text-destructive mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-destructive mb-2">
-                Pago no aprobado
-              </h2>
-              <p className="text-muted-foreground">
-                Esta entrada aún no figura como aprobada.
-              </p>
-            </>
-          ) : (
-            <>
-              <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-green-500 mb-2">
-                Entrada Válida
-              </h2>
-              <p className="text-muted-foreground">
-                La entrada está aprobada y fue validada correctamente.
-              </p>
-            </>
-          )}
+          <TitleBlock />
         </div>
 
-        <div className="space-y-4 pt-6 border-t">
+        <div
+          className="space-y-4 pt-6 border-t"
+          style={{ borderColor: `${BEIGE}26` }}
+        >
           {t.validationCode && (
-            <div className="flex items-start gap-3 bg-muted/50 p-4 rounded-lg">
-              <Hash className="w-5 h-5 text-primary mt-0.5" />
+            <div
+              className="flex items-start gap-3 rounded-lg p-4"
+              style={{ backgroundColor: `${BEIGE}12` as any }}
+            >
+              <Hash className="w-5 h-5" style={{ color: BEIGE }} />
               <div className="flex-1">
-                <p className="text-sm text-muted-foreground">
-                  Código de Validación
-                </p>
-                <p className="font-mono font-bold text-2xl tracking-wider">
+                <p className="text-sm text-white/80">Código de Validación</p>
+                <p
+                  className="font-mono font-bold text-2xl tracking-wider"
+                  style={{ color: BEIGE }}
+                >
                   {t.validationCode}
                 </p>
               </div>
@@ -227,38 +317,73 @@ function TicketCard({ t }: { t: UiTicket }) {
           )}
 
           <div className="flex items-start gap-3">
-            <User className="w-5 h-5 text-primary mt-0.5" />
+            <User className="w-5 h-5" style={{ color: BEIGE }} />
             <div className="flex-1">
-              <p className="text-sm text-muted-foreground">Nombre</p>
+              <p className="text-sm text-white/80">Nombre</p>
               <p className="font-semibold text-lg">{t.customerName}</p>
             </div>
           </div>
 
           <div className="flex items-start gap-3">
-            <IdCard className="w-5 h-5 text-primary mt-0.5" />
+            <IdCard className="w-5 h-5" style={{ color: BEIGE }} />
             <div className="flex-1">
-              <p className="text-sm text-muted-foreground">DNI</p>
+              <p className="text-sm text-white/80">DNI</p>
               <p className="font-semibold text-lg">{t.customerDni}</p>
             </div>
           </div>
 
+          {/* Tipo de Entrada */}
           <div className="flex items-start gap-3">
-            <Ticket className="w-5 h-5 text-primary mt-0.5" />
+            <TicketIcon className="w-5 h-5" style={{ color: BEIGE }} />
             <div className="flex-1">
-              <p className="text-sm text-muted-foreground">Tipo de Entrada</p>
+              <p className="text-sm text-white/80">Tipo de Entrada</p>
               <p className="font-semibold text-lg">
-                {`Entrada ${t.ticketType === "general" ? "General" : "VIP"}`}
+                {t.ticketType === "general" ? "General" : "VIP"}
               </p>
             </div>
           </div>
 
+          {/* Cantidad de entradas (y mesas si aplica) */}
+          <div className="flex items-start gap-3">
+            <Hash className="w-5 h-5" style={{ color: BEIGE }} />
+            <div className="flex-1">
+              <p className="text-sm text-white/80">Cantidad de Entradas</p>
+              <p className="font-semibold text-lg">{qtyLabel}</p>
+            </div>
+          </div>
+
+          {/* VIP: Locación y Mesa */}
+          {isVip && (
+            <>
+              <div className="flex items-start gap-3">
+                <MapPin className="w-5 h-5" style={{ color: BEIGE }} />
+                <div className="flex-1">
+                  <p className="text-sm text-white/80">Locación VIP</p>
+                  <p className="font-semibold text-lg">
+                    {prettyVipLocation(t.vipLocation)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Hash className="w-5 h-5" style={{ color: BEIGE }} />
+                <div className="flex-1">
+                  <p className="text-sm text-white/80">Número de Mesa</p>
+                  <p className="font-semibold text-lg">
+                    {t.tableNumber != null
+                      ? `Mesa ${t.tableNumber}`
+                      : "Sin asignar"}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+
           {t.eventDate && (
             <div className="flex items-start gap-3">
-              <Calendar className="w-5 h-5 text-primary mt-0.5" />
+              <Calendar className="w-5 h-5" style={{ color: BEIGE }} />
               <div className="flex-1">
-                <p className="text-sm text-muted-foreground">
-                  Fecha del Evento
-                </p>
+                <p className="text-sm text-white/80">Fecha del Evento</p>
                 <p className="font-semibold text-lg">
                   {new Date(t.eventDate).toLocaleDateString("es-AR")}
                 </p>
@@ -274,10 +399,14 @@ function TicketCard({ t }: { t: UiTicket }) {
             inputMode="text"
             maxLength={32}
             placeholder="Ingresá otro código"
-            className="text-center text-lg font-mono mb-3"
+            className="text-center text-lg font-mono mb-3 bg-white/10 border border-white/20 text-white placeholder:text-white/60"
             required
           />
-          <Button type="submit" className="w-full">
+          <Button
+            type="submit"
+            className="w-full"
+            style={{ backgroundColor: BEIGE, color: BORDO }}
+          >
             Validar otra entrada
           </Button>
         </form>
@@ -289,8 +418,6 @@ function TicketCard({ t }: { t: UiTicket }) {
 /* ======================
    Página (SSR)
 ====================== */
-export const dynamic = "force-dynamic";
-
 export default async function Page({
   searchParams,
 }: {
@@ -318,28 +445,54 @@ export default async function Page({
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background via-primary/5 to-secondary/5 py-12 px-4">
-      <div className="container mx-auto max-w-2xl">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-primary to-secondary mb-4">
-            <QrCode className="w-8 h-8 text-white" />
+    <div
+      className="relative min-h-screen text-white"
+      style={{ backgroundColor: BORDO }}
+    >
+      {/* Fondo */}
+      <HeroBackgroundEasy
+        mobile={{ rows: 4, cols: 1 }}
+        desktop={{ rows: 4, cols: 3 }}
+        fontMobile="clamp(2.6rem, 21vw, 9rem)"
+        opacity={0.55}
+        gap="clamp(0px, 1vh, 10px)"
+        navTopPx={0}
+      />
+      {/* Overlay para contraste */}
+      <div aria-hidden className="absolute inset-0 bg-black/55" />
+
+      <div className="relative z-10 py-12 px-4">
+        <div className="container mx-auto max-w-2xl">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div
+              className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
+              style={{
+                background: `linear-gradient(135deg, ${BORDO}, ${BEIGE})`,
+              }}
+            >
+              <QrCode className="w-8 h-8 text-white" />
+            </div>
+            <h1
+              className="text-4xl font-display font-bold mb-2"
+              style={{ color: BEIGE }}
+            >
+              Validación de Entradas
+            </h1>
+            <p className="text-white/85">
+              Si llegaste desde un QR, esta página valida automáticamente con{" "}
+              <code className="text-white/90">?code=XXXXXX</code> (o{" "}
+              <code className="text-white/90">?validationCode=XXXXXX</code>). Si
+              no, ingresá el código manualmente.
+            </p>
           </div>
-          <h1 className="text-4xl font-display font-bold mb-2">
-            Validación de Entradas
-          </h1>
-          <p className="text-muted-foreground">
-            Si llegaste desde un QR, esta página valida automáticamente con{" "}
-            <code>?code=XXXXXX</code> (o <code>?validationCode=XXXXXX</code>).
-            Si no, ingresá el código manualmente.
-          </p>
+
+          {/* Contenido principal */}
+          {!validCode && <EmptyState />}
+
+          {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
+          {validCode && ui && ui.ticket && <TicketCard t={ui.ticket} />}
         </div>
-
-        {/* Contenido principal */}
-        {!validCode && <EmptyState />}
-
-        {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
-        {validCode && ui && ui.ticket && <TicketCard t={ui.ticket} />}
       </div>
     </div>
   );

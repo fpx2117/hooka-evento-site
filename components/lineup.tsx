@@ -15,14 +15,6 @@ const RED = "#5b0d0d";
 
 const INITIAL_DJS = [
   {
-    name: "DJ Pirata",
-    specialty: "",
-    image: "/djpirata.webp",
-    spotifyUrl:
-      "https://open.spotify.com/intl-es/artist/4MlPk7Q5wc1b5KRKSCDNnh",
-    youtubeUrl: "https://www.youtube.com/@DjPirata",
-  },
-  {
     name: "Braian Segovia DJ",
     specialty: "",
     image: "/braiansegoviadj.jpg",
@@ -35,6 +27,20 @@ const INITIAL_DJS = [
     image: "/juanc_rmx.jpg",
     spotifyUrl: "",
     youtubeUrl: "https://www.instagram.com/juanc_rmx",
+  },
+  {
+    name: "Pome DJ",
+    specialty: "",
+    image: "/pomedj.jpg",
+    spotifyUrl: "",
+    youtubeUrl: "",
+  },
+  {
+    name: "Tato Remix",
+    specialty: "",
+    image: "/tatormx.jpg",
+    spotifyUrl: "",
+    youtubeUrl: "",
   },
 ] as const;
 
