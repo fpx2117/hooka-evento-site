@@ -24,7 +24,7 @@ import {
 import { getTicketByCode, validateTicket } from "@/lib/api";
 
 /* ======================
-   Tipos
+   Tipos (compat con lib/schemas.ts)
 ====================== */
 type ApiTicket = {
   id: string;
@@ -33,17 +33,18 @@ type ApiTicket = {
   customerPhone: string;
   customerDni: string;
   ticketType: "general" | "vip";
-  quantity: number;
   paymentStatus: "pending" | "approved" | "rejected";
+  quantity?: number;
   validated: boolean;
-  validatedAt?: string | null;
-  purchaseDate: string;
-  eventDate?: string | null;
+  validatedAt?: string | undefined; // nunca null
+  purchaseDate: string; // ISO
+  eventDate?: string | undefined; // nunca null
 
-  // VIP
-  vipLocation?: "dj" | "piscina" | "general" | null;
-  tableNumber?: number | null;
-  vipTables?: number | null;
+  // VIP opcionales
+  vipLocation?: "dj" | "piscina" | "general" | undefined;
+  tableNumber?: number | undefined;
+  vipTables?: number | undefined;
+  capacityPerTable?: number | undefined;
 };
 
 type UiTicket = {
@@ -57,13 +58,14 @@ type UiTicket = {
   quantity: number;
   paymentStatus: "pending" | "approved" | "rejected";
   validated: boolean;
-  validatedAt?: string | null;
-  eventDate?: string | null;
+  validatedAt?: string | undefined;
+  eventDate?: string | undefined;
 
   // VIP
-  vipLocation?: "dj" | "piscina" | "general" | null;
-  tableNumber?: number | null;
-  vipTables?: number | null;
+  vipLocation?: "dj" | "piscina" | "general" | undefined;
+  tableNumber?: number | undefined;
+  vipTables?: number | undefined;
+  capacityPerTable?: number | undefined;
 };
 
 /* ======================
@@ -80,6 +82,19 @@ function prettyVipLocation(loc?: UiTicket["vipLocation"]) {
   return loc;
 }
 
+function resolvedQuantity(t: ApiTicket): number {
+  const q = Number(t.quantity ?? 0);
+  if (t.ticketType === "vip") {
+    if (q > 0) return q;
+    const tables = Number(t.vipTables ?? 0);
+    const cap = Number(t.capacityPerTable ?? 0);
+    if (tables > 0 && cap > 0) return tables * cap;
+    if (tables > 0) return tables;
+    return 1;
+  }
+  return q > 0 ? q : 1;
+}
+
 function toUiTicket(t: ApiTicket, code?: string): UiTicket {
   return {
     validationCode: code,
@@ -89,14 +104,15 @@ function toUiTicket(t: ApiTicket, code?: string): UiTicket {
     customerDni: t.customerDni,
     type: "ticket",
     ticketType: t.ticketType,
-    quantity: t.quantity ?? 1,
+    quantity: resolvedQuantity(t),
     paymentStatus: t.paymentStatus,
     validated: t.validated,
-    validatedAt: t.validatedAt ?? null,
-    eventDate: t.eventDate ?? null,
-    vipLocation: t.vipLocation ?? null,
-    tableNumber: t.tableNumber ?? null,
-    vipTables: t.vipTables ?? null,
+    validatedAt: t.validatedAt ?? undefined,
+    eventDate: t.eventDate ?? undefined,
+    vipLocation: t.vipLocation ?? undefined,
+    tableNumber: t.tableNumber ?? undefined,
+    vipTables: t.vipTables ?? undefined,
+    capacityPerTable: t.capacityPerTable ?? undefined,
   };
 }
 
@@ -115,15 +131,18 @@ async function runValidationFlow(
       };
     }
 
+    // Si no está aprobado, mostramos la tarjeta sin intentar validar
     if (t.paymentStatus !== "approved") {
       return { ticket: toUiTicket(t, code) };
     }
 
+    // Si está aprobado y aún no validado, intentamos validar
     if (!t.validated) {
       try {
         const res = await validateTicket(code);
         if (res?.ticket) t = res.ticket as ApiTicket;
       } catch (e: any) {
+        // Si ya estaba validado, seguimos con el ticket anterior
         if (e?.code !== "already_validated") {
           // ignoramos otros errores
         }
@@ -137,7 +156,7 @@ async function runValidationFlow(
 }
 
 /* ======================
-   Componentes
+   Componentes UI
 ====================== */
 function EmptyState() {
   return (
@@ -154,7 +173,7 @@ function EmptyState() {
           <Label htmlFor="code" className="text-[color:var(--beige,#e3cfbf)]">
             Código de validación
           </Label>
-          <form method="GET" action="/admin/validate">
+          <form method="GET" action="/validate">
             <Input
               id="code"
               name="code"
@@ -196,7 +215,7 @@ function ErrorCard({ message }: { message: string }) {
         Error
       </h2>
       <p className="text-white/85">{message}</p>
-      <form method="GET" action="/admin/validate">
+      <form method="GET" action="/validate">
         <Input
           name="code"
           inputMode="text"
@@ -343,7 +362,7 @@ function TicketCard({ t }: { t: UiTicket }) {
           </div>
 
           {/* VIP */}
-          {isVip && (
+          {t.ticketType === "vip" && (
             <>
               <div className="flex items-start gap-3">
                 <MapPin className="w-5 h-5" style={{ color: BEIGE }} />
@@ -366,6 +385,21 @@ function TicketCard({ t }: { t: UiTicket }) {
                   </p>
                 </div>
               </div>
+
+              {typeof t.capacityPerTable === "number" &&
+                t.capacityPerTable > 0 && (
+                  <div className="flex items-start gap-3">
+                    <Hash className="w-5 h-5" style={{ color: BEIGE }} />
+                    <div className="flex-1">
+                      <p className="text-sm text-white/80">
+                        Capacidad por mesa
+                      </p>
+                      <p className="font-semibold text-lg">
+                        {t.capacityPerTable}
+                      </p>
+                    </div>
+                  </div>
+                )}
             </>
           )}
 
@@ -382,7 +416,7 @@ function TicketCard({ t }: { t: UiTicket }) {
           )}
         </div>
 
-        <form method="GET" action="/admin/validate" className="w-full mt-6">
+        <form method="GET" action="/validate" className="w-full mt-6">
           <Input
             name="code"
             inputMode="text"
@@ -412,8 +446,7 @@ export default async function Page({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const sp = await searchParams;
-
+  const sp = await searchParams; // 👈 importante: await
   const pick = (val: string | string[] | undefined) =>
     (Array.isArray(val) ? val[0] : val) ?? "";
 
