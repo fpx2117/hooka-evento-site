@@ -35,7 +35,7 @@ function absUrl(base: string, path?: string | null) {
   if (!path) return undefined;
   const p = path.trim();
   if (!p) return undefined;
-  if (/^https?:\/\//i.test(p)) return p;
+  if (/^https?:\/\//i.test(p)) return p; // ya absoluto
   const origin = base.replace(/\/+$/, "");
   const rel = p.startsWith("/") ? p : `/${p}`;
   return `${origin}${rel}`;
@@ -72,6 +72,12 @@ const prettyLocation = (loc?: string | null) => {
 type Brand = {
   name: string;
   logoUrl?: string | null;
+  /** Imagen de fondo del hero (patrón HOOKA + gradiente) */
+  heroBgUrl?: string | null;
+  /** Palma superior derecha */
+  palmsTopUrl?: string | null;
+  /** Palma inferior izquierda */
+  palmsBottomUrl?: string | null;
   colors: {
     gradientFrom: string;
     gradientTo: string;
@@ -86,17 +92,21 @@ type Brand = {
 };
 
 const DEFAULT_BRAND: Brand = {
-  name: "Hooka Pool Party",
-  logoUrl: "https://hooka.com.ar/logov2.png",
+  name: "Hooka",
+  logoUrl: process.env.HOOKA_LOGO_URL || undefined,
+  // Archivos en /public
+  heroBgUrl: process.env.HOOKA_HERO_BG_URL || "/hooka-hero-bg.png",
+  palmsTopUrl: process.env.HOOKA_PALMS_TOP_URL || "/palmeras1.png",
+  palmsBottomUrl: process.env.HOOKA_PALMS_BOTTOM_URL || "/palmeras2.png",
   colors: {
-    gradientFrom: "#5b0d0d",
-    gradientTo: "#3f0a0a",
-    accent: "#E3CFBF",
+    gradientFrom: process.env.HOOKA_GRADIENT_FROM || "#FF006E",
+    gradientTo: process.env.HOOKA_GRADIENT_TO || "#FFBE0B",
+    accent: process.env.HOOKA_ACCENT || "#00F5FF",
     textOnDark: "#FFFFFF",
     textOnLight: "#1A1A2E",
-    bg: "#5b0d0d",
-    card: "#120202",
-    qrDark: "#1A1A2E",
+    bg: process.env.HOOKA_BG || "#0A0E27",
+    card: process.env.HOOKA_CARD || "#1A1F3A",
+    qrDark: process.env.HOOKA_QR_DARK || "#1A1A2E",
     qrLight: "#FFFFFF",
   },
 };
@@ -146,11 +156,11 @@ function emailTemplate({
   validationCode?: string | null;
   qrCodeImage?: string | null;
 }) {
-  const { colors, logoUrl } = brand;
+  const { colors, logoUrl, heroBgUrl, palmsTopUrl, palmsBottomUrl } = brand;
 
   const watermark = logoUrl
-    ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.06;">
-         <img src="${logoUrl}" alt="${brand.name} logo" style="max-width:85%; max-height:85%; transform:rotate(-5deg);"/>
+    ? `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.08;">
+         <img src="${logoUrl}" alt="${brand.name} logo" style="max-width:85%; max-height:85%; transform:rotate(-5deg); filter:none !important; mix-blend-mode:normal !important;"/>
        </div>`
     : "";
 
@@ -158,44 +168,196 @@ function emailTemplate({
 <html lang="es">
   <head>
     <meta charset="utf-8">
+    <meta content="width=device-width, initial-scale=1" name="viewport"/>
     <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <title>${brand.name}</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+      @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800;900&display=swap');
+      img { border:0; outline:none; text-decoration:none; display:block; }
+      table { border-collapse:collapse !important; }
+      body, table, td, div, p { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+      :root { color-scheme: light; supported-color-schemes: light; }
+      .no-invert { filter:none !important; mix-blend-mode:normal !important; }
     </style>
   </head>
-  <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; color:${colors.textOnDark};">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${colors.bg}">
-      <tr>
-        <td align="center">
-          <div style="max-width:680px; margin:0 auto; padding:20px;">
-            <table width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
-              <tr>
-                <td style="background:linear-gradient(135deg, ${colors.gradientFrom}, ${colors.gradientTo}); text-align:center; padding:34px 22px;">
-                  ${logoUrl ? `<img src="${logoUrl}" width="88" height="88" alt="${brand.name} logo" style="border-radius:12px; margin-bottom:12px;" />` : ""}
-                  <h1 style="font-size:28px; color:#fff; margin:0;">${title}</h1>
-                  ${subtitle ? `<p style="color:${colors.accent}; font-weight:700; margin-top:8px;">${subtitle}</p>` : ""}
-                </td>
-              </tr>
-            </table>
+  <body bgcolor="${colors.bg}" style="margin:0; padding:0; background:${colors.bg}; font-family:'Poppins', Arial, sans-serif; color:${colors.textOnDark};">
+    <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
 
-            <div style="background:${colors.card}; border-radius:20px; padding:28px; margin-top:16px; position:relative; color:${colors.textOnDark}; box-shadow:0 0 40px rgba(0,0,0,.5);">
-              ${watermark}
-              <h2 style="font-size:22px; margin:0 0 10px;">Hola ${name} 🎉</h2>
-              <p style="margin:0 0 18px;">Tu compra fue procesada exitosamente. ¡Prepárate para la fiesta!</p>
-              ${detailsHtml || ""}
-              ${validationCode ? `<h3 style="font-size:18px; margin:18px 0 8px;">Código de validación</h3><p style="font-size:26px; font-weight:900; letter-spacing:8px;">${validationCode}</p>` : ""}
-              ${qrCodeImage ? `<img src="${qrCodeImage}" alt="QR de validación" width="200" style="margin:24px auto; border-radius:8px; display:block;" />` : ""}
-              <p style="font-size:13px; margin-top:20px; color:#ccc;">Mostrá este QR o el código al ingresar al evento.<br/>Hooka Pool Party © ${new Date().getFullYear()}</p>
+      <!-- HERO con imagen de fondo (bulletproof) -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
+        <tr>
+          <td
+            background="${heroBgUrl || ""}"
+            style="
+              background:${colors.bg};
+              ${
+                heroBgUrl
+                  ? `background-image:url('${heroBgUrl}'); background-size:cover; background-position:center;`
+                  : `
+              background: linear-gradient(135deg, ${colors.gradientFrom} 0%, #FB5607 35%, ${colors.gradientTo} 70%, #8338EC 100%);`
+              }
+              border-radius:24px; text-align:center; padding:40px 24px; position:relative;
+            "
+          >
+            <!--[if gte mso 9]>
+            <v:rect xmlns:v='urn:schemas-microsoft-com:vml' fill='true' stroke='f' style='width:640px;height:280px;'>
+              <v:fill type='frame' src='${heroBgUrl || ""}' color='${colors.bg}' />
+              <v:textbox inset='0,0,0,0'>
+            <![endif]-->
+            <div style="position:relative; z-index:2;">
+              ${
+                logoUrl
+                  ? `
+              <div class="no-invert" style="background:rgba(255,255,255,0.15); backdrop-filter:blur(10px); border-radius:24px; padding:16px; display:inline-block; margin-bottom:16px; border:3px solid rgba(255,255,255,0.3);">
+                <img class="no-invert" src="${logoUrl}" width="100" height="100" alt="${brand.name} logo" style="border-radius:16px;"/>
+              </div>`
+                  : ""
+              }
+
+              <h1 style="margin:12px 0 8px 0; font-size:36px; font-weight:900; line-height:1.1; color:#fff;">
+                ${title}
+              </h1>
+
+              ${
+                subtitle
+                  ? `
+              <div class="no-invert" style="display:inline-block; background:rgba(0,245,255,0.2); border:2px solid ${colors.accent}; border-radius:50px; padding:8px 24px; margin-top:8px;">
+                <p style="margin:0; font-size:15px; font-weight:600; color:${colors.accent}; letter-spacing:0.5px;">${subtitle}</p>
+              </div>`
+                  : ""
+              }
+
+              <!-- Palmas superpuestas -->
+              ${
+                palmsTopUrl
+                  ? `
+              <div style="position:absolute; right:-10px; top:-6px; opacity:0.95;">
+                <img src="${palmsTopUrl}" alt="" width="220" style="max-width:40vw;height:auto;" />
+              </div>`
+                  : ""
+              }
+
+              ${
+                palmsBottomUrl
+                  ? `
+              <div style="position:absolute; left:-20px; bottom:-60px; opacity:0.95;">
+                <img src="${palmsBottomUrl}" alt="" width="260" style="max-width:42vw;height:auto;" />
+              </div>`
+                  : ""
+              }
             </div>
+            <!--[if gte mso 9]>
+              </v:textbox>
+            </v:rect>
+            <![endif]-->
+          </td>
+        </tr>
+      </table>
 
-            <div style="text-align:center; margin-top:20px;">
-              <p style="color:#E3CFBF; font-weight:700;">📍 La ubicación se confirmará 24hs antes del evento.</p>
-            </div>
+      <!-- Tarjeta principal -->
+      <div class="card" bgcolor="${colors.card}" style="position:relative; background:${colors.card}; border-radius:24px; overflow:hidden; margin-top:16px;
+                                 box-shadow:0 12px 40px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+                                 border:2px solid rgba(255,0,110,0.2);">
+        ${watermark}
+        <div style="height:6px; background:linear-gradient(90deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%);"></div>
 
+        <div style="position:relative; padding:32px 24px;">
+          <div style="background:linear-gradient(135deg, rgba(255,0,110,0.15) 0%, rgba(255,190,11,0.15) 100%);
+                      border-left:5px solid ${colors.accent};
+                      border-radius:12px;
+                      padding:20px 24px;
+                      margin-bottom:24px;">
+            <h2 style="margin:0 0 8px 0; font-size:26px; font-weight:800;">
+              ¡Hola ${name}! 🎉
+            </h2>
+            <p style="margin:0; font-size:16px; color:rgba(255,255,255,0.9); line-height:1.5;">
+              Tu compra fue procesada exitosamente. ¡Prepárate para la fiesta! 🔥
+            </p>
           </div>
-        </td>
-      </tr>
-    </table>
+
+          ${detailsHtml || ""}
+
+          ${
+            validationCode
+              ? `
+            <div style="background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%);
+                        padding:28px 24px; text-align:center; border-radius:20px; margin:24px 0;
+                        box-shadow:0 12px 40px rgba(255,0,110,0.5), 0 0 60px rgba(255,190,11,0.3);
+                        border:3px solid rgba(255,255,255,0.2);">
+              <div style="display:inline-block; background:rgba(0,245,255,0.25); border-radius:12px; padding:6px 20px; margin-bottom:12px; border:2px solid ${colors.accent};">
+                <p style="margin:0; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:${colors.accent};">
+                  🫦 Código de Validación 🫦
+                </p>
+              </div>
+              <div style="background:rgba(0,0,0,0.3); border-radius:16px; padding:20px; margin:12px auto; max-width:320px; border:2px solid rgba(255,255,255,0.15);">
+                <div style="font-size:36px; font-weight:900; letter-spacing:12px; line-height:1; color:#FFFFFF;">
+                  ${validationCode}
+                </div>
+              </div>
+              <p style="margin:12px 0 0 0; font-size:14px; font-weight:600; color:rgba(255,255,255,0.95);">
+                ✨ Mostrá este código o tu QR al personal ✨
+              </p>
+            </div>`
+              : ""
+          }
+
+          ${
+            qrCodeImage
+              ? `
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
+                        background:#FFFFFF; border:4px solid transparent; position:relative;
+                        padding:24px; border-radius:20px; margin:24px auto;
+                        box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
+              <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.accent} 50%, ${colors.gradientTo} 100%); border-radius:20px; z-index:-1;"></div>
+              <div style="background:#FFFFFF; border-radius:12px; padding:12px 20px; margin-bottom:16px; display:inline-block;">
+                <h3 style="margin:0; font-size:20px; font-weight:800; color:${colors.gradientFrom};">
+                  🫦 Tu Código QR 🫦
+                </h3>
+              </div>
+              <div style="background:#FFFFFF; border-radius:16px; padding:16px; display:inline-block; box-shadow:0 8px 24px rgba(0,0,0,0.15);">
+                <img src="${qrCodeImage}" alt="QR de validación" width="240" style="max-width:240px; height:auto; border-radius:8px;"/>
+              </div>
+              <p style="font-size:13px; color:#555; margin:16px 0 0 0; font-weight:600; line-height:1.5;">
+                📱 Mostrá este código o tu QR al personal 📱
+              </p>
+            </div>`
+              : ""
+          }
+
+          <div style="background:linear-gradient(135deg, rgba(0,245,255,0.1) 0%, rgba(131,56,236,0.1) 100%);
+                      border:2px solid ${colors.accent};
+                      border-radius:16px; padding:20px 24px;">
+            <h3 style="margin:0 0 12px 0; font-size:18px; font-weight:800; color:${colors.accent};">📋 Instrucciones</h3>
+            <ol style="margin:0; padding-left:20px; color:${colors.textOnDark}; line-height:1.8; font-size:15px;">
+              <li style="margin-bottom:8px;"><strong>Mostrá este email</strong> al personal de seguridad</li>
+              <li style="margin-bottom:8px;">Pueden <strong>escanear tu QR</strong> o ingresar el código de 6 dígitos</li>
+              <li>Una vez validado, <strong>¡entrás directo a la fiesta!</strong> 🎊</li>
+            </ol>
+          </div>
+
+          <div style="text-align:center; margin:32px 0 0 0; padding:24px; background:linear-gradient(135deg, ${colors.gradientFrom} 0%, ${colors.gradientTo} 100%); border-radius:16px;">
+            <p style="margin:0; font-size:22px; font-weight:900; color:#FFFFFF;">
+              ¡Nos vemos en la fiesta! 🎉🔥
+            </p>
+            <p style="margin:8px 0 0 0; font-size:14px; color:rgba(255,255,255,0.9); font-weight:600;">
+              Prepárate para una noche inolvidable 🫦
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center; padding:24px 16px; margin-top:16px;">
+        <div style="display:inline-block; background:rgba(255,255,255,0.05); border-radius:16px; padding:16px 32px; border:1px solid rgba(255,255,255,0.1);">
+          <p style="margin:0 0 8px 0; font-size:18px; font-weight:800; color:#FFFFFF;">
+            ${brand.name}
+          </p>
+          <p style="margin:0; font-size:13px; color:#A7AABB; font-weight:500;">
+            📍 La ubicación se confirmará 24hs antes del evento
+          </p>
+        </div>
+      </div>
+    </div>
   </body>
 </html>`;
 }
@@ -205,45 +367,68 @@ function emailTemplate({
 /* -------------------------------------------------------------------------- */
 
 type Payload = {
-  type?: "ticket" | "vip-table";
+  type?: "ticket" | "vip-table"; // compat: "vip-table" se trata como ticket VIP
   recordId?: string;
-  force?: boolean;
+  force?: boolean; // reenviar aunque exista emailSentAt (omite lock)
 };
 
 export async function POST(request: NextRequest) {
   try {
     let { type, recordId, force } = (await request.json()) as Payload;
-    if (!type || !recordId)
+    if (!type || !recordId) {
       return NextResponse.json(
         { error: "type y recordId son requeridos" },
         { status: 400 }
       );
+    }
+
+    // Compat: si vino "vip-table", lo normalizamos a "ticket"
     if (type === "vip-table") type = "ticket";
-    if (type !== "ticket")
+    if (type !== "ticket") {
       return NextResponse.json({ error: "Tipo inválido" }, { status: 400 });
+    }
 
     const BASE = getPublicBaseUrl(request);
+
+    // Resend
     const apiKey = s(process.env.RESEND_API_KEY);
-    const from =
-      s(process.env.RESEND_FROM) || "Hooka Party <info@hooka.com.ar>";
-    if (!apiKey)
+    const from = s(process.env.RESEND_FROM) || "Hooka <info@hooka.com.ar>";
+    if (!apiKey) {
       return NextResponse.json(
         { error: "RESEND_API_KEY no configurado" },
         { status: 500 }
       );
-
+    }
     const resend = new Resend(apiKey);
+
+    async function enviar({
+      to,
+      subject,
+      html,
+    }: {
+      to: string;
+      subject: string;
+      html: string;
+    }) {
+      const res = await resend.emails.send({ from, to, subject, html });
+      if ((res as any)?.error) {
+        console.error("[send-confirmation] Resend error:", (res as any).error);
+        throw new Error("ResendError");
+      }
+      return res;
+    }
+
+    // ---- Cargamos el ticket (GENERAL o VIP) ----
     const t = await prisma.ticket.findUnique({
       where: { id: recordId },
       select: {
         id: true,
-        ticketType: true,
-        gender: true,
-        quantity: true,
-        vipLocation: true,
-        tableNumber: true,
-        vipTables: true,
-        capacityPerTable: true,
+        ticketType: true, // "general" | "vip"
+        gender: true, // sólo general
+        quantity: true, // sólo general
+        vipLocation: true, // sólo vip
+        vipTables: true, // sólo vip
+        capacityPerTable: true, // sólo vip
         validationCode: true,
         totalPrice: true,
         paymentStatus: true,
@@ -254,39 +439,52 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!t)
+    if (!t) {
       return NextResponse.json(
         { error: "Ticket no encontrado" },
         { status: 404 }
       );
-    if (t.paymentStatus !== PS.approved)
+    }
+    if (t.paymentStatus !== PS.approved) {
       return NextResponse.json(
-        { error: "El pago no está aprobado" },
+        { error: "El pago no está aprobado para este ticket" },
         { status: 409 }
       );
+    }
 
     const normalizedCode = normalizeSixDigitCode(t.validationCode);
-    if (!normalizedCode)
+    if (!normalizedCode) {
       return NextResponse.json(
-        { error: "Ticket sin código válido" },
+        { error: "El ticket aprobado no posee un validationCode de 6 dígitos" },
         { status: 409 }
       );
+    }
 
-    if (!t.customerEmail)
+    if (!t.customerEmail) {
       return NextResponse.json(
         { error: "customerEmail vacío" },
         { status: 400 }
       );
+    }
 
-    if (t.emailSentAt && !force)
-      return NextResponse.json({
-        ok: true,
-        alreadySent: true,
-        emailSentAt: t.emailSentAt,
-      });
+    if (t.emailSentAt && !force) {
+      return NextResponse.json(
+        { ok: true, alreadySent: true, emailSentAt: t.emailSentAt },
+        { status: 200 }
+      );
+    }
 
-    const brandAbs = resolveBrand();
-    const title = `🫦 ${t.event?.name || brandAbs.name} 🫦`;
+    // Resolvemos brand y absolutizamos URLs para email
+    const brandRel = resolveBrand();
+    const brand = {
+      ...brandRel,
+      logoUrl: absUrl(BASE, brandRel.logoUrl),
+      heroBgUrl: absUrl(BASE, brandRel.heroBgUrl) || undefined,
+      palmsTopUrl: absUrl(BASE, brandRel.palmsTopUrl) || undefined,
+      palmsBottomUrl: absUrl(BASE, brandRel.palmsBottomUrl) || undefined,
+    };
+
+    const title = `🫦 ${t.event?.name || brand.name} 🫦`;
     const dateStr = t.event?.date
       ? new Date(t.event.date).toLocaleDateString("es-AR")
       : "";
@@ -295,32 +493,59 @@ export async function POST(request: NextRequest) {
     let detailsHtml = "";
 
     if (t.ticketType === TicketType.general) {
-      subject = `Entrada General — Código ${normalizedCode}`;
-      detailsHtml = `
-        <div style="background:#fff; color:#111; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
-          <strong>Tipo:</strong> Entrada General<br/>
-          <strong>Cantidad:</strong> ${t.quantity ?? 1}<br/>
-          ${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}
-          <strong>Total:</strong> $${formatARS(t.totalPrice)}<br/>
-        </div>`;
+      // ------ General ------
+      const typeLabel = "Entrada General";
+      subject = `🫦 ${typeLabel} — Código: ${normalizedCode}`;
+      const genderLine = t.gender
+        ? `<strong>Género:</strong> ${cap(t.gender)}<br/>`
+        : "";
+      const qtyLine =
+        typeof t.quantity === "number"
+          ? `<strong>Cantidad:</strong> ${t.quantity}<br/>`
+          : "";
+
+      detailsHtml =
+        `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
+        `<strong>Tipo:</strong> Entrada General<br/>` +
+        `${genderLine}` +
+        `${qtyLine}` +
+        `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
+        `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
+        `</div>`;
     } else {
-      const loc = prettyLocation(t.vipLocation);
-      subject = `Mesa VIP — ${loc} — Código ${normalizedCode}`;
-      detailsHtml = `
-        <div style="background:#fff; color:#111; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
-          <strong>Tipo:</strong> Mesa VIP<br/>
-          <strong>Sector:</strong> ${loc}<br/>
-          <strong>Mesa N°:</strong> ${t.tableNumber ?? "—"}<br/>
-          ${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}
-          <strong>Total:</strong> $${formatARS(t.totalPrice)}<br/>
-        </div>`;
+      // ------ VIP (línea compacta Mesas + Capacidad) ------
+      const locLabel = prettyLocation(t.vipLocation);
+      subject = `🫦 Mesa VIP — ${locLabel} — Código: ${normalizedCode}`;
+
+      const tables = Math.max(1, Number(t.vipTables ?? 1));
+      const capPerTable = Math.max(0, Number(t.capacityPerTable ?? 0));
+
+      // Línea compacta
+      let mesaCapLine = `<strong>Mesas:</strong> ${tables}`;
+      if (capPerTable > 0) {
+        if (tables > 1) {
+          const totalCap = capPerTable * tables;
+          mesaCapLine += ` — <strong>Capacidad:</strong> ${totalCap} <span style="opacity:.9">(${capPerTable}/mesa)</span>`;
+        } else {
+          mesaCapLine += ` — <strong>Capacidad:</strong> ${capPerTable}`;
+        }
+      }
+      mesaCapLine += "<br/>";
+
+      detailsHtml =
+        `<div style="background:#fff; border:1px solid #e8e8e8; padding:14px 16px; border-radius:8px; margin-bottom:12px; color:#111;">` +
+        `${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}` +
+        `<strong>Ubicación:</strong> ${locLabel}<br/>` +
+        mesaCapLine +
+        `<strong>Total:</strong> $ ${formatARS(t.totalPrice)}<br/>` +
+        `</div>`;
     }
 
     const validateUrl = buildValidateUrl(BASE, normalizedCode);
-    const qrImage = await makeQrDataUrl(validateUrl, brandAbs);
+    const qrImage = await makeQrDataUrl(validateUrl, brand);
 
     const html = emailTemplate({
-      brand: brandAbs,
+      brand,
       title,
       subtitle:
         t.ticketType === TicketType.vip
@@ -332,13 +557,50 @@ export async function POST(request: NextRequest) {
       qrCodeImage: qrImage || undefined,
     });
 
-    await resend.emails.send({ from, to: t.customerEmail, subject, html });
-    await prisma.ticket.update({
-      where: { id: t.id },
-      data: { emailSentAt: new Date() },
-    });
+    let reservedAt: Date | null = null;
+    if (!force) {
+      reservedAt = new Date();
+      const lock = await prisma.ticket.updateMany({
+        where: { id: t.id, emailSentAt: null, paymentStatus: PS.approved },
+        data: { emailSentAt: reservedAt },
+      });
+      if (lock.count === 0) {
+        return NextResponse.json(
+          { ok: true, alreadySent: true },
+          { status: 200 }
+        );
+      }
+    }
 
-    return NextResponse.json({ success: true, validateUrl });
+    try {
+      const result = await enviar({
+        to: t.customerEmail,
+        subject,
+        html,
+      });
+
+      if (force) {
+        await prisma.ticket.update({
+          where: { id: t.id },
+          data: { emailSentAt: new Date() },
+        });
+      }
+
+      return NextResponse.json({
+        success: true,
+        validateUrl,
+        emailMarkedAt: (reservedAt ?? new Date()).toISOString(),
+        ...result,
+      });
+    } catch (err) {
+      if (!force && reservedAt) {
+        await prisma.ticket.update({
+          where: { id: t.id },
+          data: { emailSentAt: null },
+        });
+      }
+      throw err;
+    }
   } catch (error) {
     console.error("[send-confirmation] Error:", error);
     return NextResponse.json(
