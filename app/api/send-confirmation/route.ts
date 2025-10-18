@@ -87,7 +87,8 @@ type Brand = {
 
 const DEFAULT_BRAND: Brand = {
   name: "Hooka Pool Party",
-  logoUrl: "/logov2.png", // labios como logo
+  // Usar imagen alojada en el MISMO dominio del remitente
+  logoUrl: "https://hooka.com.ar/logov2.png", // labios como logo
   colors: {
     gradientFrom: "#5b0d0d",
     gradientTo: "#3f0a0a",
@@ -443,11 +444,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Brand + logo absoluto
+    // Brand + logo (si ya es https:// se respeta tal cual, si es relativo se hace absoluto)
     const brandRel = resolveBrand();
     const brandAbs: Brand = {
       ...brandRel,
-      logoUrl: absUrl(BASE, brandRel.logoUrl),
+      logoUrl: isHttpsPublicUrl(brandRel.logoUrl)
+        ? brandRel.logoUrl!
+        : absUrl(BASE, brandRel.logoUrl),
     };
 
     const title = `🫦 ${t.event?.name || brandRel.name} 🫦`;
