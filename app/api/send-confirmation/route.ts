@@ -177,15 +177,21 @@ function emailTemplate({
                 </td>
               </tr>
             </table>
-            <div style="background:${colors.card}; border-radius:20px; padding:28px; margin-top:16px; position:relative; color:${colors.textOnDark};">
+
+            <div style="background:${colors.card}; border-radius:20px; padding:28px; margin-top:16px; position:relative; color:${colors.textOnDark}; box-shadow:0 0 40px rgba(0,0,0,.5);">
               ${watermark}
               <h2 style="font-size:22px; margin:0 0 10px;">Hola ${name} 🎉</h2>
               <p style="margin:0 0 18px;">Tu compra fue procesada exitosamente. ¡Prepárate para la fiesta!</p>
               ${detailsHtml || ""}
               ${validationCode ? `<h3 style="font-size:18px; margin:18px 0 8px;">Código de validación</h3><p style="font-size:26px; font-weight:900; letter-spacing:8px;">${validationCode}</p>` : ""}
               ${qrCodeImage ? `<img src="${qrCodeImage}" alt="QR de validación" width="200" style="margin:24px auto; border-radius:8px; display:block;" />` : ""}
-              <p style="font-size:13px; margin-top:20px; color:#ccc;">Mostrá este QR al ingresar al evento.<br/>Hooka Pool Party © ${new Date().getFullYear()}</p>
+              <p style="font-size:13px; margin-top:20px; color:#ccc;">Mostrá este QR o el código al ingresar al evento.<br/>Hooka Pool Party © ${new Date().getFullYear()}</p>
             </div>
+
+            <div style="text-align:center; margin-top:20px;">
+              <p style="color:#E3CFBF; font-weight:700;">📍 La ubicación se confirmará 24hs antes del evento.</p>
+            </div>
+
           </div>
         </td>
       </tr>
@@ -235,6 +241,7 @@ export async function POST(request: NextRequest) {
         gender: true,
         quantity: true,
         vipLocation: true,
+        tableNumber: true,
         vipTables: true,
         capacityPerTable: true,
         validationCode: true,
@@ -303,7 +310,7 @@ export async function POST(request: NextRequest) {
         <div style="background:#fff; color:#111; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
           <strong>Tipo:</strong> Mesa VIP<br/>
           <strong>Sector:</strong> ${loc}<br/>
-          <strong>Mesa N°:</strong> ${t.vipTables ?? "—"}<br/>
+          <strong>Mesa N°:</strong> ${t.tableNumber ?? "—"}<br/>
           ${dateStr ? `<strong>Fecha:</strong> ${dateStr}<br/>` : ""}
           <strong>Total:</strong> $${formatARS(t.totalPrice)}<br/>
         </div>`;

@@ -20,9 +20,6 @@ import {
   MapPin,
 } from "lucide-react";
 
-// Fondo (client component)
-import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
-
 // Helpers (server)
 import { getTicketByCode, validateTicket } from "@/lib/api";
 
@@ -97,7 +94,6 @@ function toUiTicket(t: ApiTicket, code?: string): UiTicket {
     validated: t.validated,
     validatedAt: t.validatedAt ?? null,
     eventDate: t.eventDate ?? null,
-    // VIP
     vipLocation: t.vipLocation ?? null,
     tableNumber: t.tableNumber ?? null,
     vipTables: t.vipTables ?? null,
@@ -109,7 +105,6 @@ async function runValidationFlow(
   code: string
 ): Promise<{ ticket?: UiTicket; error?: string }> {
   try {
-    // 1) Obtenemos detalle por código (si falla, devolvemos el error real del backend)
     let t: ApiTicket;
     try {
       const t0 = await getTicketByCode(code);
@@ -120,24 +115,21 @@ async function runValidationFlow(
       };
     }
 
-    // 2) Si no está aprobado, devolvemos estado igualmente (la UI lo muestra)
     if (t.paymentStatus !== "approved") {
       return { ticket: toUiTicket(t, code) };
     }
 
-    // 3) Si está aprobado y NO validado, intentamos validar (ignorar "already_validated")
     if (!t.validated) {
       try {
         const res = await validateTicket(code);
         if (res?.ticket) t = res.ticket as ApiTicket;
       } catch (e: any) {
         if (e?.code !== "already_validated") {
-          // cualquier otro error: seguimos con el detalle que ya tenemos
+          // ignoramos otros errores
         }
       }
     }
 
-    // 4) Devolvemos estado final
     return { ticket: toUiTicket(t, code) };
   } catch {
     return { error: "Error al validar" };
@@ -145,7 +137,7 @@ async function runValidationFlow(
 }
 
 /* ======================
-   Vistas
+   Componentes
 ====================== */
 function EmptyState() {
   return (
@@ -162,7 +154,6 @@ function EmptyState() {
           <Label htmlFor="code" className="text-[color:var(--beige,#e3cfbf)]">
             Código de validación
           </Label>
-          {/* GET directo para no generar POST/303 adicionales */}
           <form method="GET" action="/admin/validate">
             <Input
               id="code"
@@ -205,7 +196,6 @@ function ErrorCard({ message }: { message: string }) {
         Error
       </h2>
       <p className="text-white/85">{message}</p>
-      {/* GET otra vez para reintentar */}
       <form method="GET" action="/admin/validate">
         <Input
           name="code"
@@ -343,7 +333,7 @@ function TicketCard({ t }: { t: UiTicket }) {
             </div>
           </div>
 
-          {/* Cantidad de entradas (y mesas si aplica) */}
+          {/* Cantidad */}
           <div className="flex items-start gap-3">
             <Hash className="w-5 h-5" style={{ color: BEIGE }} />
             <div className="flex-1">
@@ -352,7 +342,7 @@ function TicketCard({ t }: { t: UiTicket }) {
             </div>
           </div>
 
-          {/* VIP: Locación y Mesa */}
+          {/* VIP */}
           {isVip && (
             <>
               <div className="flex items-start gap-3">
@@ -392,7 +382,6 @@ function TicketCard({ t }: { t: UiTicket }) {
           )}
         </div>
 
-        {/* Reintentar con otro código */}
         <form method="GET" action="/admin/validate" className="w-full mt-6">
           <Input
             name="code"
@@ -416,26 +405,19 @@ function TicketCard({ t }: { t: UiTicket }) {
 }
 
 /* ======================
-   Página (SSR)
+   Página principal (SSR)
 ====================== */
 export default async function Page({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // Next 15: searchParams async
   const sp = await searchParams;
 
-  // Tomamos ?code= o ?validationCode= (cualquiera de los dos)
   const pick = (val: string | string[] | undefined) =>
     (Array.isArray(val) ? val[0] : val) ?? "";
 
-  const rawCode =
-    pick(sp?.code) || // ?code=XXXX
-    pick(sp?.validationCode) || // ?validationCode=XXXX
-    "";
-
-  // Normalizo pero NO elimino letras: solo trim
+  const rawCode = pick(sp?.code) || pick(sp?.validationCode) || "";
   const codeParam = rawCode.toString().normalize("NFKC").trim();
   const validCode = codeParam.length >= 4 ? codeParam : "";
 
@@ -446,53 +428,33 @@ export default async function Page({
 
   return (
     <div
-      className="relative min-h-screen text-white"
+      className="relative min-h-screen text-white flex flex-col items-center justify-start py-12 px-4"
       style={{ backgroundColor: BORDO }}
     >
-      {/* Fondo */}
-      <HeroBackgroundEasy
-        mobile={{ rows: 4, cols: 1 }}
-        desktop={{ rows: 4, cols: 3 }}
-        fontMobile="clamp(2.6rem, 21vw, 9rem)"
-        opacity={0.55}
-        gap="clamp(0px, 1vh, 10px)"
-        navTopPx={0}
-      />
-      {/* Overlay para contraste */}
-      <div aria-hidden className="absolute inset-0 bg-black/55" />
-
-      <div className="relative z-10 py-12 px-4">
-        <div className="container mx-auto max-w-2xl">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div
-              className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
-              style={{
-                background: `linear-gradient(135deg, ${BORDO}, ${BEIGE})`,
-              }}
-            >
-              <QrCode className="w-8 h-8 text-white" />
-            </div>
-            <h1
-              className="text-4xl font-display font-bold mb-2"
-              style={{ color: BEIGE }}
-            >
-              Validación de Entradas
-            </h1>
-            <p className="text-white/85">
-              Si llegaste desde un QR, esta página valida automáticamente con{" "}
-              <code className="text-white/90">?code=XXXXXX</code> (o{" "}
-              <code className="text-white/90">?validationCode=XXXXXX</code>). Si
-              no, ingresá el código manualmente.
-            </p>
+      <div className="container mx-auto max-w-2xl">
+        <div className="text-center mb-8">
+          <div
+            className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
+            style={{
+              background: `linear-gradient(135deg, ${BORDO}, ${BEIGE})`,
+            }}
+          >
+            <QrCode className="w-8 h-8 text-white" />
           </div>
-
-          {/* Contenido principal */}
-          {!validCode && <EmptyState />}
-
-          {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
-          {validCode && ui && ui.ticket && <TicketCard t={ui.ticket} />}
+          <h1
+            className="text-4xl font-display font-bold mb-2"
+            style={{ color: BEIGE }}
+          >
+            Validación de Entradas
+          </h1>
+          <p className="text-white/85">
+            Ingresá el código o escaneá el QR para validar tu entrada.
+          </p>
         </div>
+
+        {!validCode && <EmptyState />}
+        {validCode && ui && ui.error && <ErrorCard message={ui.error} />}
+        {validCode && ui && ui.ticket && <TicketCard t={ui.ticket} />}
       </div>
     </div>
   );
