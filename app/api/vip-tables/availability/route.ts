@@ -1,8 +1,15 @@
 // app/api/vip-tables/availability/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { PaymentStatus, TableLocation } from "@prisma/client";
-import { coerceLocation, getActiveEventId } from "@/lib/vip-tables";
+import {
+  coerceLocation,
+  getActiveEventId,
+  getVipSequentialRanges,
+} from "@/lib/vip-tables";
 
 /**
  * GET /api/vip-tables/availability?location=dj|piscina|general&eventId=...&eventCode=...
@@ -14,13 +21,28 @@ import { coerceLocation, getActiveEventId } from "@/lib/vip-tables";
  *   limit: number,                 // mesas totales del EVENTO (1..limit)
  *   startNumber: number|null,      // primer número global del sector
  *   endNumber: number|null,        // último número global del sector
- *   taken: number[],               // mesas ocupadas en numeración global (solo del sector consultado)
+ *   taken: number[],               // mesas ocupadas en numeración GLOBAL (solo del sector consultado)
  *   remainingTables: number|null,  // libres en el sector (si hay VipTableConfig)
  *   price: number|null,
  *   capacityPerTable: number|null,
  *   _debug?: { invalidTablesCount: number, examples: number[] } // opcional
  * }
  */
+
+function json(payload: any, init?: number | ResponseInit) {
+  const initObj: ResponseInit =
+    typeof init === "number" ? { status: init } : init || {};
+  const headers = new Headers(initObj.headers || {});
+  headers.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate"
+  );
+  headers.set("Pragma", "no-cache");
+  headers.set("Expires", "0");
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  return NextResponse.json(payload, { ...initObj, headers });
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -31,10 +53,7 @@ export async function GET(req: NextRequest) {
     // 1) Validación de ubicación
     const location = coerceLocation(locParam);
     if (!location) {
-      return NextResponse.json(
-        { ok: false, error: "Parámetro 'location' inválido" },
-        { status: 400 }
-      );
+      return json({ ok: false, error: "Parámetro 'location' inválido" }, 400);
     }
 
     // 2) Resolver evento
@@ -44,13 +63,10 @@ export async function GET(req: NextRequest) {
       eventCode: eventCodeParam || undefined,
     });
     if (!eventId) {
-      return NextResponse.json(
-        { ok: false, error: "No se encontró un evento activo" },
-        { status: 404 }
-      );
+      return json({ ok: false, error: "No se encontró un evento activo" }, 404);
     }
 
-    // 3) Traer TODAS las configuraciones VIP del evento
+    // 3) Traer TODAS las configuraciones VIP del evento (para price/capacity y sold/stock)
     const allCfg = await prisma.vipTableConfig.findMany({
       where: { eventId },
       select: {
@@ -62,26 +78,19 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const cfgByLoc = new Map<TableLocation, (typeof allCfg)[number]>();
-    for (const c of allCfg) cfgByLoc.set(c.location as TableLocation, c);
+    // 4) Rango SECUENCIAL GLOBAL consistente con el helper (evita desalineaciones)
+    const { total: totalLimit, ranges } = await getVipSequentialRanges({
+      prisma,
+      eventId,
+    });
+    const rangeByLoc = new Map(ranges.map((r) => [r.location, r]));
 
-    // 4) Orden fijo → numera secuencialmente por evento
-    const ORDER: TableLocation[] = [
-      TableLocation.dj,
-      TableLocation.piscina,
-      TableLocation.general,
-    ];
+    const cfg = allCfg.find((c) => c.location === location);
+    const sectorRange = rangeByLoc.get(location);
 
-    // Total de mesas del evento
-    const totalLimit =
-      allCfg.reduce((acc, c) => acc + (c.stockLimit ?? 0), 0) || 0;
-
-    // Config del sector solicitado
-    const cfg = cfgByLoc.get(location as TableLocation);
-
-    // Si no hay config para el sector, respondemos datos mínimos
-    if (!cfg) {
-      return NextResponse.json({
+    // Si no hay config para el sector → devolver datos mínimos (sin start/end)
+    if (!cfg || !sectorRange) {
+      return json({
         ok: true,
         eventId,
         location,
@@ -90,30 +99,18 @@ export async function GET(req: NextRequest) {
         endNumber: null,
         taken: [],
         remainingTables: null,
-        price: null,
-        capacityPerTable: null,
+        price: cfg?.price != null ? Number(cfg.price) : null,
+        capacityPerTable: cfg?.capacityPerTable ?? null,
       });
     }
 
-    // 5) Offset del sector (suma stockLimit de sectores anteriores)
-    const idx = ORDER.indexOf(location as TableLocation);
-    const offset = ORDER.slice(0, Math.max(0, idx)).reduce((acc, loc) => {
-      const c = cfgByLoc.get(loc);
-      return acc + (c?.stockLimit ?? 0);
-    }, 0);
-
-    // Rango global del sector
-    const startNumber = cfg.stockLimit ? offset + 1 : null;
-    const endNumber =
-      cfg.stockLimit && cfg.stockLimit > 0 ? offset + cfg.stockLimit : null;
-
-    // 6) Tickets ocupados del sector (aprobado o en proceso)
+    // 5) Tickets ocupados del sector (aprobado o en proceso) — tableNumber LOCAL
     const tickets = await prisma.ticket.findMany({
       where: {
         eventId,
         ticketType: "vip",
-        vipLocation: location as TableLocation,
-        tableNumber: { not: null }, // guardado local (1..stockLimit)
+        vipLocation: location,
+        tableNumber: { not: null },
         paymentStatus: {
           in: [PaymentStatus.approved, PaymentStatus.in_process],
         },
@@ -121,37 +118,40 @@ export async function GET(req: NextRequest) {
       select: { tableNumber: true },
     });
 
-    // 7) Filtrar fuera de rango (local) y mapear a global
+    // 6) Validar local y mapear a GLOBAL usando el offset del rango
     const stock = cfg.stockLimit ?? 0;
     const isValidLocal = (n: unknown): n is number =>
-      typeof n === "number" && Number.isFinite(n) && n >= 1 && n <= stock;
+      typeof n === "number" &&
+      Number.isFinite(n) &&
+      Number.isInteger(n) &&
+      n >= 1 &&
+      n <= stock;
 
-    const localNumbers = tickets.map((t) => t.tableNumber);
-    const validLocal = localNumbers.filter(isValidLocal);
-    const invalidLocal = localNumbers.filter(
+    const locals = tickets.map((t) => t.tableNumber);
+    const validLocal = locals.filter(isValidLocal);
+    const invalidLocal = locals.filter(
       (n) => typeof n === "number" && Number.isFinite(n) && !isValidLocal(n)
     );
 
-    const taken = validLocal.map((n) => n + offset);
+    const taken = validLocal.map((n) => sectorRange.offset + (n as number));
 
-    // 8) Libres del sector (según cfg)
+    // 7) Libres del sector (según cfg)
     const remainingTables =
       typeof cfg.stockLimit === "number" && typeof cfg.soldCount === "number"
         ? Math.max(0, cfg.stockLimit - cfg.soldCount)
         : null;
 
-    return NextResponse.json({
+    return json({
       ok: true,
       eventId,
       location,
       limit: totalLimit,
-      startNumber,
-      endNumber,
-      taken, // sólo válidos en numeración GLOBAL
+      startNumber: sectorRange.startNumber,
+      endNumber: sectorRange.endNumber,
+      taken, // numeración GLOBAL válida del sector
       remainingTables,
       price: cfg.price != null ? Number(cfg.price) : null,
       capacityPerTable: cfg.capacityPerTable ?? null,
-      // Quitar si no querés exponer debug
       _debug: invalidLocal.length
         ? {
             invalidTablesCount: invalidLocal.length,
@@ -161,9 +161,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     console.error("[vip-tables/availability] Error:", err);
-    return NextResponse.json(
-      { ok: false, error: "Error obteniendo disponibilidad" },
-      { status: 500 }
-    );
+    return json({ ok: false, error: "Error obteniendo disponibilidad" }, 500);
   }
 }

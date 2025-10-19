@@ -19,74 +19,46 @@ function gen6(): string {
 }
 
 /**
- * Asegura un validationCode de 6 dígitos si no existe.
+ * Asegura un validationCode de 6 dígitos si no existe (para Ticket).
  * Idempotente: si ya hay uno válido, lo devuelve.
  *
  * @param tx PrismaClient o Prisma.TransactionClient (usar dentro o fuera de $transaction)
- * @param opts { type, id }
- * @param maxAttempts intentos por si hay colisiones (pocas probabilidades)
+ * @param opts { id } — id del Ticket
+ * @param maxAttempts intentos por si hay colisiones (poco probables)
  */
 export async function ensureSixDigitCode(
   tx: PrismaClient | Prisma.TransactionClient,
-  opts: { type: "ticket" | "vip-table"; id: string },
+  opts: { id: string },
   maxAttempts = 12
 ): Promise<string> {
-  const { type, id } = opts;
+  const { id } = opts;
 
   // 1) ¿ya existe?
-  if (type === "ticket") {
-    const cur = await (tx as PrismaClient).ticket.findUnique({
-      where: { id },
-      select: { validationCode: true },
-    });
-    if (cur?.validationCode && SIX.test(cur.validationCode)) {
-      return cur.validationCode;
-    }
-  } else {
-    const cur = await (tx as PrismaClient).tableReservation.findUnique({
-      where: { id },
-      select: { validationCode: true },
-    });
-    if (cur?.validationCode && SIX.test(cur.validationCode)) {
-      return cur.validationCode;
-    }
+  const current = await (tx as PrismaClient).ticket.findUnique({
+    where: { id },
+    select: { validationCode: true },
+  });
+  if (current?.validationCode && SIX.test(current.validationCode)) {
+    return current.validationCode;
   }
 
   // 2) Intentar generar y setear solo si sigue vacío (evita carreras)
   for (let i = 0; i < maxAttempts; i++) {
     const code = gen6();
 
-    if (type === "ticket") {
-      const ok = await (tx as PrismaClient).ticket.updateMany({
-        where: { id, validationCode: null }, // solo si aún está vacío
-        data: { validationCode: code },
-      });
-      if (ok.count === 1) return code; // ganó la carrera
-    } else {
-      const ok = await (tx as PrismaClient).tableReservation.updateMany({
-        where: { id, validationCode: null },
-        data: { validationCode: code },
-      });
-      if (ok.count === 1) return code;
-    }
+    const ok = await (tx as PrismaClient).ticket.updateMany({
+      where: { id, validationCode: null }, // solo si aún está vacío
+      data: { validationCode: code },
+    });
+    if (ok.count === 1) return code; // ganó la carrera
 
     // si no pudimos setear (porque alguien lo llenó entre medio), re-chequear
-    if (type === "ticket") {
-      const cur = await (tx as PrismaClient).ticket.findUnique({
-        where: { id },
-        select: { validationCode: true },
-      });
-      if (cur?.validationCode && SIX.test(cur.validationCode)) {
-        return cur.validationCode;
-      }
-    } else {
-      const cur = await (tx as PrismaClient).tableReservation.findUnique({
-        where: { id },
-        select: { validationCode: true },
-      });
-      if (cur?.validationCode && SIX.test(cur.validationCode)) {
-        return cur.validationCode;
-      }
+    const cur = await (tx as PrismaClient).ticket.findUnique({
+      where: { id },
+      select: { validationCode: true },
+    });
+    if (cur?.validationCode && SIX.test(cur.validationCode)) {
+      return cur.validationCode;
     }
   }
 

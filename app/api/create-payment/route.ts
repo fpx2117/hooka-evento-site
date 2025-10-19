@@ -9,6 +9,7 @@ import {
   ensureVipTableAvailability,
   getActiveEventId,
   coerceLocation,
+  normalizeVipNumber,
 } from "@/lib/vip-tables";
 
 /* ========================= Helpers ========================= */
@@ -65,7 +66,7 @@ type CreateBody = {
       ticketType?: "vip" | "general";
       tables?: number;
       location?: "dj" | "piscina" | "general";
-      tableNumber?: number;
+      tableNumber?: number; // puede venir global o local
     };
   };
 };
@@ -181,7 +182,7 @@ export async function POST(req: NextRequest) {
         | undefined) ?? "general";
 
     /* ======================================================================
-       VIP — ahora con tableNumber y validación de mesa
+       VIP — numeración global/local coherente y validación de disponibilidad
     ====================================================================== */
     if (requestedType === "vip") {
       const tables = Math.max(
@@ -190,19 +191,27 @@ export async function POST(req: NextRequest) {
       );
       const location =
         coerceLocation(s(body.payer?.additionalInfo?.location)) || "general";
-      const tableNumber = n(body.payer?.additionalInfo?.tableNumber);
+      const tableNumberInput = n(body.payer?.additionalInfo?.tableNumber);
 
-      // Validar disponibilidad de mesa específica
+      // Normalizar número de mesa (acepta global o local) y validar disponibilidad
+      let normalized: { local: number; global: number };
       try {
+        normalized = await normalizeVipNumber({
+          prisma,
+          eventId: event.id,
+          location,
+          tableNumber: tableNumberInput, // puede venir global o local; la función resuelve
+        });
+
         await ensureVipTableAvailability({
           prisma,
           eventId: event.id,
           location,
-          tableNumber,
+          tableNumber: normalized.local, // validar en base local
         });
       } catch (err: any) {
         return NextResponse.json(
-          { error: err?.message || "Mesa no disponible" },
+          { error: err?.message || "Mesa no disponible o fuera de rango" },
           { status: 409 }
         );
       }
@@ -227,7 +236,7 @@ export async function POST(req: NextRequest) {
       const rules = await getActiveRulesFor(event.id, "vip");
       const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
-      // Crear Ticket VIP (PENDING) con número de mesa
+      // Crear Ticket VIP (PENDING) con número LOCAL ya normalizado
       const createdVip = await prisma.ticket.create({
         data: {
           eventId: event.id,
@@ -238,7 +247,7 @@ export async function POST(req: NextRequest) {
           vipLocation: location,
           vipTables: tables,
           capacityPerTable: cap,
-          tableNumber,
+          tableNumber: normalized.local, // siempre LOCAL en DB
           totalPrice: total,
           customerName: payerName,
           customerEmail: payerEmail,
@@ -253,7 +262,7 @@ export async function POST(req: NextRequest) {
       const mpItems = [
         {
           id: createdVip.id,
-          title: `Mesa VIP ${tableNumber} - ${prettyLocation(location)} x${tables}`,
+          title: `Mesa VIP ${normalized.global} - ${prettyLocation(location)} x${tables}`,
           description: `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
           quantity: 1,
           unit_price: Number(createdVip.totalPrice) || 0,
@@ -291,7 +300,7 @@ export async function POST(req: NextRequest) {
           eventId: event.id,
           eventCode: event.code,
           vipLocation: location,
-          tableNumber,
+          tableNumber: normalized.local, // guardamos local en metadata también
           vipTables: tables,
           capacityPerTable: cap,
           pricePerTable: unitPriceFromDB,
@@ -445,7 +454,9 @@ export async function POST(req: NextRequest) {
       createdPref.sandbox_init_point ||
       createdPref.init_point ||
       (createdPref.id
-        ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(String(createdPref.id))}`
+        ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
+            String(createdPref.id)
+          )}`
         : undefined);
 
     return NextResponse.json({

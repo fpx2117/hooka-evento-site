@@ -58,7 +58,7 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
   const sig = parseXSignature(req.headers.get("x-signature"));
   const requestId = req.headers.get("x-request-id") || "";
   const secret = process.env.MP_WEBHOOK_SECRET || "";
-  if (!secret) return true; // en dev no bloqueamos
+  if (!secret) return true;
   if (!sig || !requestId || !body?.data?.id) return false;
 
   const ts = sig.ts;
@@ -87,7 +87,6 @@ function extractRecordRef(payment: any): {
   let metaType: any = md.type;
   let recordId: string | undefined = md.recordId || md.record_id;
 
-  // compat: legacy
   if (!recordId) recordId = md.tableReservationId;
   if (
     (!metaType || !recordId) &&
@@ -132,7 +131,6 @@ function isApprovedStrong(opts: {
 
   if (strong) return true;
 
-  // Relajar en SANDBOX
   if (!liveMode) {
     return (
       status === "approved" &&
@@ -159,7 +157,6 @@ async function fetchPaymentWithRetry(paymentId: string) {
   for (let i = 0; i < attempts; i++) {
     try {
       const p = await sdkGetPayment(paymentId);
-      // Log breve para debug
       console.log("[webhook] payment:", {
         id: p?.id,
         status: p?.status,
@@ -214,14 +211,6 @@ async function getPrevPaymentInfo(recordId: string) {
   });
 }
 
-/**
- * Ajusta soldCount en VipTableConfig por transición de estado de un Ticket VIP:
- * +vipTables al pasar a approved por primera vez
- * -vipTables al pasar de approved -> refunded/cancelled/charged_back
- * (con clamp 0..stockLimit)
- * Además, si hay tableNumber, verifica que no esté ocupada por OTRO ticket aprobado.
- * (No guarda nada extra; usa Ticket como fuente de verdad)
- */
 async function adjustVipSoldCountByTransition(
   tx: Tx,
   ticketId: string,
@@ -263,7 +252,6 @@ async function adjustVipSoldCountByTransition(
     });
   }
 
-  // Validación de mesa única (si corresponde)
   if (t.tableNumber && toApproved) {
     const already = await tx.ticket.findFirst({
       where: {
@@ -280,16 +268,11 @@ async function adjustVipSoldCountByTransition(
       console.warn(
         `[VIP] Mesa #${t.tableNumber} (${t.vipLocation}) ya ocupada por ticket ${already.id}.`
       );
-      // Si querés impedir el solapamiento, podrías lanzar error aquí.
-      // throw new Error("La mesa seleccionada ya fue asignada.");
     }
   }
 }
 
-/**
- * Actualiza el estado del ticket y ajusta stock/mesas.
- * Genera el validationCode si el pago queda aprobado (fuerte).
- */
+/* ========================= Persistencia de estados ========================= */
 async function persistStatus(
   recordId: string,
   payment: any,
@@ -317,7 +300,7 @@ async function persistStatus(
     });
 
     if (isApprovedNow) {
-      await ensureSixDigitCode(tx, { type: "ticket", id: recordId });
+      await ensureSixDigitCode(tx, { id: recordId });
     }
 
     const t = await tx.ticket.findUnique({
@@ -366,7 +349,6 @@ async function processPaymentById(paymentId: string) {
     expectedRef: `ticket:${recordId}`,
   });
 
-  // Idempotencia básica
   const prevInfo = await getPrevPaymentInfo(recordId);
   const prevStatus = (prevInfo?.paymentStatus as string) ?? null;
   const prevPaymentId = prevInfo?.paymentId || null;
@@ -401,8 +383,6 @@ async function processPaymentById(paymentId: string) {
 }
 
 /* ========================= Handlers ========================= */
-
-// GET: soporte IPN legacy (topic=id en query) y healthcheck
 export async function GET(req: NextRequest) {
   try {
     const topic = req.nextUrl.searchParams.get("topic");
@@ -437,13 +417,11 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: webhook “nuevo” (payment.created, payment.updated, merchant_order, etc.)
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     console.log("[webhook] MP recibido:", body);
 
-    // Firma opcional
     const trusted = await isValidFromMercadoPago(req, body);
     if (!trusted) {
       console.warn(
@@ -452,16 +430,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false }, { status: 401 });
     }
 
-    // Formato nuevo (data.id de payment)
     if (body?.type === "payment" && body?.data?.id) {
       try {
         const out = await processPaymentById(String(body.data.id));
         return NextResponse.json(out);
       } catch (e: any) {
         if (String(e?.message) === "payment_not_found_after_retries") {
-          console.warn(
-            "[webhook] payment 404 persistente; devuelvo 202, retry luego."
-          );
+          console.warn("[webhook] payment 404 persistente; retry luego.");
           return NextResponse.json(
             { ok: false, retry_later: true },
             { status: 202 }
@@ -471,7 +446,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Formato merchant_order (a veces llega primero)
     if (
       (body?.topic === "merchant_order" || body?.type === "merchant_order") &&
       body?.resource
@@ -482,9 +456,7 @@ export async function POST(req: NextRequest) {
         const order = await fetchMerchantOrder(orderId);
         const payments: Array<{ id: number }> = order?.payments || [];
         if (!payments.length) {
-          console.warn(
-            "[webhook] merchant_order sin pagos aún; MP volverá a notificar."
-          );
+          console.warn("[webhook] merchant_order sin pagos; retry.");
           return NextResponse.json({ ok: true, payments: 0 });
         }
         for (const p of payments) {
@@ -494,23 +466,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // IPN legacy (algunos envían query en POST)
     const urlParams = req.nextUrl.searchParams;
     const topic = urlParams.get("topic");
     const id = urlParams.get("data.id") || urlParams.get("id");
     if (topic === "payment" && id) {
-      try {
-        const out = await processPaymentById(String(id));
-        return NextResponse.json(out);
-      } catch (e: any) {
-        if (String(e?.message) === "payment_not_found_after_retries") {
-          return NextResponse.json(
-            { ok: false, retry_later: true },
-            { status: 202 }
-          );
-        }
-        throw e;
-      }
+      const out = await processPaymentById(String(id));
+      return NextResponse.json(out);
     }
     if (topic === "merchant_order" && id) {
       const order = await fetchMerchantOrder(String(id));

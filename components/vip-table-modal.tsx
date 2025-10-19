@@ -55,10 +55,14 @@ type TicketsConfig = {
   };
 };
 
-type AvailabilityRes = {
-  /** Tomadas en numeración GLOBAL del sector seleccionado */
-  taken?: number[];
-};
+/** El endpoint puede devolver ocupadas en global o local */
+type AvailabilityRes =
+  | {
+      taken?: number[]; // compat (global si hay numeración global)
+      takenGlobal?: number[];
+      takenLocal?: number[];
+    }
+  | any;
 
 /* =========================
    Props
@@ -109,8 +113,11 @@ export function VIPTableModal({
     null
   );
 
-  // ======= Disponibilidad por mesa (GLOBAL) =======
-  const [takenSet, setTakenSet] = useState<Set<number>>(new Set());
+  // ======= Disponibilidad por mesa SEGÚN LO QUE MOSTRAMOS =======
+  // (si mostramos global -> guardamos ocupadas en global; si local -> en local)
+  const [takenDisplaySet, setTakenDisplaySet] = useState<Set<number>>(
+    new Set()
+  );
   const [tablesLoading, setTablesLoading] = useState(false);
 
   // ======= Form =======
@@ -121,7 +128,10 @@ export function VIPTableModal({
     phone: "",
     gender: "" as "" | "hombre" | "mujer",
   });
-  const [tableNumber, setTableNumber] = useState<number | null>(null);
+  // `tableNumberDisplay` contiene el número tal como lo ve el usuario (global o local según corresponda)
+  const [tableNumberDisplay, setTableNumberDisplay] = useState<number | null>(
+    null
+  );
 
   const [cfgLoading, setCfgLoading] = useState(false);
   const [cfgError, setCfgError] = useState<string | null>(null);
@@ -186,8 +196,8 @@ export function VIPTableModal({
     if (open) {
       loadConfig();
       setCustomer({ name: "", dni: "", email: "", phone: "", gender: "" });
-      setTableNumber(null);
-      setTakenSet(new Set());
+      setTableNumberDisplay(null);
+      setTakenDisplaySet(new Set());
       setErrors({});
     }
     return () => {
@@ -215,24 +225,25 @@ export function VIPTableModal({
     [currentLocCfg, unitSizeGlobal]
   );
 
-  // Numeración GLOBAL por sector
+  // Numeración GLOBAL por sector disponible?
   const startGlobal = currentLocCfg?.startNumber ?? null;
   const endGlobal = currentLocCfg?.endNumber ?? null;
+  const isGlobalNumbering = !!(
+    Number.isFinite(startGlobal) &&
+    Number.isFinite(endGlobal) &&
+    startGlobal &&
+    endGlobal
+  );
 
-  // Fallback: si no viene start/end, usamos local 1..limit (igual funcionará porque el backend acepta global o local)
+  // Fallback: si no hay global, usamos local 1..limit
   const limitLocal = currentLocCfg?.limit ?? null;
   const displayNumbers: number[] = useMemo(() => {
-    if (
-      Number.isFinite(startGlobal) &&
-      Number.isFinite(endGlobal) &&
-      startGlobal &&
-      endGlobal
-    ) {
-      return range(startGlobal, endGlobal);
+    if (isGlobalNumbering) {
+      return range(startGlobal as number, endGlobal as number);
     }
-    if (limitLocal && limitLocal > 0) return range(1, limitLocal); // fallback local
+    if (limitLocal && limitLocal > 0) return range(1, limitLocal);
     return [];
-  }, [startGlobal, endGlobal, limitLocal]);
+  }, [isGlobalNumbering, startGlobal, endGlobal, limitLocal]);
 
   const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
 
@@ -241,13 +252,13 @@ export function VIPTableModal({
       ? remainingTables <= 0
       : false;
 
-  // ======= Traer disponibilidad (tomadas en GLOBAL) al cambiar ubicación =======
+  // ======= Traer disponibilidad y ajustarla a lo que mostramos (global o local) =======
   useEffect(() => {
     let cancelled = false;
     async function loadAvailability() {
       setTablesLoading(true);
-      setTakenSet(new Set());
-      setTableNumber(null);
+      setTakenDisplaySet(new Set());
+      setTableNumberDisplay(null);
 
       if (!selectedLocation) {
         setTablesLoading(false);
@@ -255,15 +266,58 @@ export function VIPTableModal({
       }
 
       try {
-        const url = `${availabilityEndpoint}?location=${encodeURIComponent(selectedLocation)}`;
+        const url = `${availabilityEndpoint}?location=${encodeURIComponent(
+          selectedLocation
+        )}`;
         const r = await fetch(url, { cache: "no-store" });
         if (r.ok) {
           const data: AvailabilityRes = await r.json();
           if (!cancelled) {
-            const tk = (data?.taken || [])
-              .map((n) => Number(n))
-              .filter(Number.isFinite);
-            setTakenSet(new Set(tk)); // GLOBAL
+            const takenGlobal: number[] =
+              (data?.takenGlobal as number[]) ??
+              (data?.taken as number[]) ??
+              [];
+            const takenLocal: number[] = data?.takenLocal ?? [];
+
+            let displayTaken: number[] = [];
+            if (isGlobalNumbering) {
+              // Preferimos global; si sólo vienen locales, los convertimos sumando offset
+              if (Array.isArray(takenGlobal) && takenGlobal.length) {
+                displayTaken = takenGlobal
+                  .map(Number)
+                  .filter((n) => Number.isFinite(n));
+              } else if (
+                Array.isArray(takenLocal) &&
+                takenLocal.length &&
+                Number.isFinite(startGlobal)
+              ) {
+                const base = (startGlobal as number) - 1;
+                displayTaken = takenLocal
+                  .map((n) => base + Number(n))
+                  .filter((n) => Number.isFinite(n));
+              }
+            } else {
+              // Mostramos números locales; preferimos takenLocal; si sólo hay global y no hay startGlobal no podemos convertir → mejor no bloquear por dudas
+              if (Array.isArray(takenLocal) && takenLocal.length) {
+                displayTaken = takenLocal
+                  .map(Number)
+                  .filter((n) => Number.isFinite(n));
+              } else if (
+                Array.isArray(takenGlobal) &&
+                takenGlobal.length &&
+                Number.isFinite(startGlobal)
+              ) {
+                // Si por alguna razón tenemos startGlobal sin usar global en UI
+                const base = (startGlobal as number) - 1;
+                displayTaken = takenGlobal
+                  .map((g) => Number(g) - base)
+                  .filter((n) => Number.isFinite(n) && n >= 1);
+              } else {
+                displayTaken = [];
+              }
+            }
+
+            setTakenDisplaySet(new Set(displayTaken));
           }
         }
       } catch {
@@ -277,7 +331,35 @@ export function VIPTableModal({
     return () => {
       cancelled = true;
     };
-  }, [open, selectedLocation, availabilityEndpoint]);
+    // Dependemos de selectedLocation y de si mostramos global/local
+  }, [
+    open,
+    selectedLocation,
+    availabilityEndpoint,
+    isGlobalNumbering,
+    startGlobal,
+  ]);
+
+  // ======= Helper: obtener número local y global a partir del número "display" =======
+  const resolvedNumbers = useMemo(() => {
+    if (!tableNumberDisplay)
+      return { local: null as number | null, global: null as number | null };
+    if (isGlobalNumbering) {
+      const global = tableNumberDisplay;
+      const local =
+        Number.isFinite(startGlobal) && startGlobal
+          ? tableNumberDisplay - (startGlobal as number) + 1
+          : null;
+      return { local, global };
+    }
+    // Mostramos local
+    const local = tableNumberDisplay;
+    const global =
+      Number.isFinite(startGlobal) && startGlobal
+        ? (startGlobal as number) + tableNumberDisplay - 1
+        : null;
+    return { local, global };
+  }, [tableNumberDisplay, isGlobalNumbering, startGlobal]);
 
   // ======= Validaciones =======
   function validate() {
@@ -304,22 +386,17 @@ export function VIPTableModal({
 
     if (!customer.gender) e.gender = "Elegí tu género";
 
-    // ✅ Mesa específica requerida (numeración GLOBAL si vino start/end)
-    if (!tableNumber) e.table = "Elegí el número de mesa";
-    if (tableNumber && takenSet.has(tableNumber)) {
+    if (!tableNumberDisplay) e.table = "Elegí el número de mesa";
+    if (tableNumberDisplay && takenDisplaySet.has(tableNumberDisplay)) {
       e.table = "Esa mesa ya está ocupada. Elegí otra.";
     }
 
-    // Validación de rango segun GLOBAL (o local si no hay global)
-    if (tableNumber) {
+    // Validación de rango según lo mostrado
+    if (tableNumberDisplay) {
       if (displayNumbers.length > 0) {
         const min = displayNumbers[0];
         const max = displayNumbers[displayNumbers.length - 1];
-        if (tableNumber < min || tableNumber > max) {
-          e.table = "Número de mesa inválido para esta ubicación.";
-        }
-      } else if (limitLocal) {
-        if (tableNumber < 1 || tableNumber > limitLocal) {
+        if (tableNumberDisplay < min || tableNumberDisplay > max) {
           e.table = "Número de mesa inválido para esta ubicación.";
         }
       }
@@ -348,10 +425,12 @@ export function VIPTableModal({
           ? unitSize
           : undefined;
 
+      const { local, global } = resolvedNumbers;
+
       const body = {
         items: [
           {
-            title: `Mesa VIP (${locLabel}) — Mesa ${tableNumber}`,
+            title: `Mesa VIP (${locLabel}) — Mesa ${tableNumberDisplay}`,
             description: capacity
               ? `1 mesa = ${capacity} personas`
               : "Reserva de Mesa VIP",
@@ -369,7 +448,9 @@ export function VIPTableModal({
             tables: 1,
             unitSize: capacity,
             location: selectedLocation ?? undefined,
-            tableNumber: tableNumber ?? undefined, // 👈 ENVIAMOS GLOBAL (backend lo acepta y normaliza)
+            // Enviamos ambas variantes para máxima compatibilidad
+            tableNumber: local ?? undefined, // local (1..limit del sector)
+            tableNumberGlobal: global ?? undefined, // global (1..total del evento)
             gender: customer.gender || undefined,
           },
         },
@@ -377,7 +458,8 @@ export function VIPTableModal({
         meta: {
           ticketType: "vip",
           location: selectedLocation ?? undefined,
-          tableNumber: tableNumber ?? undefined, // 👈 GLOBAL
+          tableNumber: local ?? undefined,
+          tableNumberGlobal: global ?? undefined,
           gender: customer.gender || undefined,
         },
       };
@@ -422,7 +504,7 @@ export function VIPTableModal({
   const hasPiscina = !!vipTablesCfg?.find((t) => t.location === "piscina");
 
   const isNumberDisabled = (n: number) => {
-    if (takenSet.has(n)) return true; // GLOBAL
+    if (takenDisplaySet.has(n)) return true;
     if (soldOut) return true;
     return false;
   };
@@ -595,17 +677,14 @@ export function VIPTableModal({
             )}
 
             {/* Hint del rango GLOBAL visible */}
-            {Number.isFinite(startGlobal) &&
-              Number.isFinite(endGlobal) &&
-              startGlobal &&
-              endGlobal && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Numeración de mesas en este sector:{" "}
-                  <b>
-                    {startGlobal}–{endGlobal}
-                  </b>
-                </p>
-              )}
+            {isGlobalNumbering && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Numeración de mesas en este sector:{" "}
+                <b>
+                  {startGlobal}–{endGlobal}
+                </b>
+              </p>
+            )}
           </div>
 
           {/* Selector de número de mesa + Abrir mapa */}
@@ -639,13 +718,13 @@ export function VIPTableModal({
 
               <div className="grid grid-cols-5 sm:grid-cols-8 gap-2">
                 {displayNumbers.map((n) => {
-                  const active = tableNumber === n;
+                  const active = tableNumberDisplay === n;
                   const disabled = isNumberDisabled(n);
                   return (
                     <button
                       key={n}
                       type="button"
-                      onClick={() => !disabled && setTableNumber(n)}
+                      onClick={() => !disabled && setTableNumberDisplay(n)}
                       disabled={disabled}
                       className={[
                         "h-10 rounded-md border text-sm font-semibold transition",
@@ -867,9 +946,9 @@ export function VIPTableModal({
                   ${formatMoney(total)}
                 </span>
               </div>
-              {tableNumber && (
+              {tableNumberDisplay && (
                 <p className="text-sm text-muted-foreground">
-                  Mesa seleccionada: <b>#{tableNumber}</b>
+                  Mesa seleccionada: <b>#{tableNumberDisplay}</b>
                 </p>
               )}
             </div>
@@ -886,7 +965,7 @@ export function VIPTableModal({
                 soldOut ||
                 !selectedLocation ||
                 !customer.gender ||
-                !tableNumber
+                !tableNumberDisplay
               }
               aria-disabled={soldOut || undefined}
               className="

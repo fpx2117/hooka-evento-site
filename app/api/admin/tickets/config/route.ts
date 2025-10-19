@@ -29,12 +29,6 @@ function toNumber(v: any, def?: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : (def as number);
 }
-function toIntNonNegative(v: any, def = 0) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  const i = Math.trunc(n);
-  return i < 0 ? 0 : i;
-}
 function clampNonNegative(n: number | undefined) {
   if (n === undefined || !Number.isFinite(n)) return 0;
   return Math.max(0, n);
@@ -62,8 +56,8 @@ async function getOrCreateActiveEvent() {
     const name = (process.env.EVENT_NAME || "Evento").trim();
     const code = (process.env.EVENT_CODE || "DEFAULT").trim();
     const dateStr = (process.env.EVENT_DATE || "2025-11-02").trim();
-    // Guardamos con hora UTC para evitar problemas de TZ
-    const date = new Date(`${dateStr}T00:00:00.000Z`);
+    // UTC para evitar TZ issues
+    const date = new Date(`${dateStr}T00:00:00Z`);
 
     const created = await prisma.event.create({
       data: { code, name, date, isActive: true },
@@ -87,7 +81,7 @@ async function getOrCreateActiveEvent() {
           price: 0,
           stockLimit: 0,
         },
-        // TOTAL (personas) — no “vip global”
+        // SOLO TOTAL (personas) — NO “vip global”
         { eventId: created.id, ticketType: "total", price: 0, stockLimit: 0 },
       ],
       skipDuplicates: true,
@@ -117,7 +111,7 @@ export async function GET(_req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
 
-    // Vendidos aprobados del evento (GENERAL por género) — usar SUM(quantity)
+    // Vendidos aprobados del evento (GENERAL por género) — SUM(quantity)
     const [soldGenHAggr, soldGenMAggr] = await Promise.all([
       prisma.ticket.aggregate({
         where: {
@@ -152,26 +146,21 @@ export async function GET(_req: NextRequest) {
       cfgTotal ? Number(cfgTotal.stockLimit) : 0
     );
 
-    // VIP por ubicación (VipTableConfig)
-    // Ordenamos por orden fijo, para consistencia front/back
-    const vipTablesRaw = (event.vipConfigs || []).slice().sort((a, b) => {
-      const ai = VIP_SECTOR_ORDER.indexOf(a.location);
-      const bi = VIP_SECTOR_ORDER.indexOf(b.location);
-      return ai - bi;
-    });
-
+    // VIP por ubicación (VipTableConfig) → base
+    const vipTablesRaw = (event.vipConfigs || []).slice();
+    // Snapshot base por loc
     const vipTablesBase = vipTablesRaw.map((c: any) => {
-      const limitTables = toIntNonNegative(c.stockLimit, 0);
-      const soldTables = toIntNonNegative(c.soldCount, 0);
+      const limitTables = clampNonNegative(c.stockLimit);
+      const soldTables = clampNonNegative(c.soldCount);
       const remainingTables = Math.max(0, limitTables - soldTables);
       const capacityPerTable =
-        toIntNonNegative(c.capacityPerTable, VIP_UNIT_SIZE) || VIP_UNIT_SIZE;
+        clampNonNegative(c.capacityPerTable) || VIP_UNIT_SIZE;
       return {
         location: c.location as "piscina" | "dj" | "general",
         price: Number(c.price) || 0,
-        limit: limitTables, // MESAS (sector)
-        sold: soldTables, // MESAS
-        remaining: remainingTables, // MESAS
+        limit: limitTables,
+        sold: soldTables,
+        remaining: remainingTables,
         capacityPerTable,
       };
     });
@@ -183,7 +172,7 @@ export async function GET(_req: NextRequest) {
     });
     const rangeByLoc = new Map(ranges.map((r) => [r.location, r]));
 
-    // Enriquecemos con startNumber/endNumber globales por sector
+    // Enriquecer con startNumber/endNumber y ordenar por VIP_SECTOR_ORDER
     const vipTables = VIP_SECTOR_ORDER.map((loc) => {
       const base = vipTablesBase.find((t) => t.location === loc);
       const r = rangeByLoc.get(loc);
@@ -199,7 +188,7 @@ export async function GET(_req: NextRequest) {
       };
     });
 
-    // Agregados VIP (personas) — no “vip global” en DB, solo métricas
+    // Agregados VIP a modo de totales (personas)
     const vipTotalPersonsLimit = vipTables.reduce(
       (acc, t) => acc + (t.limit || 0) * (t.capacityPerTable || VIP_UNIT_SIZE),
       0
@@ -329,8 +318,12 @@ export async function PATCH(req: NextRequest) {
 
     // ---- TOTAL (PERSONAS) ----
     if (hasTotalLimit) {
-      const totalEntriesLimit = toIntNonNegative(totalLimitRaw, 0);
-      // upsert manual para evitar pasar gender: null en unique compuesta
+      const totalEntriesLimit = toNumber(totalLimitRaw);
+      if (!Number.isFinite(totalEntriesLimit) || totalEntriesLimit < 0) {
+        return json({ message: "totalEntriesLimit inválido" }, 400);
+      }
+
+      // upsert manual para evitar pasar gender: null
       const existingTotal = await prisma.ticketConfig.findFirst({
         where: { eventId: event.id, ticketType: "total", gender: null },
         select: { id: true },
@@ -361,18 +354,14 @@ export async function PATCH(req: NextRequest) {
       if (!locEnum) continue;
 
       const price = clampNonNegative(toNumber(row?.price, 0));
-      // Aceptamos alias tanto "stockLimit" como "limit"
-      const stockLimitInput = hasValue(row?.stockLimit)
-        ? row.stockLimit
-        : row?.limit;
-      const stockLimit = toIntNonNegative(stockLimitInput, 0);
-
+      // aceptar alias stockLimit/limit si en un futuro lo agregás desde UI
+      const stockLimit = clampNonNegative(toNumber(row?.stockLimit, 0));
       const capacityPerTable = Math.max(
         1,
-        toIntNonNegative(row?.capacityPerTable, VIP_UNIT_SIZE)
+        clampNonNegative(toNumber(row?.capacityPerTable, VIP_UNIT_SIZE))
       );
 
-      // upsert POR ÍNDICE COMPUESTO del schema: @@unique([eventId, location])
+      // upsert POR ÍNDICE COMPUESTO: @@unique([eventId, location])
       const existing = await prisma.vipTableConfig.findUnique({
         where: { eventId_location: { eventId: event.id, location: locEnum } },
         select: { id: true, soldCount: true },

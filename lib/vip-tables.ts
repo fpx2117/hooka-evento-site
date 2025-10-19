@@ -116,9 +116,7 @@ function isValidLocalTable(n: unknown, max: number): n is number {
   );
 }
 
-/**
- * Estructura de rango secuencial global por sector.
- */
+/** Estructura de rango secuencial global por sector. */
 export type VipSectorRange = {
   location: TableLocation;
   offset: number; // mesas acumuladas antes de este sector
@@ -204,26 +202,81 @@ export function vipGlobalToLocal(
   };
 }
 
+/** Normaliza un número entrante (puede venir como local o global) y devuelve ambos. */
+export async function normalizeVipNumber({
+  prisma,
+  eventId,
+  location,
+  tableNumber, // local (1..limit)
+  tableNumberGlobal, // global (1..total)
+}: {
+  prisma: PrismaClient;
+  eventId: string;
+  location: TableLocation;
+  tableNumber?: number | null;
+  tableNumberGlobal?: number | null;
+}): Promise<{ local: number; global: number }> {
+  const { ranges } = await getVipSequentialRanges({ prisma, eventId });
+
+  // Si viene global válido → convertir a local
+  if (
+    typeof tableNumberGlobal === "number" &&
+    Number.isInteger(tableNumberGlobal) &&
+    tableNumberGlobal > 0
+  ) {
+    const resolved = vipGlobalToLocal(tableNumberGlobal, ranges);
+    if (!resolved || resolved.location !== location) {
+      throw new Error("Número de mesa (global) no corresponde a ese sector.");
+    }
+    return { local: resolved.localNumber, global: tableNumberGlobal };
+  }
+
+  // Si viene local → convertir a global
+  if (
+    typeof tableNumber === "number" &&
+    Number.isInteger(tableNumber) &&
+    tableNumber > 0
+  ) {
+    const g = vipLocalToGlobal(tableNumber, ranges, location);
+    if (!g) throw new Error("Número de mesa fuera de rango para ese sector.");
+    return { local: tableNumber, global: g };
+  }
+
+  throw new Error("Debes especificar un número de mesa válido.");
+}
+
 /**
  * Valida (servidor) que una mesa exista en la ubicación, esté en rango 1..limit,
  * y no esté ocupada por tickets en estado approved o in_process.
  * Lanza Error con mensaje entendible si no está disponible.
  *
  * ➕ Soporta `ticketIdToIgnore` para updates (evita colisión consigo mismo).
+ * ➕ Acepta `tableNumber` (local) o `tableNumberGlobal` (global).
  */
 export async function ensureVipTableAvailability({
   prisma,
   eventId,
   location,
   tableNumber,
+  tableNumberGlobal,
   ticketIdToIgnore = null,
 }: {
   prisma: PrismaClient;
   eventId: string;
   location: TableLocation;
-  tableNumber: number;
+  tableNumber?: number; // local 1..limit
+  tableNumberGlobal?: number; // global 1..total
   ticketIdToIgnore?: string | null;
 }) {
+  // Normalizar a (local, global)
+  const normalized = await normalizeVipNumber({
+    prisma,
+    eventId,
+    location,
+    tableNumber,
+    tableNumberGlobal,
+  });
+
   // 1) existe config de esa ubicación
   const cfg = await prisma.vipTableConfig.findUnique({
     where: { eventId_location: { eventId, location } },
@@ -239,7 +292,7 @@ export async function ensureVipTableAvailability({
   }
 
   // 2) número válido local (entero, dentro de rango)
-  if (!isValidLocalTable(tableNumber, stock)) {
+  if (!isValidLocalTable(normalized.local, stock)) {
     throw new Error(`tableNumber fuera de rango (1..${stock}).`);
   }
 
@@ -249,7 +302,7 @@ export async function ensureVipTableAvailability({
       eventId,
       ticketType: "vip",
       vipLocation: location,
-      tableNumber,
+      tableNumber: normalized.local,
       paymentStatus: { in: [PaymentStatus.approved, PaymentStatus.in_process] },
       ...(ticketIdToIgnore ? { NOT: { id: ticketIdToIgnore } } : {}),
     },
@@ -259,4 +312,64 @@ export async function ensureVipTableAvailability({
   if (exists) {
     throw new Error("Esa mesa ya está ocupada/reservada.");
   }
+}
+
+/**
+ * Devuelve las mesas tomadas de un sector como:
+ *  - localNumbers: números locales (1..limit)
+ *  - globalNumbers: números globales (1..total)
+ */
+export async function getTakenVipTables({
+  prisma,
+  eventId,
+  location,
+}: {
+  prisma: PrismaClient;
+  eventId: string;
+  location: TableLocation;
+}): Promise<{ localNumbers: number[]; globalNumbers: number[] }> {
+  const cfg = await prisma.vipTableConfig.findUnique({
+    where: { eventId_location: { eventId, location } },
+    select: { stockLimit: true },
+  });
+  const stock = Number.isFinite(cfg?.stockLimit ?? NaN)
+    ? (cfg!.stockLimit as number)
+    : 0;
+
+  if (!cfg || stock <= 0) {
+    return { localNumbers: [], globalNumbers: [] };
+  }
+
+  // Leemos tickets que bloquean mesas (approved/in_process)
+  const rows = await prisma.ticket.findMany({
+    where: {
+      eventId,
+      ticketType: "vip",
+      vipLocation: location,
+      paymentStatus: { in: [PaymentStatus.approved, PaymentStatus.in_process] },
+      tableNumber: { not: null },
+    },
+    select: { tableNumber: true },
+  });
+
+  const localSet = new Set<number>();
+  for (const r of rows) {
+    const n = Number(r.tableNumber);
+    if (isValidLocalTable(n, stock)) localSet.add(n);
+  }
+
+  const { ranges } = await getVipSequentialRanges({ prisma, eventId });
+  const global: number[] = [];
+  const range = ranges.find((r) => r.location === location);
+  if (range) {
+    for (const ln of localSet) {
+      const gn = vipLocalToGlobal(ln, ranges, location);
+      if (gn) global.push(gn);
+    }
+  }
+
+  return {
+    localNumbers: Array.from(localSet).sort((a, b) => a - b),
+    globalNumbers: global.sort((a, b) => a - b),
+  };
 }
