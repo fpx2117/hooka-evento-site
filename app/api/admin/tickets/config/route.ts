@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { TableLocation as TL } from "@prisma/client";
+import { getVipSequentialRanges, VIP_SECTOR_ORDER } from "@/lib/vip-tables";
 
 // 1 mesa VIP = N personas (default 10) — clamp mínimo 1
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
@@ -28,12 +29,16 @@ function toNumber(v: any, def?: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : (def as number);
 }
-
+function toIntNonNegative(v: any, def = 0) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  const i = Math.trunc(n);
+  return i < 0 ? 0 : i;
+}
 function clampNonNegative(n: number | undefined) {
   if (n === undefined || !Number.isFinite(n)) return 0;
   return Math.max(0, n);
 }
-
 const hasValue = (v: unknown) => v !== undefined && v !== null;
 
 function parseLocation(v: unknown): TL | null {
@@ -57,7 +62,8 @@ async function getOrCreateActiveEvent() {
     const name = (process.env.EVENT_NAME || "Evento").trim();
     const code = (process.env.EVENT_CODE || "DEFAULT").trim();
     const dateStr = (process.env.EVENT_DATE || "2025-11-02").trim();
-    const date = new Date(`${dateStr}T00:00:00Z`);
+    // Guardamos con hora UTC para evitar problemas de TZ
+    const date = new Date(`${dateStr}T00:00:00.000Z`);
 
     const created = await prisma.event.create({
       data: { code, name, date, isActive: true },
@@ -81,7 +87,7 @@ async function getOrCreateActiveEvent() {
           price: 0,
           stockLimit: 0,
         },
-        // SOLO TOTAL (personas) — NO hay vip global
+        // TOTAL (personas) — no “vip global”
         { eventId: created.id, ticketType: "total", price: 0, stockLimit: 0 },
       ],
       skipDuplicates: true,
@@ -147,31 +153,59 @@ export async function GET(_req: NextRequest) {
     );
 
     // VIP por ubicación (VipTableConfig)
-    const vipTablesRaw = event.vipConfigs || [];
+    // Ordenamos por orden fijo, para consistencia front/back
+    const vipTablesRaw = (event.vipConfigs || []).slice().sort((a, b) => {
+      const ai = VIP_SECTOR_ORDER.indexOf(a.location);
+      const bi = VIP_SECTOR_ORDER.indexOf(b.location);
+      return ai - bi;
+    });
 
-    const vipTables = vipTablesRaw.map((c: any) => {
-      const limitTables = clampNonNegative(c.stockLimit);
-      const soldTables = clampNonNegative(c.soldCount);
+    const vipTablesBase = vipTablesRaw.map((c: any) => {
+      const limitTables = toIntNonNegative(c.stockLimit, 0);
+      const soldTables = toIntNonNegative(c.soldCount, 0);
       const remainingTables = Math.max(0, limitTables - soldTables);
       const capacityPerTable =
-        clampNonNegative(c.capacityPerTable) || VIP_UNIT_SIZE;
+        toIntNonNegative(c.capacityPerTable, VIP_UNIT_SIZE) || VIP_UNIT_SIZE;
       return {
         location: c.location as "piscina" | "dj" | "general",
         price: Number(c.price) || 0,
-        limit: limitTables, // MESAS
+        limit: limitTables, // MESAS (sector)
         sold: soldTables, // MESAS
         remaining: remainingTables, // MESAS
         capacityPerTable,
       };
     });
 
-    // Agregados VIP a modo de totales (no reintroducen "vip global")
+    // RANGOS SECUENCIALES GLOBALES por sector + total de mesas del evento
+    const { total: totalTables, ranges } = await getVipSequentialRanges({
+      prisma,
+      eventId: event.id,
+    });
+    const rangeByLoc = new Map(ranges.map((r) => [r.location, r]));
+
+    // Enriquecemos con startNumber/endNumber globales por sector
+    const vipTables = VIP_SECTOR_ORDER.map((loc) => {
+      const base = vipTablesBase.find((t) => t.location === loc);
+      const r = rangeByLoc.get(loc);
+      return {
+        location: loc,
+        price: base?.price ?? 0,
+        limit: base?.limit ?? 0,
+        sold: base?.sold ?? 0,
+        remaining: base?.remaining ?? 0,
+        capacityPerTable: base?.capacityPerTable ?? VIP_UNIT_SIZE,
+        startNumber: r ? r.startNumber : null,
+        endNumber: r ? r.endNumber : null,
+      };
+    });
+
+    // Agregados VIP (personas) — no “vip global” en DB, solo métricas
     const vipTotalPersonsLimit = vipTables.reduce(
-      (acc, t) => acc + t.limit * (t.capacityPerTable || VIP_UNIT_SIZE),
+      (acc, t) => acc + (t.limit || 0) * (t.capacityPerTable || VIP_UNIT_SIZE),
       0
     );
     const vipTotalPersonsSold = vipTables.reduce(
-      (acc, t) => acc + t.sold * (t.capacityPerTable || VIP_UNIT_SIZE),
+      (acc, t) => acc + (t.sold || 0) * (t.capacityPerTable || VIP_UNIT_SIZE),
       0
     );
 
@@ -196,6 +230,7 @@ export async function GET(_req: NextRequest) {
         limitPersons: totalLimitPersons,
         soldPersons: soldTotalPersons,
         remainingPersons: remainingTotalPersons,
+        totalTables, // NUEVO: total de mesas del evento (numeración 1..totalTables)
       },
 
       tickets: {
@@ -215,7 +250,7 @@ export async function GET(_req: NextRequest) {
         },
       },
 
-      // Config por ubicación (usar en la UI)
+      // Config por ubicación (para UI), ya con rango global
       vipTables,
     };
 
@@ -294,12 +329,8 @@ export async function PATCH(req: NextRequest) {
 
     // ---- TOTAL (PERSONAS) ----
     if (hasTotalLimit) {
-      const totalEntriesLimit = toNumber(totalLimitRaw);
-      if (!Number.isFinite(totalEntriesLimit) || totalEntriesLimit < 0) {
-        return json({ message: "totalEntriesLimit inválido" }, 400);
-      }
-
-      // upsert manual para evitar pasar gender: null
+      const totalEntriesLimit = toIntNonNegative(totalLimitRaw, 0);
+      // upsert manual para evitar pasar gender: null en unique compuesta
       const existingTotal = await prisma.ticketConfig.findFirst({
         where: { eventId: event.id, ticketType: "total", gender: null },
         select: { id: true },
@@ -330,10 +361,15 @@ export async function PATCH(req: NextRequest) {
       if (!locEnum) continue;
 
       const price = clampNonNegative(toNumber(row?.price, 0));
-      const stockLimit = clampNonNegative(toNumber(row?.stockLimit, 0));
+      // Aceptamos alias tanto "stockLimit" como "limit"
+      const stockLimitInput = hasValue(row?.stockLimit)
+        ? row.stockLimit
+        : row?.limit;
+      const stockLimit = toIntNonNegative(stockLimitInput, 0);
+
       const capacityPerTable = Math.max(
         1,
-        clampNonNegative(toNumber(row?.capacityPerTable, VIP_UNIT_SIZE))
+        toIntNonNegative(row?.capacityPerTable, VIP_UNIT_SIZE)
       );
 
       // upsert POR ÍNDICE COMPUESTO del schema: @@unique([eventId, location])
@@ -343,6 +379,7 @@ export async function PATCH(req: NextRequest) {
       });
 
       if (existing) {
+        // nunca bajar límite por debajo de lo vendido
         const safeLimit = Math.max(stockLimit, existing.soldCount || 0);
         await prisma.vipTableConfig.update({
           where: { id: existing.id },

@@ -19,6 +19,9 @@ import {
   normalizeSixDigitCode,
 } from "@/lib/validation-code";
 
+// 🔹 IMPORTANTE: usamos la numeración secuencial global del evento
+import { getVipSequentialRanges, VIP_SECTOR_ORDER } from "@/lib/vip-tables";
+
 /* ========================= Alias DB ========================= */
 type DB = Prisma.TransactionClient | PrismaClient;
 
@@ -141,7 +144,7 @@ async function priceForGeneral(
 async function priceForVip(
   eventId: string,
   location: TL,
-  tables: number // seguirá existiendo en el modelo (stock), pero lo forzamos a 1
+  tables: number // sigue existiendo en el modelo (stock), pero lo forzamos a 1
 ): Promise<{
   vipConfigId: string;
   capacityPerTable: number;
@@ -193,11 +196,58 @@ async function adjustVipSoldCount(
 }
 
 /* ========================= Validaciones mesa ========================= */
+/**
+ * Resuelve el número de mesa recibido:
+ * - Si es local válido (1..stockLimit) => lo retorna.
+ * - Si es global secuencial (start..end del sector) => lo convierte a local (global - offset).
+ * - Si no encaja en ninguno => lanza "table_out_of_range".
+ */
+async function resolveLocalTableNumber(params: {
+  eventId: string;
+  location: TL;
+  inputNumber: number | undefined;
+}): Promise<{ localNumber: number; stockLimit: number }> {
+  const { eventId, location, inputNumber } = params;
+
+  if (
+    inputNumber === undefined ||
+    inputNumber === null ||
+    !Number.isFinite(inputNumber) ||
+    !Number.isInteger(inputNumber)
+  ) {
+    throw new Error("table_required");
+  }
+
+  const cfg = await prisma.vipTableConfig.findUnique({
+    where: { eventId_location: { eventId, location } },
+    select: { stockLimit: true },
+  });
+  if (!cfg) throw new Error("vip_cfg_not_found");
+  const stockLimit = cfg.stockLimit;
+
+  // 1) ¿Local válido?
+  if (inputNumber >= 1 && inputNumber <= stockLimit) {
+    return { localNumber: inputNumber, stockLimit };
+  }
+
+  // 2) ¿Global? Mapear usando rangos secuenciales del evento
+  const { ranges } = await getVipSequentialRanges({ prisma, eventId });
+  const r = ranges.find((x) => x.location === location);
+  if (r && inputNumber >= r.startNumber && inputNumber <= r.endNumber) {
+    const localNumber = inputNumber - r.offset; // global → local
+    if (localNumber >= 1 && localNumber <= stockLimit) {
+      return { localNumber, stockLimit };
+    }
+  }
+
+  throw new Error("table_out_of_range");
+}
+
 async function assertTableNumberFreeAndValid(opts: {
   eventId: string;
   location: TL;
-  tableNumber: number | undefined;
-  stockLimit: number;
+  tableNumber: number | undefined; // puede ser local o global; se normaliza antes
+  stockLimit: number; // límite del sector (solo para mensajes)
   excludeTicketId?: string; // para PUT (evitar false positives con el propio ticket)
 }) {
   const { eventId, location, tableNumber, stockLimit, excludeTicketId } = opts;
@@ -205,7 +255,8 @@ async function assertTableNumberFreeAndValid(opts: {
   if (
     tableNumber === undefined ||
     tableNumber === null ||
-    !Number.isFinite(tableNumber)
+    !Number.isFinite(tableNumber) ||
+    !Number.isInteger(tableNumber)
   ) {
     throw new Error("table_required");
   }
@@ -333,7 +384,7 @@ export async function GET(request: NextRequest) {
    body:
      - ticketType: "general" | "vip"
      - GENERAL: gender, quantity
-     - VIP: location, tableNumber (obligatorio), tables (opcional, default=1)
+     - VIP: location, tableNumber (local o global), tables (opcional, default=1)
 ========================================================= */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -416,7 +467,6 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         totalPrice = new Prisma.Decimal(overrideTotal);
-        // capturamos config si existe (trazabilidad)
         const cfg = await prisma.ticketConfig.findFirst({
           where: {
             eventId: event.id,
@@ -499,18 +549,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Mesa obligatoria y libre
-    const tableNumber =
+    // Mesa: aceptar local o global y normalizar a local
+    const tableNumberInput =
       typeof body.tableNumber === "number"
         ? body.tableNumber
         : normNumber(body.tableNumber);
 
+    let localResult;
+    try {
+      localResult = await resolveLocalTableNumber({
+        eventId: event.id,
+        location: locEnum,
+        inputNumber: tableNumberInput,
+      });
+    } catch (e: any) {
+      if (e?.message === "table_required")
+        return NextResponse.json(
+          { error: "tableNumber requerido" },
+          { status: 400 }
+        );
+      if (e?.message === "vip_cfg_not_found")
+        return NextResponse.json(
+          { error: "No hay configuración VIP para esa ubicación" },
+          { status: 400 }
+        );
+      if (e?.message === "table_out_of_range")
+        return NextResponse.json(
+          { error: "tableNumber fuera de rango" },
+          { status: 400 }
+        );
+      throw e;
+    }
+
+    // Validar que la mesa local esté libre (colisión)
     try {
       await assertTableNumberFreeAndValid({
         eventId: event.id,
         location: locEnum,
-        tableNumber,
-        stockLimit: priced.stockLimit,
+        tableNumber: localResult.localNumber,
+        stockLimit: localResult.stockLimit,
       });
     } catch (e: any) {
       if (e?.message === "table_required")
@@ -533,6 +610,7 @@ export async function POST(request: NextRequest) {
 
     const vipCapacity = priced.capacityPerTable; // snapshot
     const totalPrice = priced.total;
+    const tableNumberLocal = localResult.localNumber;
 
     // Transacción: ajustar stock (si approved) + crear ticket
     const created = await prisma.$transaction(async (tx) => {
@@ -553,7 +631,7 @@ export async function POST(request: NextRequest) {
               vipLocation: locEnum,
               vipTables: tables, // siempre 1
               capacityPerTable: vipCapacity,
-              tableNumber, // ✅ mesa asignada
+              tableNumber: tableNumberLocal, // ✅ siempre LOCAL
 
               totalPrice,
               customerName,
@@ -617,7 +695,7 @@ export async function POST(request: NextRequest) {
    PUT /api/admin/tickets — actualizar Ticket (general o vip)
    Reglas VIP:
    - NO se puede cambiar ubicación/mesas/capacidad NI la mesa si está approved.
-   - Si NO está approved, se puede cambiar tableNumber (validado y libre).
+   - Si NO está approved, se puede cambiar tableNumber (acepta local o global).
 ========================================================= */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -668,8 +746,6 @@ export async function PUT(request: NextRequest) {
         dataToUpdate.vipLocation = loc ?? null;
       }
       if (wantsTables) {
-        // aunque forzamos a 1 en creación, permitimos que PUT también lo fije;
-        // si te interesa bloquear, podrías ignorarlo.
         const t = normNumber(body.tables);
         if (t !== undefined) dataToUpdate.vipTables = Math.max(1, t);
       }
@@ -678,61 +754,76 @@ export async function PUT(request: NextRequest) {
         if (c !== undefined) dataToUpdate.capacityPerTable = Math.max(1, c);
       }
       if (wantsTableNumber) {
-        const tnum =
+        // Aceptar local o global y normalizar a local según ubicación efectiva
+        const tableNumberInput =
           typeof body.tableNumber === "number"
             ? body.tableNumber
             : normNumber(body.tableNumber);
 
-        // Validar disponibilidad de la mesa en el contexto actual (ubicación actual o la nueva si se envió)
         const effLoc =
           (dataToUpdate.vipLocation as TL | undefined) || current.vipLocation;
-        if (effLoc) {
-          const cfg = await prisma.vipTableConfig.findUnique({
-            where: {
-              eventId_location: { eventId: current.eventId, location: effLoc },
-            },
-            select: { stockLimit: true },
-          });
-          if (!cfg) {
-            return NextResponse.json(
-              { error: "No hay configuración VIP para esa ubicación" },
-              { status: 400 }
-            );
-          }
-          try {
-            await assertTableNumberFreeAndValid({
-              eventId: current.eventId,
-              location: effLoc,
-              tableNumber: tnum,
-              stockLimit: cfg.stockLimit,
-              excludeTicketId: current.id, // permitir la propia
-            });
-          } catch (e: any) {
-            if (e?.message === "table_required")
-              return NextResponse.json(
-                { error: "tableNumber requerido" },
-                { status: 400 }
-              );
-            if (e?.message === "table_out_of_range")
-              return NextResponse.json(
-                { error: "tableNumber fuera de rango" },
-                { status: 400 }
-              );
-            if (e?.message === "table_taken")
-              return NextResponse.json(
-                { error: "La mesa indicada ya está ocupada" },
-                { status: 409 }
-              );
-            throw e;
-          }
-          dataToUpdate.tableNumber = tnum ?? null;
-        } else {
-          // si no hay ubicación definida, no podemos validar mesa
+
+        if (!effLoc) {
           return NextResponse.json(
             { error: "Definí una ubicación VIP antes de asignar mesa" },
             { status: 400 }
           );
         }
+
+        let localResult;
+        try {
+          localResult = await resolveLocalTableNumber({
+            eventId: current.eventId,
+            location: effLoc,
+            inputNumber: tableNumberInput,
+          });
+        } catch (e: any) {
+          if (e?.message === "table_required")
+            return NextResponse.json(
+              { error: "tableNumber requerido" },
+              { status: 400 }
+            );
+          if (e?.message === "vip_cfg_not_found")
+            return NextResponse.json(
+              { error: "No hay configuración VIP para esa ubicación" },
+              { status: 400 }
+            );
+          if (e?.message === "table_out_of_range")
+            return NextResponse.json(
+              { error: "tableNumber fuera de rango" },
+              { status: 400 }
+            );
+          throw e;
+        }
+
+        try {
+          await assertTableNumberFreeAndValid({
+            eventId: current.eventId,
+            location: effLoc,
+            tableNumber: localResult.localNumber,
+            stockLimit: localResult.stockLimit,
+            excludeTicketId: current.id, // permitir la propia
+          });
+        } catch (e: any) {
+          if (e?.message === "table_required")
+            return NextResponse.json(
+              { error: "tableNumber requerido" },
+              { status: 400 }
+            );
+          if (e?.message === "table_out_of_range")
+            return NextResponse.json(
+              { error: "tableNumber fuera de rango" },
+              { status: 400 }
+            );
+          if (e?.message === "table_taken")
+            return NextResponse.json(
+              { error: "La mesa indicada ya está ocupada" },
+              { status: 409 }
+            );
+          throw e;
+        }
+
+        dataToUpdate.tableNumber = localResult.localNumber; // ✅ guardar LOCAL
       }
     } else if (
       wantsLocation ||
