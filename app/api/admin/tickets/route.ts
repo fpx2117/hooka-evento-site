@@ -20,7 +20,7 @@ import {
 } from "@/lib/validation-code";
 
 // 🔹 IMPORTANTE: usamos la numeración secuencial global del evento
-import { getVipSequentialRanges, VIP_SECTOR_ORDER } from "@/lib/vip-tables";
+import { getVipSequentialRanges } from "@/lib/vip-tables";
 
 /* ========================= Alias DB ========================= */
 type DB = Prisma.TransactionClient | PrismaClient;
@@ -508,10 +508,7 @@ export async function POST(request: NextRequest) {
           });
 
           if (paymentStatus === PS.approved) {
-            await ensureSixDigitCode(prisma, {
-              type: "ticket",
-              id: created.id,
-            });
+            await ensureSixDigitCode(prisma, { id: created.id });
           }
 
           const ticket = await prisma.ticket.findUnique({
@@ -657,7 +654,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (paymentStatus === PS.approved) {
-      await ensureSixDigitCode(prisma, { type: "ticket", id: created.id });
+      await ensureSixDigitCode(prisma, { id: created.id });
     }
 
     const ticket = await prisma.ticket.findUnique({
@@ -911,7 +908,7 @@ export async function PUT(request: NextRequest) {
     // asegurar código si quedó approved
     const hadValid = !!normalizeSixDigitCode(current.validationCode);
     if (updated?.paymentStatus === PS.approved && !hadValid) {
-      await ensureSixDigitCode(prisma, { type: "ticket", id });
+      await ensureSixDigitCode(prisma, { id });
     }
 
     return NextResponse.json({ ok: true, ticket: updated });
