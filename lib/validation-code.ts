@@ -19,12 +19,12 @@ function gen6(): string {
 }
 
 /**
- * Asegura un validationCode de 6 dígitos si no existe (para Ticket).
+ * Asegura un validationCode de 6 dígitos si no existe (solo Ticket).
  * Idempotente: si ya hay uno válido, lo devuelve.
  *
- * @param tx PrismaClient o Prisma.TransactionClient (usar dentro o fuera de $transaction)
- * @param opts { id } — id del Ticket
- * @param maxAttempts intentos por si hay colisiones (poco probables)
+ * @param tx PrismaClient o Prisma.TransactionClient
+ * @param opts { id } — id del ticket
+ * @param maxAttempts intentos por si hay colisiones improbables
  */
 export async function ensureSixDigitCode(
   tx: PrismaClient | Prisma.TransactionClient,
@@ -34,12 +34,12 @@ export async function ensureSixDigitCode(
   const { id } = opts;
 
   // 1) ¿ya existe?
-  const current = await (tx as PrismaClient).ticket.findUnique({
+  const cur = await (tx as PrismaClient).ticket.findUnique({
     where: { id },
     select: { validationCode: true },
   });
-  if (current?.validationCode && SIX.test(current.validationCode)) {
-    return current.validationCode;
+  if (cur?.validationCode && SIX.test(cur.validationCode)) {
+    return cur.validationCode;
   }
 
   // 2) Intentar generar y setear solo si sigue vacío (evita carreras)
@@ -53,12 +53,12 @@ export async function ensureSixDigitCode(
     if (ok.count === 1) return code; // ganó la carrera
 
     // si no pudimos setear (porque alguien lo llenó entre medio), re-chequear
-    const cur = await (tx as PrismaClient).ticket.findUnique({
+    const recheck = await (tx as PrismaClient).ticket.findUnique({
       where: { id },
       select: { validationCode: true },
     });
-    if (cur?.validationCode && SIX.test(cur.validationCode)) {
-      return cur.validationCode;
+    if (recheck?.validationCode && SIX.test(recheck.validationCode)) {
+      return recheck.validationCode;
     }
   }
 

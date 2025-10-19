@@ -44,6 +44,12 @@ const onlyDigits = (v?: string) => (v || "").replace(/\D+/g, "");
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 const DEFAULT_CURRENCY = "ARS";
 
+// número entero positivo o undefined
+const numOrUndef = (v: unknown): number | undefined => {
+  const x = Number(v);
+  return Number.isFinite(x) && Number.isInteger(x) && x > 0 ? x : undefined;
+};
+
 /* ========================= Tipos de request ========================= */
 type CreateBody = {
   type: "ticket";
@@ -66,7 +72,9 @@ type CreateBody = {
       ticketType?: "vip" | "general";
       tables?: number;
       location?: "dj" | "piscina" | "general";
-      tableNumber?: number; // puede venir global o local
+      /** Puede venir el número LOCAL o el GLOBAL */
+      tableNumber?: number;
+      tableNumberGlobal?: number;
     };
   };
 };
@@ -191,23 +199,32 @@ export async function POST(req: NextRequest) {
       );
       const location =
         coerceLocation(s(body.payer?.additionalInfo?.location)) || "general";
-      const tableNumberInput = n(body.payer?.additionalInfo?.tableNumber);
 
-      // Normalizar número de mesa (acepta global o local) y validar disponibilidad
+      // leer local y global (la UI puede enviar cualquiera de los dos)
+      const tableNumberLocalInput = numOrUndef(
+        body.payer?.additionalInfo?.tableNumber
+      );
+      const tableNumberGlobalInput = numOrUndef(
+        body.payer?.additionalInfo?.tableNumberGlobal
+      );
+
+      // Normalizar a {local, global} y validar disponibilidad
       let normalized: { local: number; global: number };
       try {
         normalized = await normalizeVipNumber({
           prisma,
           eventId: event.id,
           location,
-          tableNumber: tableNumberInput, // puede venir global o local; la función resuelve
+          tableNumber: tableNumberLocalInput,
+          tableNumberGlobal: tableNumberGlobalInput,
         });
 
+        // puede validarse con local o global indistintamente (se traduce en el helper)
         await ensureVipTableAvailability({
           prisma,
           eventId: event.id,
           location,
-          tableNumber: normalized.local, // validar en base local
+          tableNumberGlobal: normalized.global,
         });
       } catch (err: any) {
         return NextResponse.json(
@@ -236,7 +253,7 @@ export async function POST(req: NextRequest) {
       const rules = await getActiveRulesFor(event.id, "vip");
       const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
 
-      // Crear Ticket VIP (PENDING) con número LOCAL ya normalizado
+      // Crear Ticket VIP (PENDING) guardando SIEMPRE el número LOCAL
       const createdVip = await prisma.ticket.create({
         data: {
           eventId: event.id,
@@ -247,7 +264,7 @@ export async function POST(req: NextRequest) {
           vipLocation: location,
           vipTables: tables,
           capacityPerTable: cap,
-          tableNumber: normalized.local, // siempre LOCAL en DB
+          tableNumber: normalized.local, // LOCAL en BD
           totalPrice: total,
           customerName: payerName,
           customerEmail: payerEmail,
@@ -262,7 +279,7 @@ export async function POST(req: NextRequest) {
       const mpItems = [
         {
           id: createdVip.id,
-          title: `Mesa VIP ${normalized.global} - ${prettyLocation(location)} x${tables}`,
+          title: `Mesa VIP #${normalized.global} - ${prettyLocation(location)} x${tables}`, // GLOBAL visible
           description: `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
           quantity: 1,
           unit_price: Number(createdVip.totalPrice) || 0,
@@ -300,7 +317,8 @@ export async function POST(req: NextRequest) {
           eventId: event.id,
           eventCode: event.code,
           vipLocation: location,
-          tableNumber: normalized.local, // guardamos local en metadata también
+          tableNumberLocal: normalized.local, // para debugging
+          tableNumberGlobal: normalized.global,
           vipTables: tables,
           capacityPerTable: cap,
           pricePerTable: unitPriceFromDB,
@@ -360,7 +378,7 @@ export async function POST(req: NextRequest) {
     }
 
     /* ======================================================================
-       ENTRADA GENERAL (sin cambios)
+       ENTRADA GENERAL (sin cambios significativos)
     ====================================================================== */
     const gender = s(body.payer?.additionalInfo?.gender) as
       | "hombre"
