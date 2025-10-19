@@ -112,7 +112,7 @@ interface AdminTicket {
   purchaseDate: string;
 
   tableNumber?: number | null;
-  tableNumbers?: number[] | null; // 👈 nuevo
+  tableNumbers?: number[] | null;
   tableLocation?: TableLocation | null;
 }
 
@@ -132,7 +132,6 @@ type AddVipForm = {
   customerPhone: string;
   customerDni: string;
   paymentMethod: "efectivo" | "transferencia" | "mercadopago";
-  quantity: number; // MESAS
   tableLocation: TableLocation;
 };
 
@@ -157,7 +156,7 @@ type DiscountCfg = {
   isActive?: boolean;
 };
 
-// ✅ TicketsConfig con TOTAL en personas + VIP por ubicación
+// ✅ TicketsConfig con TOTAL + VIP por ubicación y rango global de mesas
 type TicketsConfig = {
   eventId: string;
   eventName: string;
@@ -195,6 +194,10 @@ type TicketsConfig = {
     sold: number; // mesas vendidas
     remaining: number; // mesas restantes
     capacityPerTable?: number | null; // personas por mesa
+
+    // 👇 NUEVO: numeración global por sector
+    startNumber?: number | null;
+    endNumber?: number | null;
   }>;
 };
 
@@ -260,6 +263,15 @@ function applyDiscount(
   }
   const total = Math.max(0, subtotal - discount);
   return { subtotal, discount, total, rule };
+}
+
+/* =========================
+   Helpers Varios
+========================= */
+function range(from: number, to: number): number[] {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return [];
+  const len = to - from + 1;
+  return Array.from({ length: len }, (_, i) => from + i);
 }
 
 /* =========================
@@ -582,13 +594,13 @@ export default function AdminDashboard() {
   // Export (modal)
   const [showExportModal, setShowExportModal] = useState(false);
 
-  // Modal para elegir mesas
+  // Modal para elegir mesa (solo 1 por ticket)
   const [showTablesModal, setShowTablesModal] = useState(false);
   const [availability, setAvailability] = useState<VipAvailability | null>(
     null
   );
   const [availableNumbers, setAvailableNumbers] = useState<number[]>([]);
-  const [selectedTables, setSelectedTables] = useState<number[]>([]);
+  const [selectedTable, setSelectedTable] = useState<number | null>(null);
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [availError, setAvailError] = useState<string | null>(null);
 
@@ -630,13 +642,13 @@ export default function AdminDashboard() {
     quantity: 1,
   });
 
+  // VIP: siempre 1 mesa por ticket
   const [formVip, setFormVip] = useState<AddVipForm>({
     customerName: "",
     customerEmail: "",
     customerPhone: "",
     customerDni: "",
     paymentMethod: "efectivo",
-    quantity: 1,
     tableLocation: "dj",
   });
 
@@ -654,15 +666,8 @@ export default function AdminDashboard() {
 
   // ✅ Reset selección si cambia ubicación
   useEffect(() => {
-    setSelectedTables([]);
+    setSelectedTable(null);
   }, [formVip.tableLocation]);
-
-  // ✅ Si la cantidad bajó, recortar la selección
-  useEffect(() => {
-    setSelectedTables((prev) =>
-      prev.length > formVip.quantity ? prev.slice(0, formVip.quantity) : prev
-    );
-  }, [formVip.quantity]);
 
   // ✅ Form configuración (TOTAL + precios H/M + VIP por ubicación)
   const [configForm, setConfigForm] = useState({
@@ -676,6 +681,8 @@ export default function AdminDashboard() {
     price: number;
     stockLimit: number; // MESAS
     capacityPerTable: number; // personas por mesa
+    startNumber?: number | null;
+    endNumber?: number | null;
   };
   const [vipTablesForm, setVipTablesForm] = useState<VipTableFormRow[]>([
     { location: "dj", price: 0, stockLimit: 0, capacityPerTable: 10 },
@@ -762,7 +769,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // ✅ Fetch disponibilidad mesas VIP por ubicación
+  // ✅ Fetch disponibilidad mesas VIP por ubicación (con numeración global)
   const fetchVipAvailability = async (loc: TableLocation) => {
     setLoadingAvail(true);
     setAvailError(null);
@@ -778,14 +785,32 @@ export default function AdminDashboard() {
         );
       }
 
-      const limit = Number.isFinite(data.limit) ? Number(data.limit) : 0;
+      // Rango global si viene en config, sino 1..limit
+      const sector = cfg?.vipTables.find((v) => v.location === loc);
+      const start =
+        sector?.startNumber != null && Number.isFinite(sector.startNumber)
+          ? Number(sector.startNumber)
+          : null;
+      const end =
+        sector?.endNumber != null && Number.isFinite(sector.endNumber)
+          ? Number(sector.endNumber)
+          : null;
+
+      const limit =
+        data.limit != null && Number.isFinite(data.limit as any)
+          ? Number(data.limit)
+          : (sector?.limit ?? 0);
+
+      const allNumbers =
+        start != null && end != null
+          ? range(start, end) // ✅ global
+          : range(1, Math.max(0, limit || 0)); // fallback local
+
       const takenSet = new Set<number>(
-        Array.isArray(data.taken) ? data.taken : []
+        (Array.isArray(data.taken) ? data.taken : []).map(Number)
       );
-      const libres: number[] = [];
-      for (let n = 1; n <= limit; n++) {
-        if (!takenSet.has(n)) libres.push(n);
-      }
+
+      const libres = allNumbers.filter((n) => !takenSet.has(n));
 
       setAvailability(data);
       setAvailableNumbers(libres);
@@ -799,7 +824,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // ✅ Lee totals/VIP por ubicación — sin usar VIP global
+  // ✅ Lee totals/VIP por ubicación — con startNumber/endNumber si existen
   const fetchConfig = async () => {
     try {
       const r = await fetch(`/api/admin/tickets/config`, { cache: "no-store" });
@@ -823,6 +848,10 @@ export default function AdminDashboard() {
               typeof c.capacityPerTable === "number" && c.capacityPerTable > 0
                 ? c.capacityPerTable
                 : (data.totals?.unitVipSize ?? 10),
+            startNumber:
+              typeof c.startNumber === "number" ? c.startNumber : undefined,
+            endNumber:
+              typeof c.endNumber === "number" ? c.endNumber : undefined,
           });
         }
         const merged: VipTableFormRow[] = [];
@@ -946,7 +975,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // ===== Altas manuales (General/VIP) con precio desde BD + DESCUENTOS =====
+  // ===== Altas manuales =====
   const generalUnitPrice = useMemo(() => {
     if (!cfg) return 0;
     const g = formGeneral.gender;
@@ -978,7 +1007,7 @@ export default function AdminDashboard() {
     [generalUnitPrice, formGeneral.quantity, generalDiscountRule]
   );
 
-  // VIP por ubicación
+  // VIP por ubicación (1 mesa por ticket)
   const vipOptions = useMemo(() => cfg?.vipTables || [], [cfg]);
 
   const selectedVipCfg = useMemo(() => {
@@ -998,8 +1027,8 @@ export default function AdminDashboard() {
   );
 
   const vipTotalInfo = useMemo(
-    () => applyDiscount(vipUnitPrice, formVip.quantity, null),
-    [vipUnitPrice, formVip.quantity]
+    () => applyDiscount(vipUnitPrice, 1, null),
+    [vipUnitPrice]
   );
 
   const resetGeneral = () =>
@@ -1020,7 +1049,6 @@ export default function AdminDashboard() {
       customerPhone: "",
       customerDni: "",
       paymentMethod: "efectivo",
-      quantity: 1,
       tableLocation: (cfg?.vipTables?.[0]?.location as TableLocation) ?? "dj",
     });
 
@@ -1069,26 +1097,19 @@ export default function AdminDashboard() {
     e.preventDefault();
     if (!cfg) return;
 
-    if (formVip.quantity > vipRemainingTables) {
-      alert(
-        "No hay mesas disponibles para esa cantidad en la ubicación seleccionada."
-      );
+    if (vipRemainingTables <= 0) {
+      alert("No hay mesas disponibles en la ubicación seleccionada.");
       return;
     }
 
-    if (selectedTables.length !== formVip.quantity) {
-      alert(
-        `Seleccioná ${formVip.quantity} mesa${
-          formVip.quantity > 1 ? "s" : ""
-        } (actualmente ${selectedTables.length}).`
-      );
+    if (!selectedTable) {
+      alert("Seleccioná 1 mesa.");
       return;
     }
 
     try {
       const payload = {
         ticketType: "vip" as const,
-        quantity: formVip.quantity,
         customerName: formVip.customerName,
         customerEmail: formVip.customerEmail,
         customerPhone: formVip.customerPhone,
@@ -1098,11 +1119,8 @@ export default function AdminDashboard() {
         forceTotalPrice: true,
         location: formVip.tableLocation,
 
-        // 👇 compat: mandamos plural y, si es 1, también singular
-        tableNumbers: selectedTables,
-        ...(selectedTables.length === 1
-          ? { tableNumber: selectedTables[0] }
-          : {}),
+        // 👇 El backend espera 1 sola mesa
+        tableNumber: selectedTable,
       };
 
       const r = await fetch("/api/admin/tickets", {
@@ -1113,7 +1131,7 @@ export default function AdminDashboard() {
       if (r.ok) {
         setShowAddVip(false);
         resetVip();
-        setSelectedTables([]);
+        setSelectedTable(null);
         fetchTickets();
         fetchConfig();
       } else {
@@ -1201,6 +1219,13 @@ export default function AdminDashboard() {
           price: Number(row.price),
           stockLimit: Number(row.stockLimit),
           capacityPerTable: Number(row.capacityPerTable),
+          // si deseas persistir los rangos globales desde UI (opcional):
+          ...(row.startNumber != null
+            ? { startNumber: Number(row.startNumber) }
+            : {}),
+          ...(row.endNumber != null
+            ? { endNumber: Number(row.endNumber) }
+            : {}),
         })),
       };
 
@@ -1957,7 +1982,7 @@ export default function AdminDashboard() {
 
       <ExportModal open={showExportModal} onOpenChange={setShowExportModal} />
 
-      {/* ===== Modal Agregar VIP ===== */}
+      {/* ===== Modal Agregar VIP (1 mesa) ===== */}
       <Dialog open={showAddVip} onOpenChange={setShowAddVip}>
         <DialogContent className={modalClass("max-w-2xl")}>
           <DialogHeader className="pb-4 border-b border-border/50">
@@ -2030,9 +2055,9 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* Ubicación + Cantidad */}
+            {/* Ubicación */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label className="text-sm font-medium">Ubicación</Label>
                 <Select
                   value={formVip.tableLocation}
@@ -2049,6 +2074,13 @@ export default function AdminDashboard() {
                         {locationLabel(opt.location)} — $
                         {opt.price.toLocaleString("es-AR")} · {opt.remaining}{" "}
                         mesas
+                        {Number.isFinite(opt.startNumber) &&
+                          Number.isFinite(opt.endNumber) && (
+                            <>
+                              {" "}
+                              · #{opt.startNumber}–{opt.endNumber}
+                            </>
+                          )}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -2057,37 +2089,17 @@ export default function AdminDashboard() {
                   Precio por mesa según ubicación.
                 </p>
               </div>
-
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Cantidad de Mesas</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={formVip.quantity}
-                  onChange={(e) =>
-                    setFormVip({
-                      ...formVip,
-                      quantity: Math.max(1, Number(e.target.value) || 1),
-                    })
-                  }
-                  className="border-border/50"
-                  required
-                />
-                <p className="text-xs text-muted-foreground">
-                  Disponibles acá: {vipRemainingTables}
-                </p>
-              </div>
             </div>
 
-            {/* Selección de mesas */}
+            {/* Selección de mesa (1) */}
             <div className="flex items-center justify-between gap-3">
               <div className="text-sm text-muted-foreground">
-                {selectedTables.length > 0 ? (
+                {selectedTable ? (
                   <>
-                    Mesas seleccionadas: <b>#{selectedTables.join(", ")}</b>
+                    Mesa seleccionada: <b>#{selectedTable}</b>
                   </>
                 ) : (
-                  <>No seleccionaste mesas todavía</>
+                  <>No seleccionaste la mesa todavía</>
                 )}
               </div>
               <Button
@@ -2099,7 +2111,7 @@ export default function AdminDashboard() {
                   setShowTablesModal(true);
                 }}
               >
-                Ver / Elegir mesa(s)
+                Ver / Elegir mesa
               </Button>
             </div>
 
@@ -2132,16 +2144,26 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== Modal: Selección de Mesas ===== */}
+      {/* ===== Modal: Selección de Mesa (1) ===== */}
       <Dialog open={showTablesModal} onOpenChange={setShowTablesModal}>
         <DialogContent className={modalClass("max-w-2xl")}>
           <DialogHeader className="pb-2">
             <DialogTitle>
-              Seleccionar mesas — {locationLabel(formVip.tableLocation)}
+              Seleccionar mesa — {locationLabel(formVip.tableLocation)}
             </DialogTitle>
             <DialogDescription>
-              Elegí exactamente {formVip.quantity} mesa
-              {formVip.quantity > 1 ? "s" : ""} disponibles para esta reserva.
+              Elegí exactamente 1 mesa disponible para esta reserva.
+              {(() => {
+                const sec = cfg?.vipTables.find(
+                  (v) => v.location === formVip.tableLocation
+                );
+                return sec?.startNumber != null && sec?.endNumber != null ? (
+                  <>
+                    {" "}
+                    (rango: #{sec.startNumber}–{sec.endNumber})
+                  </>
+                ) : null;
+              })()}
             </DialogDescription>
           </DialogHeader>
 
@@ -2167,32 +2189,18 @@ export default function AdminDashboard() {
                     </span>
                   ) : (
                     availableNumbers.map((n) => {
-                      const active = selectedTables.includes(n);
-                      const canPick =
-                        active || selectedTables.length < formVip.quantity; // limita a la cantidad
+                      const active = selectedTable === n;
                       return (
                         <button
                           key={n}
                           type="button"
-                          onClick={() => {
-                            // toggle con límite
-                            setSelectedTables((prev) => {
-                              if (prev.includes(n)) {
-                                return prev.filter((x) => x !== n);
-                              }
-                              if (prev.length >= formVip.quantity) return prev;
-                              return [...prev, n].sort((a, b) => a - b);
-                            });
-                          }}
-                          disabled={!canPick}
+                          onClick={() => setSelectedTable(n)}
                           className={`px-3 py-1.5 rounded-md border text-sm transition ${
                             active
                               ? "bg-amber-600 text-white border-amber-700"
-                              : canPick
-                                ? "bg-white border-border/60 hover:bg-amber-50"
-                                : "bg-muted/50 border-border/50 opacity-50"
+                              : "bg-white border-border/60 hover:bg-amber-50"
                           }`}
-                          title={active ? "Quitar" : "Agregar"}
+                          title={active ? "Seleccionada" : "Seleccionar"}
                         >
                           #{n}
                         </button>
@@ -2202,7 +2210,8 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="text-xs text-muted-foreground">
-                  Seleccionadas: {selectedTables.length} / {formVip.quantity}
+                  Seleccionada:{" "}
+                  {selectedTable ? `#${selectedTable}` : "ninguna"}
                 </div>
 
                 <div className="flex gap-2 justify-end pt-2">
@@ -2217,12 +2226,8 @@ export default function AdminDashboard() {
                   <Button
                     type="button"
                     onClick={() => {
-                      if (selectedTables.length !== formVip.quantity) {
-                        alert(
-                          `Debés elegir ${formVip.quantity} mesa${
-                            formVip.quantity > 1 ? "s" : ""
-                          } (seleccionadas: ${selectedTables.length}).`
-                        );
+                      if (!selectedTable) {
+                        alert("Debés elegir 1 mesa.");
                         return;
                       }
                       setShowTablesModal(false);
@@ -2590,6 +2595,13 @@ export default function AdminDashboard() {
                           <span className="text-xs text-amber-700 dark:text-amber-300">
                             Vendidas: <b>{live.sold}</b> · Restantes:{" "}
                             <b>{live.remaining}</b>
+                            {Number.isFinite(live.startNumber) &&
+                              Number.isFinite(live.endNumber) && (
+                                <>
+                                  {" "}
+                                  · Rango #{live.startNumber}–{live.endNumber}
+                                </>
+                              )}
                           </span>
                         ) : (
                           <span className="text-xs text-muted-foreground">
@@ -2598,8 +2610,8 @@ export default function AdminDashboard() {
                         )}
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div className="space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
+                        <div className="space-y-2 sm:col-span-1">
                           <Label className="text-sm font-medium">
                             Precio por mesa (ARS)
                           </Label>
@@ -2620,7 +2632,7 @@ export default function AdminDashboard() {
                           />
                         </div>
 
-                        <div className="space-y-2">
+                        <div className="space-y-2 sm:col-span-1">
                           <Label className="text-sm font-medium">
                             Stock de mesas
                           </Label>
@@ -2641,9 +2653,9 @@ export default function AdminDashboard() {
                           />
                         </div>
 
-                        <div className="space-y-2">
+                        <div className="space-y-2 sm:col-span-1">
                           <Label className="text-sm font-medium">
-                            Capacidad por mesa (personas)
+                            Capacidad por mesa
                           </Label>
                           <Input
                             type="number"
@@ -2662,6 +2674,50 @@ export default function AdminDashboard() {
                             }}
                             className="border-border/50"
                             required
+                          />
+                        </div>
+
+                        {/* Opcional: Rango global */}
+                        <div className="space-y-2 sm:col-span-1">
+                          <Label className="text-sm font-medium">
+                            Desde (n° mesa)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.startNumber ?? ""}
+                            onChange={(e) => {
+                              const val =
+                                e.target.value === ""
+                                  ? undefined
+                                  : Number(e.target.value);
+                              const next = [...vipTablesForm];
+                              next[idx] = { ...row, startNumber: val };
+                              setVipTablesForm(next);
+                            }}
+                            className="border-border/50"
+                            placeholder="p.ej. 1"
+                          />
+                        </div>
+                        <div className="space-y-2 sm:col-span-1">
+                          <Label className="text-sm font-medium">
+                            Hasta (n° mesa)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={row.endNumber ?? ""}
+                            onChange={(e) => {
+                              const val =
+                                e.target.value === ""
+                                  ? undefined
+                                  : Number(e.target.value);
+                              const next = [...vipTablesForm];
+                              next[idx] = { ...row, endNumber: val };
+                              setVipTablesForm(next);
+                            }}
+                            className="border-border/50"
+                            placeholder="p.ej. 10"
                           />
                         </div>
                       </div>

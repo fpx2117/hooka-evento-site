@@ -20,12 +20,12 @@ import {
   Music,
   Waves,
   User,
-  Map as MapIcon, // 👈 NUEVO
+  Map as MapIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 /* =========================
-   Tipos mínimos de la API de config
+   Tipos de la API de config
 ========================= */
 type TableLoc = "piscina" | "dj" | "general";
 
@@ -41,14 +41,24 @@ type TicketsConfig = {
   vipTables?: Array<{
     location: TableLoc;
     price: number;
-    limit: number;
+    limit: number; // mesas del sector
     sold: number;
     remaining: number;
     capacityPerTable: number;
+    /** NUEVO: numeración GLOBAL por sector */
+    startNumber?: number | null;
+    endNumber?: number | null;
   }>;
+  /** opcional si tu /config ya lo expone */
+  totals?: {
+    totalTables?: number;
+  };
 };
 
-type AvailabilityRes = { taken?: number[] };
+type AvailabilityRes = {
+  /** Tomadas en numeración GLOBAL del sector seleccionado */
+  taken?: number[];
+};
 
 /* =========================
    Props
@@ -56,12 +66,9 @@ type AvailabilityRes = { taken?: number[] };
 interface VIPTableModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** endpoint opcional para la config (por defecto usa /api/admin/tickets/config con fallback a /api/tickets/config) */
-  configEndpoint?: string;
-  /** endpoint opcional para disponibilidad por mesa */
+  configEndpoint?: string; // default /api/admin/tickets/config
   availabilityEndpoint?: string; // default /api/vip-tables/availability
-  /** URL del mapa de mesas (imagen). Ej: /images/vip-map.png */
-  mapImageUrl?: string; // 👈 NUEVO (opcional)
+  mapImageUrl?: string; // default /mapa.jpg
 }
 
 /* =========================
@@ -73,6 +80,11 @@ function formatMoney(n: number) {
 function cleanDigits(s: string) {
   return (s || "").replace(/\D+/g, "");
 }
+function range(from: number, to: number): number[] {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return [];
+  const len = to - from + 1;
+  return Array.from({ length: len }, (_, i) => from + i);
+}
 
 /* =========================
    VIPTableModal
@@ -82,16 +94,14 @@ export function VIPTableModal({
   onOpenChange,
   configEndpoint = "/api/admin/tickets/config",
   availabilityEndpoint = "/api/vip-tables/availability",
-  mapImageUrl = "/mapa.jpg", // 👈 default
+  mapImageUrl = "/mapa.jpg",
 }: VIPTableModalProps) {
-  // ======= State de config VIP desde BD (fallback global) =======
+  // ======= State de config VIP =======
   const [vipPriceGlobal, setVipPriceGlobal] = useState<number | null>(null);
   const [remainingTablesGlobal, setRemainingTablesGlobal] = useState<
     number | null
   >(null);
   const [unitSizeGlobal, setUnitSizeGlobal] = useState<number | null>(null);
-
-  // ======= Config por ubicación =======
   const [vipTablesCfg, setVipTablesCfg] = useState<TicketsConfig["vipTables"]>(
     []
   );
@@ -99,7 +109,7 @@ export function VIPTableModal({
     null
   );
 
-  // ======= Disponibilidad por mesa =======
+  // ======= Disponibilidad por mesa (GLOBAL) =======
   const [takenSet, setTakenSet] = useState<Set<number>>(new Set());
   const [tablesLoading, setTablesLoading] = useState(false);
 
@@ -117,11 +127,9 @@ export function VIPTableModal({
   const [cfgError, setCfgError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-
-  // 👇 NUEVO: modal del mapa
   const [mapOpen, setMapOpen] = useState(false);
 
-  // ======= Traer precios/stock desde la API =======
+  // ======= Traer config =======
   useEffect(() => {
     let cancelled = false;
 
@@ -187,7 +195,7 @@ export function VIPTableModal({
     };
   }, [open, configEndpoint]);
 
-  // ======= Config actual según ubicación seleccionada =======
+  // ======= Config actual según ubicación =======
   const currentLocCfg = useMemo(() => {
     if (!selectedLocation) return null;
     return vipTablesCfg?.find((t) => t.location === selectedLocation) || null;
@@ -206,10 +214,25 @@ export function VIPTableModal({
     () => currentLocCfg?.capacityPerTable ?? unitSizeGlobal ?? null,
     [currentLocCfg, unitSizeGlobal]
   );
-  const limitTables = useMemo(
-    () => currentLocCfg?.limit ?? null,
-    [currentLocCfg]
-  );
+
+  // Numeración GLOBAL por sector
+  const startGlobal = currentLocCfg?.startNumber ?? null;
+  const endGlobal = currentLocCfg?.endNumber ?? null;
+
+  // Fallback: si no viene start/end, usamos local 1..limit (igual funcionará porque el backend acepta global o local)
+  const limitLocal = currentLocCfg?.limit ?? null;
+  const displayNumbers: number[] = useMemo(() => {
+    if (
+      Number.isFinite(startGlobal) &&
+      Number.isFinite(endGlobal) &&
+      startGlobal &&
+      endGlobal
+    ) {
+      return range(startGlobal, endGlobal);
+    }
+    if (limitLocal && limitLocal > 0) return range(1, limitLocal); // fallback local
+    return [];
+  }, [startGlobal, endGlobal, limitLocal]);
 
   const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
 
@@ -218,7 +241,7 @@ export function VIPTableModal({
       ? remainingTables <= 0
       : false;
 
-  // ======= Traer disponibilidad por mesa al cambiar ubicación =======
+  // ======= Traer disponibilidad (tomadas en GLOBAL) al cambiar ubicación =======
   useEffect(() => {
     let cancelled = false;
     async function loadAvailability() {
@@ -237,11 +260,14 @@ export function VIPTableModal({
         if (r.ok) {
           const data: AvailabilityRes = await r.json();
           if (!cancelled) {
-            setTakenSet(new Set((data?.taken || []).map((n) => Number(n))));
+            const tk = (data?.taken || [])
+              .map((n) => Number(n))
+              .filter(Number.isFinite);
+            setTakenSet(new Set(tk)); // GLOBAL
           }
         }
       } catch {
-        // si falla, seguimos sin takenSet (backend validará)
+        // backend validará de todas maneras
       } finally {
         if (!cancelled) setTablesLoading(false);
       }
@@ -278,17 +304,25 @@ export function VIPTableModal({
 
     if (!customer.gender) e.gender = "Elegí tu género";
 
-    // ✅ Mesa específica requerida
+    // ✅ Mesa específica requerida (numeración GLOBAL si vino start/end)
     if (!tableNumber) e.table = "Elegí el número de mesa";
     if (tableNumber && takenSet.has(tableNumber)) {
       e.table = "Esa mesa ya está ocupada. Elegí otra.";
     }
-    if (
-      tableNumber &&
-      limitTables &&
-      (tableNumber < 1 || tableNumber > limitTables)
-    ) {
-      e.table = "Número de mesa inválido para esta ubicación.";
+
+    // Validación de rango segun GLOBAL (o local si no hay global)
+    if (tableNumber) {
+      if (displayNumbers.length > 0) {
+        const min = displayNumbers[0];
+        const max = displayNumbers[displayNumbers.length - 1];
+        if (tableNumber < min || tableNumber > max) {
+          e.table = "Número de mesa inválido para esta ubicación.";
+        }
+      } else if (limitLocal) {
+        if (tableNumber < 1 || tableNumber > limitLocal) {
+          e.table = "Número de mesa inválido para esta ubicación.";
+        }
+      }
     }
 
     setErrors(e);
@@ -335,7 +369,7 @@ export function VIPTableModal({
             tables: 1,
             unitSize: capacity,
             location: selectedLocation ?? undefined,
-            tableNumber: tableNumber ?? undefined,
+            tableNumber: tableNumber ?? undefined, // 👈 ENVIAMOS GLOBAL (backend lo acepta y normaliza)
             gender: customer.gender || undefined,
           },
         },
@@ -343,7 +377,7 @@ export function VIPTableModal({
         meta: {
           ticketType: "vip",
           location: selectedLocation ?? undefined,
-          tableNumber: tableNumber ?? undefined,
+          tableNumber: tableNumber ?? undefined, // 👈 GLOBAL
           gender: customer.gender || undefined,
         },
       };
@@ -387,13 +421,8 @@ export function VIPTableModal({
   const hasDJ = !!vipTablesCfg?.find((t) => t.location === "dj");
   const hasPiscina = !!vipTablesCfg?.find((t) => t.location === "piscina");
 
-  const tableNumbers = useMemo<number[]>(() => {
-    if (!limitTables || limitTables < 1) return [];
-    return Array.from({ length: limitTables }, (_, i) => i + 1);
-  }, [limitTables]);
-
   const isNumberDisabled = (n: number) => {
-    if (takenSet.has(n)) return true;
+    if (takenSet.has(n)) return true; // GLOBAL
     if (soldOut) return true;
     return false;
   };
@@ -432,7 +461,7 @@ export function VIPTableModal({
                 Cargando configuración…
               </p>
             ) : cfgError ? (
-              <p className="text-center text-sm text-red-2 00">{cfgError}</p>
+              <p className="text-center text-sm text-red-200">{cfgError}</p>
             ) : (
               <div
                 className={`grid gap-3 sm:gap-4 ${
@@ -443,7 +472,9 @@ export function VIPTableModal({
               >
                 {/* Precio por mesa */}
                 <div
-                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
+                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                    soldOut ? "opacity-70" : ""
+                  }`}
                 >
                   <p className="text-sm font-bold text-black mb-1">
                     Precio por mesa
@@ -468,7 +499,6 @@ export function VIPTableModal({
                   <p className="text-sm font-bold text-black mb-1">
                     Mesas disponibles
                   </p>
-
                   {soldOut ? (
                     <div className="flex flex-col items-center gap-1">
                       <span className="text-2xl font-extrabold tracking-wide">
@@ -489,7 +519,9 @@ export function VIPTableModal({
                 {/* Equivalencia */}
                 {unitSize !== null && (
                   <div
-                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${soldOut ? "opacity-70" : ""}`}
+                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
+                      soldOut ? "opacity-70" : ""
+                    }`}
                   >
                     <p className="text-sm font-bold text-black mb-1">
                       Equivalencia
@@ -527,7 +559,11 @@ export function VIPTableModal({
                 variant={selectedLocation === "dj" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("dj")}
                 disabled={!hasDJ}
-                className={`justify-start h-12 ${selectedLocation === "dj" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
+                className={`justify-start h-12 ${
+                  selectedLocation === "dj"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
               >
                 <Music className="w-4 h-4 mr-2" />
                 Cerca del DJ
@@ -538,7 +574,11 @@ export function VIPTableModal({
                 variant={selectedLocation === "piscina" ? "default" : "outline"}
                 onClick={() => setSelectedLocation("piscina")}
                 disabled={!hasPiscina}
-                className={`justify-start h-12 ${selectedLocation === "piscina" ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]" : ""}`}
+                className={`justify-start h-12 ${
+                  selectedLocation === "piscina"
+                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
+                    : ""
+                }`}
               >
                 <Waves className="w-4 h-4 mr-2" />
                 Cerca de la PISCINA
@@ -553,10 +593,23 @@ export function VIPTableModal({
                 y stock general de VIP si está disponible.
               </p>
             )}
+
+            {/* Hint del rango GLOBAL visible */}
+            {Number.isFinite(startGlobal) &&
+              Number.isFinite(endGlobal) &&
+              startGlobal &&
+              endGlobal && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Numeración de mesas en este sector:{" "}
+                  <b>
+                    {startGlobal}–{endGlobal}
+                  </b>
+                </p>
+              )}
           </div>
 
           {/* Selector de número de mesa + Abrir mapa */}
-          {!!limitTables && (
+          {displayNumbers.length > 0 && (
             <div className="rounded-xl border p-3 sm:p-4 bg-white/60">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <p className="text-sm font-semibold">
@@ -570,8 +623,6 @@ export function VIPTableModal({
                       Actualizando disponibilidad…
                     </span>
                   )}
-
-                  {/* 👇 BOTÓN ABRIR MAPA */}
                   <Button
                     type="button"
                     variant="outline"
@@ -587,7 +638,7 @@ export function VIPTableModal({
               </div>
 
               <div className="grid grid-cols-5 sm:grid-cols-8 gap-2">
-                {tableNumbers.map((n) => {
+                {displayNumbers.map((n) => {
                   const active = tableNumber === n;
                   const disabled = isNumberDisabled(n);
                   return (
@@ -632,7 +683,7 @@ export function VIPTableModal({
                 <p className="text-sm text-red-600 mt-2">{errors.table}</p>
               )}
 
-              {/* 👇 MODAL con el mapa (imagen) */}
+              {/* Modal del mapa */}
               <Dialog open={mapOpen} onOpenChange={setMapOpen}>
                 <DialogContent className="max-w-3xl w-[94vw]">
                   <DialogHeader>
@@ -642,10 +693,8 @@ export function VIPTableModal({
                       la tuya.
                     </DialogDescription>
                   </DialogHeader>
-
                   <div className="relative">
                     <div className="w-full rounded-lg overflow-hidden border bg-black/5">
-                      {/* Si usás next/image, podés reemplazar por <Image /> */}
                       <img
                         src={mapImageUrl}
                         alt="Mapa de mesas VIP"
@@ -832,7 +881,8 @@ export function VIPTableModal({
                 cfgLoading ||
                 !!cfgError ||
                 !vipPrice ||
-                (!remainingTables && remainingTables !== 0) ||
+                (!Number.isFinite(remainingTables as number) &&
+                  remainingTables !== 0) ||
                 soldOut ||
                 !selectedLocation ||
                 !customer.gender ||
