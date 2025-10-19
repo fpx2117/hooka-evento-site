@@ -221,6 +221,7 @@ async function makeQrDataUrl(code: string, scale = 4) {
 ========================= */
 function pickDiscountRule(
   rules: DiscountCfg[],
+  // @ts-ignore
   ticketType: "general" | "vip",
   qty: number
 ): DiscountCfg | null {
@@ -1401,7 +1402,7 @@ export default function AdminDashboard() {
             <div className="sm:hidden flex items-center gap-2">
               <Button
                 variant="outline"
-                onClick={() => router.push("/admin/validate")}
+                onClick={() => router.push("/validate")}
                 className="border-border/50 hover:bg-accent"
                 aria-label="Validar QR"
               >
@@ -2436,7 +2437,7 @@ export default function AdminDashboard() {
 
           <form onSubmit={saveConfig} className="space-y-6 pt-4">
             {/* STOCK TOTAL (PERSONAS) */}
-            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg-black/20">
+            <div className="rounded-xl border border-border/50 p-5 space-y-4 bg-white/50 dark:bg.black/20 dark:bg-black/20">
               <div className="flex items-center justify-between">
                 <h4 className="font-semibold text-lg">
                   Stock TOTAL (personas)
@@ -2584,7 +2585,7 @@ export default function AdminDashboard() {
                   return (
                     <div
                       key={row.location}
-                      className="rounded-lg border border-amber-200/60 dark:border-amber-800/60 p-4 bg-white/60 dark:bg-black/20"
+                      className="rounded-lg border border-amber-200/60 dark:border-amber-800/60 p-4 bg.white/60 dark:bg-black/20"
                     >
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
