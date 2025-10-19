@@ -11,13 +11,14 @@ import { coerceLocation, getActiveEventId } from "@/lib/vip-tables";
  *   ok: true,
  *   eventId: string,
  *   location: "dj" | "piscina" | "general",
- *   limit: number,                 // mesas totales configuradas (1..limit) del EVENTO
- *   startNumber: number|null,      // primer número de mesa del sector (global)
- *   endNumber: number|null,        // último número de mesa del sector (global)
- *   taken: number[],               // mesas OCUPADAS en numeración global (del sector solicitado)
- *   remainingTables: number|null,  // mesas libres del sector (si hay VipTableConfig)
- *   price: number|null,            // precio por mesa (sector)
- *   capacityPerTable: number|null  // personas por mesa (sector)
+ *   limit: number,                 // mesas totales del EVENTO (1..limit)
+ *   startNumber: number|null,      // primer número global del sector
+ *   endNumber: number|null,        // último número global del sector
+ *   taken: number[],               // mesas ocupadas en numeración global (solo del sector consultado)
+ *   remainingTables: number|null,  // libres en el sector (si hay VipTableConfig)
+ *   price: number|null,
+ *   capacityPerTable: number|null,
+ *   _debug?: { invalidTablesCount: number, examples: number[] } // opcional
  * }
  */
 export async function GET(req: NextRequest) {
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest) {
     const eventIdParam = (searchParams.get("eventId") || "").trim();
     const eventCodeParam = (searchParams.get("eventCode") || "").trim();
 
-    // Validar ubicación
+    // 1) Validación de ubicación
     const location = coerceLocation(locParam);
     if (!location) {
       return NextResponse.json(
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Resolver evento activo / por id / por code
+    // 2) Resolver evento
     const eventId = await getActiveEventId({
       prisma,
       eventId: eventIdParam || undefined,
@@ -49,7 +50,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Traer TODAS las configuraciones de mesas VIP del evento
+    // 3) Traer TODAS las configuraciones VIP del evento
     const allCfg = await prisma.vipTableConfig.findMany({
       where: { eventId },
       select: {
@@ -61,25 +62,24 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // Mapa por ubicación para fácil acceso
     const cfgByLoc = new Map<TableLocation, (typeof allCfg)[number]>();
     for (const c of allCfg) cfgByLoc.set(c.location as TableLocation, c);
 
-    // Orden fijo de sectores para numeración secuencial
+    // 4) Orden fijo → numera secuencialmente por evento
     const ORDER: TableLocation[] = [
       TableLocation.dj,
       TableLocation.piscina,
       TableLocation.general,
     ];
 
-    // Total de mesas del evento (suma de stockLimit)
+    // Total de mesas del evento
     const totalLimit =
       allCfg.reduce((acc, c) => acc + (c.stockLimit ?? 0), 0) || 0;
 
     // Config del sector solicitado
     const cfg = cfgByLoc.get(location as TableLocation);
 
-    // Si no hay config para el sector, devolvemos sin rango ni datos de sector
+    // Si no hay config para el sector, respondemos datos mínimos
     if (!cfg) {
       return NextResponse.json({
         ok: true,
@@ -95,25 +95,25 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Calcular offset del sector: mesas de sectores anteriores en el orden definido
+    // 5) Offset del sector (suma stockLimit de sectores anteriores)
     const idx = ORDER.indexOf(location as TableLocation);
     const offset = ORDER.slice(0, Math.max(0, idx)).reduce((acc, loc) => {
       const c = cfgByLoc.get(loc);
       return acc + (c?.stockLimit ?? 0);
     }, 0);
 
-    // Rango global del sector (1-indexed)
+    // Rango global del sector
     const startNumber = cfg.stockLimit ? offset + 1 : null;
     const endNumber =
       cfg.stockLimit && cfg.stockLimit > 0 ? offset + cfg.stockLimit : null;
 
-    // Tickets “ocupados” del sector (pagos aprobados o en proceso)
+    // 6) Tickets ocupados del sector (aprobado o en proceso)
     const tickets = await prisma.ticket.findMany({
       where: {
         eventId,
         ticketType: "vip",
         vipLocation: location as TableLocation,
-        tableNumber: { not: null }, // tableNumber guardado a nivel SECTOR (1..stockLimit)
+        tableNumber: { not: null }, // guardado local (1..stockLimit)
         paymentStatus: {
           in: [PaymentStatus.approved, PaymentStatus.in_process],
         },
@@ -121,13 +121,20 @@ export async function GET(req: NextRequest) {
       select: { tableNumber: true },
     });
 
-    // Convertir numeración local (sector) a numeración GLOBAL sumando el offset
-    const taken =
-      tickets
-        .map((t) => t.tableNumber)
-        .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
-        .map((n) => n + offset) ?? [];
+    // 7) Filtrar fuera de rango (local) y mapear a global
+    const stock = cfg.stockLimit ?? 0;
+    const isValidLocal = (n: unknown): n is number =>
+      typeof n === "number" && Number.isFinite(n) && n >= 1 && n <= stock;
 
+    const localNumbers = tickets.map((t) => t.tableNumber);
+    const validLocal = localNumbers.filter(isValidLocal);
+    const invalidLocal = localNumbers.filter(
+      (n) => typeof n === "number" && Number.isFinite(n) && !isValidLocal(n)
+    );
+
+    const taken = validLocal.map((n) => n + offset);
+
+    // 8) Libres del sector (según cfg)
     const remainingTables =
       typeof cfg.stockLimit === "number" && typeof cfg.soldCount === "number"
         ? Math.max(0, cfg.stockLimit - cfg.soldCount)
@@ -136,14 +143,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       eventId,
-      location, // sector consultado
-      limit: totalLimit, // total global del evento (1..limit)
-      startNumber, // primer número global de este sector
-      endNumber, // último número global de este sector
-      taken, // números globales ocupados (del sector)
-      remainingTables, // libres en este sector
+      location,
+      limit: totalLimit,
+      startNumber,
+      endNumber,
+      taken, // sólo válidos en numeración GLOBAL
+      remainingTables,
       price: cfg.price != null ? Number(cfg.price) : null,
       capacityPerTable: cfg.capacityPerTable ?? null,
+      // Quitar si no querés exponer debug
+      _debug: invalidLocal.length
+        ? {
+            invalidTablesCount: invalidLocal.length,
+            examples: invalidLocal.slice(0, 5),
+          }
+        : undefined,
     });
   } catch (err) {
     console.error("[vip-tables/availability] Error:", err);
