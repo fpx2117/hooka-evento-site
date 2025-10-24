@@ -64,10 +64,12 @@ export default function RootLayout({
           <Suspense fallback={null}>{children}</Suspense>
         </Providers>
 
-        {/* Botón flotante global (responsive + animación) */}
         <WhatsAppButton
+          text="¡Hola! Vengo de la web de Hooka Party"
           variant="compact"
           positionClassName="bottom-4 right-4"
+          excludePrefixes={["/admin", "/dashboard", "/panel"]} // 👈 prefijos
+          excludeRegex={["^/gestion(/|$)"]} // 👈 regex como string
         />
 
         <Analytics />
