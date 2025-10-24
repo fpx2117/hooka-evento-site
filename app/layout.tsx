@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { Suspense } from "react";
 import Providers from "./providers";
 import "./globals.css";
+import WhatsAppButton from "@/components/whatsapp-button";
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -46,14 +47,15 @@ export default function RootLayout({
   return (
     <html lang="es" suppressHydrationWarning>
       <head>
-        {/* Favicon clásico desde /public */}
+        {/* Asegura codificación correcta para emojis */}
+        <meta charSet="utf-8" />
+        {/* Favicon desde /public */}
         <link rel="icon" href="/logov1.png" />
-        {/* Si preferís PNG en /public/icon.png, usá esta en lugar de la anterior: */}
-        {/* <link rel="icon" href="/icon.png" type="image/png" sizes="32x32" /> */}
-
-        {/* Opcional: iOS y manifest si los agregás en /public */}
-        {/* <link rel="apple-touch-icon" href="/apple-touch-icon.png" /> */}
-        {/* <link rel="manifest" href="/site.webmanifest" /> */}
+        {/* Ejemplo alternativo:
+        <link rel="icon" href="/icon.png" type="image/png" sizes="32x32" /> */}
+        {/* Opcional:
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/site.webmanifest" /> */}
       </head>
       <body
         className={`min-h-screen bg-white text-gray-900 dark:bg-[#0a0a0a] dark:text-gray-100 antialiased ${poppins.variable} ${bebasNeue.variable}`}
@@ -61,6 +63,13 @@ export default function RootLayout({
         <Providers>
           <Suspense fallback={null}>{children}</Suspense>
         </Providers>
+
+        {/* Botón flotante global (responsive + animación) */}
+        <WhatsAppButton
+          variant="compact"
+          positionClassName="bottom-4 right-4"
+        />
+
         <Analytics />
       </body>
     </html>
