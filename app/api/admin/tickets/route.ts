@@ -12,6 +12,7 @@ import {
   TicketType as TT,
   Gender as G,
   TableLocation as TL,
+  ArchiveReason as AR, // 👈 enum nuevo para historial
 } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -144,7 +145,7 @@ async function priceForGeneral(
 async function priceForVip(
   eventId: string,
   location: TL,
-  tables: number // sigue existiendo en el modelo (stock), pero lo forzamos a 1
+  tables: number
 ): Promise<{
   vipConfigId: string;
   capacityPerTable: number;
@@ -195,13 +196,7 @@ async function adjustVipSoldCount(
   });
 }
 
-/* ========================= Validaciones mesa ========================= */
-/**
- * Resuelve el número de mesa recibido:
- * 🔸 PRIORIDAD GLOBAL: si el número cae dentro del rango global del sector,
- *     se interpreta como GLOBAL y se convierte a LOCAL.
- * 🔸 Si no, se acepta como LOCAL (1..stockLimit).
- */
+/* ========================= VIP: Mesas ========================= */
 async function resolveLocalTableNumber(params: {
   eventId: string;
   location: TL;
@@ -218,7 +213,6 @@ async function resolveLocalTableNumber(params: {
     throw new Error("table_required");
   }
 
-  // Traemos límite del sector
   const cfg = await prisma.vipTableConfig.findUnique({
     where: { eventId_location: { eventId, location } },
     select: { stockLimit: true },
@@ -226,7 +220,6 @@ async function resolveLocalTableNumber(params: {
   if (!cfg) throw new Error("vip_cfg_not_found");
   const stockLimit = cfg.stockLimit;
 
-  // 1) ¿Cae dentro del RANGO GLOBAL del sector? => interpretar como GLOBAL
   const { ranges } = await getVipSequentialRanges({ prisma, eventId });
   const r = ranges.find((x) => x.location === location);
   if (r && inputNumber >= r.startNumber && inputNumber <= r.endNumber) {
@@ -236,7 +229,6 @@ async function resolveLocalTableNumber(params: {
     }
   }
 
-  // 2) Si no es global del sector, aceptar como LOCAL (1..stockLimit)
   if (inputNumber >= 1 && inputNumber <= stockLimit) {
     return { localNumber: inputNumber, stockLimit };
   }
@@ -247,9 +239,9 @@ async function resolveLocalTableNumber(params: {
 async function assertTableNumberFreeAndValid(opts: {
   eventId: string;
   location: TL;
-  tableNumber: number | undefined; // ya debe ser local cuando se use
+  tableNumber: number | undefined;
   stockLimit: number;
-  excludeTicketId?: string; // para PUT (evitar false positives con el propio ticket)
+  excludeTicketId?: string;
 }) {
   const { eventId, location, tableNumber, stockLimit, excludeTicketId } = opts;
 
@@ -265,7 +257,6 @@ async function assertTableNumberFreeAndValid(opts: {
     throw new Error("table_out_of_range");
   }
 
-  // ¿ya está ocupada por un ticket approved/in_process?
   const taken = await prisma.ticket.findFirst({
     where: {
       eventId,
@@ -278,6 +269,79 @@ async function assertTableNumberFreeAndValid(opts: {
     select: { id: true },
   });
   if (taken) throw new Error("table_taken");
+}
+
+/* ========================= Archivado ========================= */
+async function copyTicketToArchive(
+  tx: DB,
+  ticketId: string,
+  opts: { reason: AR; archivedBy?: string; notes?: string }
+) {
+  const t = await tx.ticket.findUnique({ where: { id: ticketId } });
+  if (!t) throw new Error("ticket_not_found");
+
+  // Crear registro en archivo. Importante: NO usamos unique en paymentId/qr/validationCode dentro del archivo.
+  await tx.ticketArchive.create({
+    data: {
+      archivedFromId: t.id,
+      eventId: t.eventId,
+      ticketType: t.ticketType,
+      gender: t.gender,
+      quantity: t.quantity,
+      vipLocation: t.vipLocation,
+      vipTables: t.vipTables,
+      capacityPerTable: t.capacityPerTable,
+      tableNumber: t.tableNumber,
+      totalPrice: t.totalPrice,
+      customerName: t.customerName,
+      customerEmail: t.customerEmail,
+      customerPhone: t.customerPhone,
+      customerDni: t.customerDni,
+      paymentId: t.paymentId,
+      paymentStatus: t.paymentStatus,
+      paymentMethod: t.paymentMethod,
+      qrCode: t.qrCode,
+      validationCode: t.validationCode,
+      validated: t.validated,
+      validatedAt: t.validatedAt,
+      purchaseDate: t.purchaseDate,
+      eventDate: t.eventDate,
+      expiresAt: t.expiresAt,
+      ticketConfigId: t.ticketConfigId,
+      emailSentAt: t.emailSentAt,
+      archiveReason: opts.reason,
+      archivedBy: opts.archivedBy,
+      archiveNotes: opts.notes,
+    },
+  });
+
+  // Si estaba aprobado y era VIP, revertir stock
+  if (
+    t.ticketType === TT.vip &&
+    t.paymentStatus === PS.approved &&
+    t.vipLocation &&
+    t.vipTables
+  ) {
+    await adjustVipSoldCount(tx, t.eventId, t.vipLocation, -t.vipTables);
+  }
+
+  // Borrar ticket activo
+  await tx.ticket.delete({ where: { id: t.id } });
+}
+
+async function archiveTicket(params: {
+  ticketId: string;
+  reason: AR;
+  archivedBy?: string;
+  notes?: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    await copyTicketToArchive(tx, params.ticketId, {
+      reason: params.reason,
+      archivedBy: params.archivedBy,
+      notes: params.notes,
+    });
+  });
 }
 
 /* =========================================================
@@ -355,10 +419,9 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    // Compat para el dashboard (alias de ubicación)
     const normalized = tickets.map((t) => ({
       ...t,
-      tableLocation: t.vipLocation ?? null, // alias para UI
+      tableLocation: t.vipLocation ?? null,
     }));
 
     return NextResponse.json({
@@ -531,10 +594,8 @@ export async function POST(request: NextRequest) {
     if (!locEnum)
       return NextResponse.json({ error: "location inválida" }, { status: 400 });
 
-    // Una sola mesa por ticket → forzamos tables=1 (se sigue usando para stock)
-    const tables = 1;
+    const tables = 1; // una por ticket
 
-    // Precio + límites por ubicación
     const priced = await priceForVip(event.id, locEnum, tables);
     if (tables > priced.remainingTables) {
       return NextResponse.json(
@@ -543,7 +604,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Mesa: aceptar local o global y normalizar a local (prioridad global)
     const tableNumberInput =
       typeof body.tableNumber === "number"
         ? body.tableNumber
@@ -575,7 +635,6 @@ export async function POST(request: NextRequest) {
       throw e;
     }
 
-    // Validar que la mesa local esté libre (colisión)
     try {
       await assertTableNumberFreeAndValid({
         eventId: event.id,
@@ -606,7 +665,6 @@ export async function POST(request: NextRequest) {
     const totalPrice = priced.total;
     const tableNumberLocal = localResult.localNumber;
 
-    // Transacción: ajustar stock (si approved) + crear ticket
     const created = await prisma.$transaction(async (tx) => {
       if (paymentStatus === PS.approved) {
         await adjustVipSoldCount(tx, event.id, locEnum, +tables);
@@ -621,12 +679,10 @@ export async function POST(request: NextRequest) {
               eventId: event.id,
               eventDate: event.date,
               ticketType: TT.vip,
-              // snapshot VIP
               vipLocation: locEnum,
-              vipTables: tables, // siempre 1
+              vipTables: tables,
               capacityPerTable: vipCapacity,
-              tableNumber: tableNumberLocal, // ✅ siempre LOCAL
-
+              tableNumber: tableNumberLocal,
               totalPrice,
               customerName,
               customerEmail,
@@ -703,7 +759,6 @@ export async function PUT(request: NextRequest) {
     if (!current)
       return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    // Build changes
     const dataToUpdate: Prisma.TicketUpdateInput = {};
 
     // GENERAL fields
@@ -745,7 +800,6 @@ export async function PUT(request: NextRequest) {
         if (c !== undefined) dataToUpdate.capacityPerTable = Math.max(1, c);
       }
       if (wantsTableNumber) {
-        // Aceptar local o global y normalizar a local según ubicación efectiva (prioridad global)
         const tableNumberInput =
           typeof body.tableNumber === "number"
             ? body.tableNumber
@@ -793,7 +847,7 @@ export async function PUT(request: NextRequest) {
             location: effLoc,
             tableNumber: localResult.localNumber,
             stockLimit: localResult.stockLimit,
-            excludeTicketId: current.id, // permitir la propia
+            excludeTicketId: current.id,
           });
         } catch (e: any) {
           if (e?.message === "table_required")
@@ -814,7 +868,7 @@ export async function PUT(request: NextRequest) {
           throw e;
         }
 
-        dataToUpdate.tableNumber = localResult.localNumber; // ✅ guardar LOCAL
+        dataToUpdate.tableNumber = localResult.localNumber; // LOCAL
       }
     } else if (
       wantsLocation ||
@@ -867,7 +921,7 @@ export async function PUT(request: NextRequest) {
     dataToUpdate.paymentStatus = nextStatus;
 
     const updated = await prisma.$transaction(async (tx) => {
-      // Si hay transición de estado que cruce a/from approved y es VIP => ajustar stock
+      // manejar cruce de aprobado <-> no aprobado (ajuste stock VIP)
       if (
         current.ticketType === TT.vip &&
         current.vipLocation &&
@@ -877,7 +931,6 @@ export async function PUT(request: NextRequest) {
         const willBeApproved = nextStatus === PS.approved;
 
         if (!wasApproved && willBeApproved) {
-          // aprobar VIP
           await adjustVipSoldCount(
             tx,
             current.eventId,
@@ -885,7 +938,6 @@ export async function PUT(request: NextRequest) {
             +current.vipTables
           );
         } else if (wasApproved && !willBeApproved) {
-          // des-approbar VIP
           await adjustVipSoldCount(
             tx,
             current.eventId,
@@ -899,7 +951,6 @@ export async function PUT(request: NextRequest) {
       return tx.ticket.findUnique({ where: { id } });
     });
 
-    // asegurar código si quedó approved
     const hadValid = !!normalizeSixDigitCode(current.validationCode);
     if (updated?.paymentStatus === PS.approved && !hadValid) {
       await ensureSixDigitCode(prisma, { id });
@@ -929,13 +980,12 @@ export async function PATCH(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    // Reusar PUT (misma lógica). Mantengo PATCH como alias semántico.
     const req2 = new Request(new URL(request.url), {
       method: "PUT",
       headers: request.headers,
       body: JSON.stringify(body),
     });
-    // @ts-ignore Next.js route handlers permiten reusar
+    // @ts-ignore
     return await PUT(req2 as any);
   } catch (error) {
     console.error("[tickets][PATCH] Error:", error);
@@ -947,7 +997,7 @@ export async function PATCH(request: NextRequest) {
 }
 
 /* =========================================================
-   DELETE /api/admin/tickets?id=xxx — borra Ticket
+   DELETE /api/admin/tickets?id=xxx — ARCHIVA Ticket
 ========================================================= */
 export async function DELETE(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -960,32 +1010,37 @@ export async function DELETE(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    const current = await prisma.ticket.findUnique({ where: { id } });
-    if (!current)
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // Opcionalmente podés pasar ?reason=... para especificar motivo
+    // valores: admin_cancelled | user_deleted | refunded | charged_back | payment_timeout | other
+    const reasonParam = normString(searchParams.get("reason"));
+    const reasonMap: Record<string, AR> = {
+      user_deleted: AR.user_deleted,
+      admin_cancelled: AR.admin_cancelled,
+      payment_timeout: AR.payment_timeout,
+      refunded: AR.refunded,
+      charged_back: AR.charged_back,
+      other: AR.other,
+    };
+    const reason: AR = reasonParam
+      ? (reasonMap[reasonParam] ?? AR.other)
+      : AR.admin_cancelled;
 
-    await prisma.$transaction(async (tx) => {
-      if (
-        current.ticketType === TT.vip &&
-        current.paymentStatus === PS.approved &&
-        current.vipLocation &&
-        current.vipTables
-      ) {
-        await adjustVipSoldCount(
-          tx,
-          current.eventId,
-          current.vipLocation,
-          -current.vipTables
-        );
-      }
-      await tx.ticket.delete({ where: { id } });
+    // (Opcional) quién archiva
+    const archivedBy = typeof auth?.sub === "string" ? auth.sub : undefined;
+
+    // ⚠️ Archivar en vez de borrar
+    await archiveTicket({
+      ticketId: id,
+      reason,
+      archivedBy,
+      notes: "Archived via DELETE /admin/tickets",
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, archived: true, reason });
   } catch (error) {
     console.error("[tickets][DELETE] Error:", error);
     return NextResponse.json(
-      { error: "Failed to delete ticket" },
+      { error: "Failed to archive ticket" },
       { status: 500 }
     );
   }

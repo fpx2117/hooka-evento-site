@@ -1,8 +1,9 @@
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AdminTicket, TicketsConfig } from "../types";
-import { buildValidateUrl, makeQrDataUrl } from "../utils/qr";
+import { makeQrDataUrl } from "../utils/qr";
 import RowActionsMenu from "./RowActionsMenu";
 import {
   CheckCircle,
@@ -10,10 +11,37 @@ import {
   Edit,
   Mail,
   MapPin,
-  Ticket,
+  Ticket as TicketIcon,
   Trash2,
 } from "lucide-react";
 
+/* =========================
+   Estilos / Prefijos por estado
+========================= */
+const STATUS_STYLES: Record<AdminTicket["paymentStatus"], string> = {
+  approved: "bg-emerald-100 text-emerald-700",
+  pending: "bg-amber-100 text-amber-700",
+  in_process: "bg-blue-100 text-blue-700",
+  rejected: "bg-rose-100 text-rose-700",
+  failed_preference: "bg-stone-100 text-stone-700",
+  cancelled: "bg-orange-100 text-orange-700",
+  refunded: "bg-purple-100 text-purple-800",
+  charged_back: "bg-red-100 text-red-700",
+};
+
+const STATUS_PREFIX: Partial<Record<AdminTicket["paymentStatus"], string>> = {
+  approved: "✓ ",
+  rejected: "✕ ",
+  pending: "⏱ ",
+  in_process: "⏳ ",
+  cancelled: "⛔ ",
+  refunded: "↩︎ ",
+  charged_back: "⟲ ",
+};
+
+/* =========================
+   Componente
+========================= */
 export default function TicketRow({
   ticket,
   onApprove,
@@ -45,15 +73,19 @@ export default function TicketRow({
           ? [ticket.tableNumber]
           : [];
     if (!nums.length || !loc) return nums;
+
     const sector = vipRanges.find((v) => v.location === loc);
     if (!sector) return nums;
+
     const start = Number.isFinite(sector.startNumber as any)
       ? Number(sector.startNumber)
       : null;
     const end = Number.isFinite(sector.endNumber as any)
       ? Number(sector.endNumber)
       : null;
+
     if (start == null || end == null) return nums;
+
     const span = end - start + 1;
     return nums.map((n) => {
       if (n >= start && n <= end) return n;
@@ -67,6 +99,7 @@ export default function TicketRow({
     vipRanges,
   ]);
 
+  // Generar QR preview
   useEffect(() => {
     let active = true;
     (async () => {
@@ -82,6 +115,12 @@ export default function TicketRow({
       active = false;
     };
   }, [ticket.validationCode]);
+
+  // Permitir aprobar solo estados coherentes
+  const canApprove =
+    ticket.paymentStatus === "pending" ||
+    ticket.paymentStatus === "in_process" ||
+    ticket.paymentStatus === "failed_preference";
 
   const approveBtn = (
     <Button
@@ -103,10 +142,16 @@ export default function TicketRow({
       className="border-border/50"
       title="Enviar email de confirmación"
     >
-      <Mail className="w-4 h-4 mr-1.5" />{" "}
+      <Mail className="w-4 h-4 mr-1.5" />
       {sending ? "Enviando…" : "Enviar mail"}
     </Button>
   );
+
+  // Marcar "vencido" si pending y ya expiró (requiere ticket.expiresAt)
+  const isExpiredPending =
+    ticket.paymentStatus === "pending" &&
+    !!ticket.expiresAt &&
+    new Date(ticket.expiresAt) < new Date();
 
   return (
     <tr className="border-b border-border/50 hover:bg-gray/50 transition-colors">
@@ -130,14 +175,14 @@ export default function TicketRow({
           {ticket.ticketType === "vip" ? (
             <Crown className="w-4 h-4 text-amber-500" />
           ) : (
-            <Ticket className="w-4 h-4 text-blue-500" />
+            <TicketIcon className="w-4 h-4 text-blue-500" />
           )}
           <span className="capitalize font-medium text-sm">
             {ticket.ticketType}
           </span>
           {ticket.ticketType === "vip" && (
             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-amber-400/50 text-amber-700 bg-amber-50">
-              <MapPin className="w-3 h-3" />{" "}
+              <MapPin className="w-3 h-3" />
               {(ticket.tableLocation || "—").toString()}
             </span>
           )}
@@ -181,19 +226,17 @@ export default function TicketRow({
 
       <td className="p-4">
         <span
-          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
-            ticket.paymentStatus === "approved"
-              ? "bg-emerald-100 text-emerald-700"
-              : ticket.paymentStatus === "rejected"
-                ? "bg-red-100 text-red-700"
-                : "bg-amber-100 text-amber-700"
-          }`}
+          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${STATUS_STYLES[ticket.paymentStatus]}`}
+          title={ticket.paymentStatus}
         >
-          {ticket.paymentStatus === "approved" && "✓ "}
-          {ticket.paymentStatus === "rejected" && "✕ "}
-          {ticket.paymentStatus === "pending" && "⏱ "}
+          {STATUS_PREFIX[ticket.paymentStatus] || ""}
           {ticket.paymentStatus}
         </span>
+        {isExpiredPending && (
+          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">
+            vencido
+          </span>
+        )}
       </td>
 
       <td className="p-4">
@@ -226,7 +269,7 @@ export default function TicketRow({
 
       <td className="p-4 text-right">
         <div className="hidden sm:flex items-center justify-end gap-2">
-          {ticket.paymentStatus !== "approved" && approveBtn}
+          {canApprove && approveBtn}
           {ticket.paymentStatus === "approved" && sendBtn}
           <Button
             variant="ghost"
@@ -245,13 +288,15 @@ export default function TicketRow({
             <Trash2 className="w-4 h-4 text-red-600" />
           </Button>
         </div>
+
+        {/* Mobile: menú contextual */}
         <div className="sm:hidden flex justify-end">
           <RowActionsMenu
             onApprove={() => onApprove(ticket)}
             onSendEmail={() => onSendEmail(ticket)}
             onEdit={() => onEdit(ticket)}
             onDelete={() => onDelete(ticket.id)}
-            canApprove={ticket.paymentStatus !== "approved"}
+            canApprove={canApprove}
             canEmail={ticket.paymentStatus === "approved"}
             sending={!!sending}
           />

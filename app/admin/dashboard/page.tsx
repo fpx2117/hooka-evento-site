@@ -8,10 +8,11 @@ import {
   QrCode,
   SlidersHorizontal,
   DollarSign,
-  Ticket,
+  Ticket as TicketIcon,
   Crown,
   LogOut,
   Plus,
+  History, // <-- NUEVO: icono para historial
 } from "lucide-react";
 import {
   Card,
@@ -35,6 +36,8 @@ import TablesModal from "./modals/TablesModal";
 import EditTicketModal from "./modals/EditTicketModal";
 import ConfigModal from "./modals/ConfigModal";
 import QrModal from "./modals/QrModal";
+
+import ArchiveHistoryModal from "./components/ArchiveHistoryModal"; // <-- NUEVO: modal de historial
 
 import {
   AdminForm,
@@ -96,6 +99,7 @@ export default function AdminDashboard() {
   const [showAddVip, setShowAddVip] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showArchiveModal, setShowArchiveModal] = useState(false); // <-- NUEVO
 
   const [editingTicket, setEditingTicket] = useState<AdminTicket | null>(null);
 
@@ -165,7 +169,10 @@ export default function AdminDashboard() {
 
   const fetchTickets = async () => {
     try {
-      const response = await fetch("/api/admin/tickets", { cache: "no-store" });
+      // ⬇️ Mostrar SOLO aprobados en el dashboard, según requisito
+      const response = await fetch("/api/admin/tickets?status=approved", {
+        cache: "no-store",
+      });
       if (response.status === 401) {
         router.push("/admin/login");
         return;
@@ -549,10 +556,9 @@ export default function AdminDashboard() {
         totalPrice: vipTotalInfo.total,
         forceTotalPrice: true,
         location: formVip.tableLocation,
-        tableNumber: selectedTable,
-        tableNumberLocal: localNumber,
-        vipTableNumber: selectedTable,
-        table_local: localNumber,
+        // Enviamos ambos por compat: la API resuelve priorizando global → local
+        tableNumber: selectedTable, // global (si hay rango)
+        tableNumberLocal: localNumber, // local sugerido
       };
 
       const r = await fetch("/api/admin/tickets", {
@@ -668,8 +674,8 @@ export default function AdminDashboard() {
         const db = new Date(b.purchaseDate).getTime();
         return order === "asc" ? da - db : db - da;
       }
-      const pa = a.totalPrice || 0;
-      const pb = b.totalPrice || 0;
+      const pa = Number(a.totalPrice) || 0;
+      const pb = Number(b.totalPrice) || 0;
       return order === "asc" ? pa - pb : pb - pa;
     });
     return arr;
@@ -710,7 +716,7 @@ export default function AdminDashboard() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
-                <Ticket className="w-5 h-5 text-white" />
+                <TicketIcon className="w-5 h-5 text-white" />
               </div>
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold">
@@ -756,6 +762,17 @@ export default function AdminDashboard() {
               >
                 <DollarSign className="w-4 h-4 mr-2" /> Descuentos
               </Button>
+
+              {/* NUEVO: abrir historial */}
+              <Button
+                variant="secondary"
+                onClick={() => setShowArchiveModal(true)}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700"
+                title="Ver historial de tickets archivados"
+              >
+                <History className="w-4 h-4 mr-2" /> Historial
+              </Button>
+
               <Button
                 variant="ghost"
                 onClick={handleLogout}
@@ -774,6 +791,18 @@ export default function AdminDashboard() {
               >
                 <QrCode className="w-4 h-4" />
               </Button>
+
+              {/* NUEVO: botón móvil historial */}
+              <Button
+                variant="outline"
+                onClick={() => setShowArchiveModal(true)}
+                className="border-border/50 hover:bg-accent"
+                aria-label="Ver historial"
+                title="Historial"
+              >
+                <History className="w-4 h-4" />
+              </Button>
+
               <MobileHeaderActions
                 onOpenConfig={() => setShowConfigModal(true)}
                 onOpenDiscounts={async () => {
@@ -858,7 +887,7 @@ export default function AdminDashboard() {
             ) : filteredSortedTickets.length === 0 ? (
               <div className="text-center py-16">
                 <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mx-auto mb-4">
-                  <Ticket className="w-8 h-8 text-muted-foreground" />
+                  <TicketIcon className="w-8 h-8 text-muted-foreground" />
                 </div>
                 <p className="text-muted-foreground font-medium">
                   No hay entradas con estos filtros
@@ -1006,6 +1035,12 @@ export default function AdminDashboard() {
         onOpenChange={setQrModalOpen}
         code={qrModalCode}
         isMobile={isMobile}
+      />
+
+      {/* NUEVO: Modal Historial */}
+      <ArchiveHistoryModal
+        open={showArchiveModal}
+        onOpenChange={setShowArchiveModal}
       />
     </div>
   );

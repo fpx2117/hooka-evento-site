@@ -1,3 +1,5 @@
+// app/admin/dashboard/types.ts
+
 export type TableLocation = "piscina" | "dj" | "general";
 
 export type VipAvailability = {
@@ -11,6 +13,19 @@ export type VipAvailability = {
   capacityPerTable: number | null;
 };
 
+/**
+ * Estados de pago compatibles con el backend (Prisma enum PaymentStatus)
+ */
+export type PaymentStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "in_process"
+  | "failed_preference"
+  | "cancelled"
+  | "refunded"
+  | "charged_back";
+
 export interface AdminTicket {
   id: string;
   ticketType: "general" | "vip";
@@ -22,11 +37,12 @@ export interface AdminTicket {
   customerDni?: string;
   gender?: "hombre" | "mujer" | null;
   paymentMethod: "efectivo" | "transferencia" | "mercadopago";
-  paymentStatus: "pending" | "approved" | "rejected";
+  paymentStatus: PaymentStatus; // <-- expandido
   qrCode?: string | null;
   validationCode?: string | null;
   validated: boolean;
   purchaseDate: string;
+  expiresAt?: string | null; // <-- para timeout de pendientes
   tableNumber?: number | null;
   tableNumbers?: number[] | null;
   tableLocation?: TableLocation | null;
