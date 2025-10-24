@@ -3,55 +3,57 @@ import { PrismaClient, PaymentStatus } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// minutos para considerar timeout (default 5)
+// minutos desde la compra para considerar timeout
 const TIMEOUT_MINUTES = Number(process.env.PENDING_TIMEOUT_MINUTES ?? "5");
 
 async function main() {
   const cutoff = new Date(Date.now() - TIMEOUT_MINUTES * 60_000);
 
   console.log(
-    `[backfill] Archivando tickets pending con purchaseDate < ${cutoff.toISOString()}`
+    `[BACKFILL] Archivando tickets con estado pending previos a ${cutoff.toISOString()}`
   );
 
-  const pendings = await prisma.ticket.findMany({
+  // buscar todos los tickets pendientes o en proceso (por seguridad)
+  const pendingTickets = await prisma.ticket.findMany({
     where: {
-      paymentStatus: PaymentStatus.pending,
+      paymentStatus: {
+        in: [
+          PaymentStatus.pending,
+          PaymentStatus.in_process,
+          PaymentStatus.failed_preference,
+        ],
+      },
       purchaseDate: { lt: cutoff },
     },
   });
 
-  if (pendings.length === 0) {
-    console.log("[backfill] No hay tickets para archivar.");
+  if (pendingTickets.length === 0) {
+    console.log("[BACKFILL] No hay tickets para archivar.");
     return;
   }
 
-  console.log(`[backfill] Encontrados: ${pendings.length}`);
+  console.log(
+    `[BACKFILL] Se encontraron ${pendingTickets.length} tickets elegibles.`
+  );
 
-  const BATCH = 100;
-  for (let i = 0; i < pendings.length; i += BATCH) {
-    const slice = pendings.slice(i, i + BATCH);
-
-    await prisma.$transaction(async (tx) => {
-      for (const t of slice) {
+  for (const t of pendingTickets) {
+    try {
+      await prisma.$transaction(async (tx) => {
         await tx.ticketArchive.create({
           data: {
-            // 🔸 nuevos metadatos del schema
-            archiveReason: "payment_timeout",
-            archivedAt: new Date(),
-            archivedBy: "system/backfill",
-
             archivedFromId: t.id,
-
             eventId: t.eventId,
+            archivedAt: new Date(),
+            archivedBy: "system-backfill",
+            archiveReason: "payment_timeout",
+
             ticketType: t.ticketType,
             gender: t.gender,
             quantity: t.quantity,
-
             vipLocation: t.vipLocation,
             vipTables: t.vipTables,
             capacityPerTable: t.capacityPerTable,
             tableNumber: t.tableNumber,
-
             totalPrice: t.totalPrice,
 
             customerName: t.customerName,
@@ -60,7 +62,7 @@ async function main() {
             customerDni: t.customerDni,
 
             paymentId: t.paymentId,
-            paymentStatus: t.paymentStatus, // snapshot
+            paymentStatus: t.paymentStatus,
             paymentMethod: t.paymentMethod,
 
             qrCode: t.qrCode,
@@ -80,20 +82,23 @@ async function main() {
           },
         });
 
-        // Quitar del vivo (no ajusta stock: no estaba approved)
         await tx.ticket.delete({ where: { id: t.id } });
-      }
-    });
+      });
 
-    console.log(`[backfill] Lote ${i + 1}..${i + slice.length} OK`);
+      console.log(
+        `✔ Archivado ticket: ${t.customerName} (${t.customerEmail})`
+      );
+    } catch (err) {
+      console.error(`❌ Error al archivar ${t.id}:`, err);
+    }
   }
 
-  console.log("[backfill] Finalizado ✅");
+  console.log("[BACKFILL] Proceso completado ✅");
 }
 
 main()
-  .catch((e) => {
-    console.error("[backfill] Error:", e);
+  .catch((err) => {
+    console.error("[BACKFILL] Error general:", err);
     process.exit(1);
   })
   .finally(async () => {

@@ -13,6 +13,7 @@
     "start": "prisma migrate deploy && next start -p ${PORT:-3000}",
     "lint": "next lint",
     "seed": "tsx prisma/seed.ts",
+    "archive:backfill": "npx tsx scripts/archive_pending_backfill.ts",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy"
   },
