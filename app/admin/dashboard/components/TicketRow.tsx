@@ -1,7 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { AdminTicket, TicketsConfig } from "../types";
 import { makeQrDataUrl } from "../utils/qr";
@@ -22,36 +21,26 @@ import {
   ShieldAlert,
 } from "lucide-react";
 
-/** Estado de pago estrictamente como viene del ticket (sin null/undefined) */
-type PaymentStatusStrict = Exclude<
-  AdminTicket["paymentStatus"],
-  null | undefined
->;
-/** Filtro que acepta 'all' además de los estados estrictos */
+/* ========================= Utiles ========================= */
+
+type PaymentStatusStrict =
+  | "approved"
+  | "rejected"
+  | "pending"
+  | "in_process"
+  | "failed_preference"
+  | "cancelled"
+  | "refunded"
+  | "charged_back";
+
 type PaymentStatusFilter = "all" | PaymentStatusStrict;
 
-/** Helper: short code legible del QR */
 function shortQr(qr: unknown): string {
   if (typeof qr === "string") return qr.length > 8 ? qr.slice(-8) : qr;
   if (typeof qr === "number") return String(qr);
-  if (qr && typeof (qr as any).toString === "function")
-    return (qr as any).toString();
   return "—";
 }
 
-/** (Opcional) listado de estados soportados, útil si querés iterar */
-const ALL_STATUSES = [
-  "approved",
-  "rejected",
-  "pending",
-  "in_process",
-  "failed_preference",
-  "cancelled",
-  "refunded",
-  "charged_back",
-] as const satisfies readonly PaymentStatusStrict[];
-
-/** Etiqueta legible por estado (sin 'all') */
 const STATUS_LABEL: Record<PaymentStatusStrict, string> = {
   approved: "approved",
   rejected: "rejected",
@@ -62,8 +51,6 @@ const STATUS_LABEL: Record<PaymentStatusStrict, string> = {
   refunded: "refunded",
   charged_back: "charged back",
 };
-
-/** Icono por estado (sin 'all') */
 const STATUS_ICON: Record<PaymentStatusStrict, ReactNode> = {
   approved: <CheckCircle className="w-3.5 h-3.5 mr-1.5" />,
   rejected: <XCircle className="w-3.5 h-3.5 mr-1.5" />,
@@ -74,8 +61,6 @@ const STATUS_ICON: Record<PaymentStatusStrict, ReactNode> = {
   refunded: <Undo2 className="w-3.5 h-3.5 mr-1.5" />,
   charged_back: <ShieldAlert className="w-3.5 h-3.5 mr-1.5" />,
 };
-
-/** Estilos por estado (sin 'all') */
 const STATUS_STYLE: Record<PaymentStatusStrict, string> = {
   approved: "bg-emerald-100 text-emerald-700",
   rejected: "bg-rose-100 text-rose-700",
@@ -87,6 +72,77 @@ const STATUS_STYLE: Record<PaymentStatusStrict, string> = {
   charged_back: "bg-red-100 text-red-700",
 };
 
+/* ========= Rangos por sector (usa start/end; fallback suma limits en orden) ========= */
+
+function resolveSectorStartEnd(
+  vipRanges: TicketsConfig["vipTables"],
+  location: AdminTicket["tableLocation"] | null | undefined
+): { start: number; end: number } | null {
+  if (!location || !Array.isArray(vipRanges) || vipRanges.length === 0)
+    return null;
+
+  // Si el backend ya mandó start/end, usarlos
+  const found: any = vipRanges.find((r) => r?.location === location);
+  const s = Number(found?.startNumber);
+  const e = Number(found?.endNumber);
+  if (Number.isFinite(s) && Number.isFinite(e)) return { start: s, end: e };
+
+  // Fallback: calcular por acumulación en el orden recibido
+  let offset = 0;
+  for (const r of vipRanges as any[]) {
+    const lim = Number(r?.limit ?? 0) || 0;
+    if (r?.location === location) {
+      if (lim > 0) return { start: offset + 1, end: offset + lim };
+      return null;
+    }
+    offset += lim;
+  }
+  return null;
+}
+
+/* ========= Números globales (preferir del backend, si no convertir local→global) ========= */
+
+function getVipGlobalNumbers(
+  ticket: any,
+  vipRanges: TicketsConfig["vipTables"]
+): number[] {
+  // 1) Preferir los globales si existen
+  const numsGlobal: number[] =
+    Array.isArray(ticket?.tableNumbersGlobal) &&
+    ticket.tableNumbersGlobal.length
+      ? ticket.tableNumbersGlobal.map(Number).filter(Number.isFinite)
+      : Number.isFinite(Number(ticket?.tableNumberGlobal))
+        ? [Number(ticket.tableNumberGlobal)]
+        : [];
+
+  if (numsGlobal.length) return numsGlobal.slice().sort((a, b) => a - b);
+
+  // 2) Tomar los locales (o legacy) y convertir
+  const numsLocal: number[] =
+    Array.isArray(ticket?.tableNumbersLocal) && ticket.tableNumbersLocal.length
+      ? ticket.tableNumbersLocal.map(Number).filter(Number.isFinite)
+      : Number.isFinite(Number(ticket?.tableNumberLocal))
+        ? [Number(ticket.tableNumberLocal)]
+        : Array.isArray(ticket?.tableNumbers) && ticket.tableNumbers.length
+          ? ticket.tableNumbers.map(Number).filter(Number.isFinite)
+          : Number.isFinite(Number(ticket?.tableNumber))
+            ? [Number(ticket.tableNumber)]
+            : [];
+
+  if (!numsLocal.length) return [];
+
+  const loc = ticket?.tableLocation ?? null;
+  const sector = resolveSectorStartEnd(vipRanges, loc);
+  if (!sector) return numsLocal.slice().sort((a, b) => a - b); // sin rango, mostrar como vienen
+
+  const start = sector.start;
+  return numsLocal
+    .map((n: number) => start + (Number(n) - 1))
+    .sort((a, b) => a - b);
+}
+
+/* ========================= Componente ========================= */
+
 export default function TicketRow({
   ticket,
   onApprove,
@@ -96,7 +152,6 @@ export default function TicketRow({
   onSendEmail,
   sending = false,
   vipRanges,
-  /** opcional: filtro activo para resaltar/atenuar visualmente */
   statusFilter = "all",
 }: {
   ticket: AdminTicket;
@@ -111,53 +166,37 @@ export default function TicketRow({
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
 
-  /** Numeración local → global según rangos (con guards) */
-  const displayNumbers: number[] = useMemo(() => {
-    const loc = ticket?.tableLocation ?? undefined;
-    const rawNums =
-      Array.isArray(ticket?.tableNumbers) && ticket.tableNumbers.length > 0
-        ? ticket.tableNumbers
-        : Number.isFinite(ticket?.tableNumber as any)
-          ? [Number(ticket!.tableNumber)]
-          : [];
+  const globalNumbers = useMemo(
+    () => getVipGlobalNumbers(ticket as any, vipRanges),
+    [ticket, vipRanges]
+  );
 
-    if (!rawNums.length || !loc) return rawNums;
+  // Locales para el tooltip (si tenemos rango, los recalculamos desde global)
+  const localNumbers = useMemo(() => {
+    const loc = (ticket as any)?.tableLocation ?? null;
+    const sector = resolveSectorStartEnd(vipRanges, loc);
+    if (!sector || !globalNumbers.length) {
+      // Fallback: si ya vienen locales del backend
+      const locals: number[] =
+        Array.isArray((ticket as any)?.tableNumbersLocal) &&
+        (ticket as any).tableNumbersLocal.length
+          ? (ticket as any).tableNumbersLocal
+              .map(Number)
+              .filter(Number.isFinite)
+          : Number.isFinite(Number((ticket as any)?.tableNumberLocal))
+            ? [Number((ticket as any).tableNumberLocal)]
+            : [];
+      return locals.slice().sort((a, b) => a - b);
+    }
+    const start = sector.start;
+    return globalNumbers.map((g) => g - (start - 1)).sort((a, b) => a - b);
+  }, [ticket, vipRanges, globalNumbers]);
 
-    const ranges = Array.isArray(vipRanges) ? vipRanges : [];
-    const sector = ranges.find((v) => v.location === loc);
-    if (!sector) return rawNums;
-
-    const start =
-      sector?.startNumber != null && Number.isFinite(sector.startNumber as any)
-        ? Number(sector.startNumber)
-        : null;
-    const end =
-      sector?.endNumber != null && Number.isFinite(sector.endNumber as any)
-        ? Number(sector.endNumber)
-        : null;
-
-    if (start == null || end == null) return rawNums;
-
-    const span = end - start + 1;
-    return rawNums.map((n) => {
-      const num = Number(n);
-      if (!Number.isFinite(num)) return n as any;
-      if (num >= start && num <= end) return num; // ya es global
-      if (num >= 1 && num <= span) return num + (start - 1); // local → global
-      return num;
-    });
-  }, [
-    ticket.tableLocation,
-    ticket.tableNumber,
-    ticket.tableNumbers,
-    vipRanges,
-  ]);
-
-  /** Generar mini QR (si hay validationCode) */
+  // QR mini
   useEffect(() => {
     let active = true;
     (async () => {
-      const code = ticket?.validationCode;
+      const code = (ticket as any)?.validationCode;
       if (!code || typeof code !== "string") {
         if (active) setQrSrc(null);
         return;
@@ -172,21 +211,17 @@ export default function TicketRow({
     return () => {
       active = false;
     };
-  }, [ticket?.validationCode]);
+  }, [ticket]);
 
-  /** Visual: si hay filtro de estado activo y no coincide, atenuamos la fila */
   const rowDim =
     statusFilter !== "all" &&
-    ticket?.paymentStatus &&
-    ticket.paymentStatus !== statusFilter
+    (ticket?.paymentStatus as any) &&
+    (ticket?.paymentStatus as any) !== statusFilter
       ? "opacity-60"
       : "";
 
   const totalPriceNumber = Number(ticket?.totalPrice ?? 0) || 0;
-  const hasStatus = Boolean(ticket?.paymentStatus);
-
-  // Cast seguro para usar los mapas solo cuando hay estado
-  const ps = (hasStatus ? ticket.paymentStatus : undefined) as
+  const ps = (ticket?.paymentStatus || undefined) as
     | PaymentStatusStrict
     | undefined;
 
@@ -225,7 +260,7 @@ export default function TicketRow({
           {ticket?.ticketType === "vip" && (
             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-amber-400/50 text-amber-700 bg-amber-50">
               <MapPin className="w-3 h-3" />{" "}
-              {(ticket?.tableLocation ?? "—").toString()}
+              {(ticket as any)?.tableLocation ?? "—"}
             </span>
           )}
         </div>
@@ -234,12 +269,16 @@ export default function TicketRow({
       {/* Mesa(s) */}
       <td className="p-4">
         {ticket?.ticketType === "vip" ? (
-          (displayNumbers?.length ?? 0) > 0 ? (
+          globalNumbers.length ? (
             <span
               className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-purple-400/50 text-purple-700 bg-purple-50"
-              title="Mesa(s)"
+              title={
+                localNumbers.length
+                  ? `Local: #${localNumbers.join(", ")}`
+                  : undefined
+              }
             >
-              #{displayNumbers.join(", ")}
+              #{globalNumbers.join(", ")}
             </span>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>
@@ -293,16 +332,17 @@ export default function TicketRow({
       <td className="p-4">
         <div className="flex items-center gap-3">
           <code className="text-xs bg-muted/60 px-2.5 py-1.5 rounded-md font-mono border border-border/50">
-            {ticket?.validationCode
-              ? ticket.validationCode
-              : shortQr(ticket?.qrCode)}
+            {(ticket as any)?.validationCode
+              ? (ticket as any).validationCode
+              : shortQr((ticket as any)?.qrCode)}
           </code>
 
-          {ticket?.validationCode && qrSrc && (
+          {(ticket as any)?.validationCode && qrSrc && (
             <button
               type="button"
               onClick={() =>
-                ticket?.validationCode && onShowQr(ticket.validationCode)
+                (ticket as any)?.validationCode &&
+                onShowQr((ticket as any).validationCode)
               }
               title="Ver QR en grande"
               className="shrink-0 hover:scale-105 transition-transform"

@@ -6,12 +6,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
   getActiveEventId,
-  getVipTablesSnapshot,
   getVipSequentialRanges,
   VIP_SECTOR_ORDER,
 } from "@/lib/vip-tables";
+import { PaymentStatus, TableLocation } from "@prisma/client";
 
-// Helper de respuesta con no-store (igual que otros routes)
+/**
+ * GET /api/vip-tables/config?eventId=...&eventCode=...
+ * ...
+ */
+
+// ===== Config bloqueos =====
+const LOCK_WINDOW_MINUTES = Number(process.env.VIP_LOCK_WINDOW_MINUTES ?? 20);
+
+function minutesAgo(d: Date, m: number) {
+  return new Date(d.getTime() - m * 60_000);
+}
+
 function json(payload: any, init?: number | ResponseInit) {
   const initObj: ResponseInit =
     typeof init === "number" ? { status: init } : init || {};
@@ -26,67 +37,90 @@ function json(payload: any, init?: number | ResponseInit) {
   return NextResponse.json(payload, { ...initObj, headers });
 }
 
-/**
- * GET /api/vip-tables/config?eventId=...&eventCode=...
- * Respuesta:
- * {
- *   ok: true,
- *   eventId: string,
- *   totalTables: number,
- *   vipTables: [{ location, price, limit, sold, remaining, capacityPerTable, startNumber, endNumber }]
- * }
- */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const eventIdParam = (searchParams.get("eventId") || "").trim();
     const eventCodeParam = (searchParams.get("eventCode") || "").trim();
 
+    // 1) Evento
     const eventId = await getActiveEventId({
       prisma,
       eventId: eventIdParam || undefined,
       eventCode: eventCodeParam || undefined,
     });
-
     if (!eventId) {
       return json({ ok: false, error: "No se encontró un evento activo" }, 404);
     }
 
-    // Datos por sector (precio, stock, etc.)
-    const snapshot = await getVipTablesSnapshot({ prisma, eventId });
+    // 2) Configs VIP
+    const cfgs = await prisma.vipTableConfig.findMany({
+      where: { eventId },
+      select: {
+        location: true,
+        price: true,
+        capacityPerTable: true,
+        stockLimit: true,
+      },
+    });
 
-    // Rangos secuenciales globales + total global
+    // 3) Rangos globales
     const { total: totalTables, ranges } = await getVipSequentialRanges({
       prisma,
       eventId,
     });
-
-    // Mapas auxiliares
-    const snapByLoc = new Map(snapshot.map((s) => [s.location, s]));
     const rangeByLoc = new Map(ranges.map((r) => [r.location, r]));
+    const cfgByLoc = new Map(cfgs.map((c) => [c.location as TableLocation, c]));
 
-    // Respuesta ordenada por orden fijo
+    // 4) Tomadas = approved + in_process recientes
+    const now = new Date();
+    const takenGroups = await prisma.ticket.groupBy({
+      by: ["vipLocation"],
+      where: {
+        eventId,
+        ticketType: "vip",
+        tableNumber: { not: null },
+        vipLocation: { not: null }, // 👈 evita grupo null
+        OR: [
+          { paymentStatus: PaymentStatus.approved },
+          {
+            paymentStatus: PaymentStatus.in_process,
+            updatedAt: { gte: minutesAgo(now, LOCK_WINDOW_MINUTES) },
+          },
+        ],
+      },
+      _count: { _all: true },
+    });
+
+    const soldByLoc = new Map<TableLocation, number>(
+      takenGroups.map((g) => [g.vipLocation as TableLocation, g._count._all])
+    );
+
+    // 5) Respuesta ordenada
     const vipTables = VIP_SECTOR_ORDER.map((loc) => {
-      const s = snapByLoc.get(loc);
-      const r = rangeByLoc.get(loc);
+      const cfg = cfgByLoc.get(loc);
+      const range = rangeByLoc.get(loc);
+
+      const limit = Number.isFinite(cfg?.stockLimit ?? NaN)
+        ? Number(cfg!.stockLimit)
+        : 0;
+      const sold = soldByLoc.get(loc) ?? 0;
+      const remaining = Math.max(0, limit - sold);
+
       return {
         location: loc,
-        price: s?.price ?? null,
-        limit: s?.limit ?? 0, // mesas del sector
-        sold: s?.sold ?? 0,
-        remaining: s?.remaining ?? 0,
-        capacityPerTable: s?.capacityPerTable ?? null,
-        startNumber: r ? r.startNumber : null, // numeración GLOBAL del sector
-        endNumber: r ? r.endNumber : null,
+        price: cfg?.price != null ? Number(cfg.price) : null,
+        limit,
+        sold,
+        remaining,
+        capacityPerTable:
+          cfg?.capacityPerTable != null ? Number(cfg.capacityPerTable) : null,
+        startNumber: range ? range.startNumber : null,
+        endNumber: range ? range.endNumber : null,
       };
     });
 
-    return json({
-      ok: true,
-      eventId,
-      totalTables, // numeración global 1..totalTables
-      vipTables,
-    });
+    return json({ ok: true, eventId, totalTables, vipTables });
   } catch (err) {
     console.error("[vip-tables/config] Error:", err);
     return json(
