@@ -57,12 +57,13 @@ export interface ArchiveTicket {
   customerName: string;
   customerEmail: string;
   customerDni: string;
+  customerPhone?: string | null; // <-- para mostrar en el modal
   ticketType: TicketType;
   paymentStatus: PaymentStatus;
   totalPrice: string; // Decimal serializado
   vipLocation?: TableLocation | null;
   tableNumber?: number | null;
-  eventId?: string | null; // <-- lo hacemos tolerante
+  eventId?: string | null;
   purchaseDate?: string | null;
 }
 
@@ -166,6 +167,9 @@ export default function ArchiveHistoryModal({
   });
 
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailRow, setDetailRow] = useState<ArchiveTicket | null>(null);
+
   const allSelected = useMemo(
     () => rows.length > 0 && rows.every((r) => selected[r.id]),
     [rows, selected]
@@ -214,6 +218,8 @@ export default function ArchiveHistoryModal({
       setType(ALL);
       setPage(1);
       setSelected({});
+      setDetailOpen(false);
+      setDetailRow(null);
     }
   }, [open]);
 
@@ -259,6 +265,11 @@ export default function ArchiveHistoryModal({
     } finally {
       setLoading(false);
     }
+  };
+
+  const openDetails = (row: ArchiveTicket) => {
+    setDetailRow(row);
+    setDetailOpen(true);
   };
 
   return (
@@ -373,11 +384,11 @@ export default function ArchiveHistoryModal({
           </div>
         </div>
 
-        {/* Desktop: tabla | Mobile: tarjetas */}
+        {/* Desktop: tabla (solo columnas pedidas) | Mobile: tarjetas */}
         <div className="px-4 sm:px-6 pb-2 overflow-auto">
           {/* DESKTOP */}
           <div className="hidden sm:block">
-            <div className="min-w-[960px] border rounded-xl overflow-hidden">
+            <div className="min-w-[900px] border rounded-xl overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr className="text-left">
@@ -387,10 +398,7 @@ export default function ArchiveHistoryModal({
                         onCheckedChange={toggleAll}
                       />
                     </th>
-                    <th className="p-3">Archivado</th>
                     <th className="p-3">Cliente</th>
-                    <th className="p-3">Email</th>
-                    <th className="p-3">DNI</th>
                     <th className="p-3">Tipo</th>
                     <th className="p-3">VIP</th>
                     <th className="p-3">Estado</th>
@@ -402,7 +410,7 @@ export default function ArchiveHistoryModal({
                   {loading && (
                     <tr>
                       <td
-                        colSpan={10}
+                        colSpan={7}
                         className="p-6 text-center text-muted-foreground"
                       >
                         Cargando…
@@ -413,7 +421,7 @@ export default function ArchiveHistoryModal({
                   {!loading && rows.length === 0 && (
                     <tr>
                       <td
-                        colSpan={10}
+                        colSpan={7}
                         className="p-8 text-center text-muted-foreground"
                       >
                         Sin resultados
@@ -430,29 +438,31 @@ export default function ArchiveHistoryModal({
                             onCheckedChange={() => toggleOne(r.id)}
                           />
                         </td>
+
+                        {/* Cliente (clic para ver detalles) */}
                         <td className="p-3 align-top">
-                          <div className="flex flex-col">
-                            <span className="font-medium">
-                              {formatDate(r.archivedAt)}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              Compra: {formatDate(r.purchaseDate)}
-                            </span>
+                          <button
+                            type="button"
+                            onClick={() => openDetails(r)}
+                            className="font-medium underline underline-offset-2 decoration-dotted hover:opacity-80"
+                            title="Ver detalles del cliente"
+                          >
+                            {r.customerName}
+                          </button>
+                          <div className="text-[11px] text-muted-foreground">
+                            Archivado: {formatDate(r.archivedAt)} • Compra:{" "}
+                            {formatDate(r.purchaseDate)}
                           </div>
                         </td>
-                        <td className="p-3 align-top">
-                          <div className="font-medium">{r.customerName}</div>
-                          <div className="text-xs text-muted-foreground">
-                            Evento: {safeSliceId(r.eventId, 8)}
-                          </div>
-                        </td>
-                        <td className="p-3 align-top">{r.customerEmail}</td>
-                        <td className="p-3 align-top">{r.customerDni}</td>
+
+                        {/* Tipo */}
                         <td className="p-3 align-top">
                           <Badge variant="secondary">
                             {r.ticketType.toUpperCase()}
                           </Badge>
                         </td>
+
+                        {/* VIP */}
                         <td className="p-3 align-top">
                           {r.ticketType === "vip" ? (
                             <div className="flex items-center gap-2 text-xs">
@@ -467,6 +477,8 @@ export default function ArchiveHistoryModal({
                             <span className="text-muted-foreground">—</span>
                           )}
                         </td>
+
+                        {/* Estado */}
                         <td className="p-3 align-top">
                           <span
                             className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusHue[r.paymentStatus]}`}
@@ -474,11 +486,15 @@ export default function ArchiveHistoryModal({
                             {r.paymentStatus}
                           </span>
                         </td>
+
+                        {/* Motivo */}
                         <td className="p-3 align-top">
                           <span className="text-xs whitespace-nowrap">
                             {reasonLabel[r.archiveReason]}
                           </span>
                         </td>
+
+                        {/* Total */}
                         <td className="p-3 align-top text-right font-medium">
                           {currencyAr(r.totalPrice)}
                         </td>
@@ -489,7 +505,7 @@ export default function ArchiveHistoryModal({
             </div>
           </div>
 
-          {/* MOBILE: tarjetas compactas */}
+          {/* MOBILE: tarjetas compactas (nombre abre modal) */}
           <div className="sm:hidden space-y-2">
             {loading && (
               <div className="p-4 text-center text-muted-foreground">
@@ -513,7 +529,13 @@ export default function ArchiveHistoryModal({
                         checked={!!selected[r.id]}
                         onCheckedChange={() => toggleOne(r.id)}
                       />
-                      <div className="font-medium">{r.customerName}</div>
+                      <button
+                        type="button"
+                        onClick={() => openDetails(r)}
+                        className="font-medium underline underline-offset-2 decoration-dotted text-left"
+                      >
+                        {r.customerName}
+                      </button>
                     </div>
                     <div className="text-right">
                       <div className="text-sm font-semibold">
@@ -525,43 +547,26 @@ export default function ArchiveHistoryModal({
                     </div>
                   </div>
 
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-[12px] text-muted-foreground">
-                    <div>
-                      <span className="font-medium text-foreground">
-                        Email:
-                      </span>{" "}
-                      {r.customerEmail}
-                    </div>
-                    <div>
-                      <span className="font-medium text-foreground">DNI:</span>{" "}
-                      {r.customerDni || "-"}
-                    </div>
-                    <div className="col-span-2 flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">{r.ticketType}</Badge>
-                      {r.ticketType === "vip" ? (
-                        <>
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100">
-                            {r.vipLocation}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100">
-                            Mesa #{r.tableNumber ?? "-"}
-                          </span>
-                        </>
-                      ) : null}
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusHue[r.paymentStatus]}`}
-                      >
-                        {r.paymentStatus}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full bg-slate-100 text-xs">
-                        {reasonLabel[r.archiveReason]}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="mt-2 text-[11px] text-muted-foreground">
-                    Compra: {formatDate(r.purchaseDate)} • Evento:{" "}
-                    {safeSliceId(r.eventId, 8)}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+                    <Badge variant="secondary">{r.ticketType}</Badge>
+                    {r.ticketType === "vip" ? (
+                      <>
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100">
+                          {r.vipLocation}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100">
+                          Mesa #{r.tableNumber ?? "-"}
+                        </span>
+                      </>
+                    ) : null}
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusHue[r.paymentStatus]}`}
+                    >
+                      {r.paymentStatus}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 text-xs">
+                      {reasonLabel[r.archiveReason]}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -624,6 +629,94 @@ export default function ArchiveHistoryModal({
           </div>
         </div>
       </DialogContent>
+
+      {/* Modal de Detalles del Cliente */}
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Datos del cliente</DialogTitle>
+            <DialogDescription>
+              Información asociada al registro archivado.
+            </DialogDescription>
+          </DialogHeader>
+
+          {detailRow ? (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-3 gap-2">
+                <span className="text-muted-foreground">Nombre</span>
+                <span className="col-span-2 font-medium">
+                  {detailRow.customerName}
+                </span>
+
+                <span className="text-muted-foreground">Email</span>
+                <span className="col-span-2">
+                  {detailRow.customerEmail || "—"}
+                </span>
+
+                <span className="text-muted-foreground">DNI</span>
+                <span className="col-span-2">
+                  {detailRow.customerDni || "—"}
+                </span>
+
+                <span className="text-muted-foreground">Teléfono</span>
+                <span className="col-span-2">
+                  {detailRow.customerPhone || "—"}
+                </span>
+
+                <span className="text-muted-foreground">Tipo</span>
+                <span className="col-span-2 capitalize">
+                  {detailRow.ticketType}
+                </span>
+
+                <span className="text-muted-foreground">VIP</span>
+                <span className="col-span-2">
+                  {detailRow.ticketType === "vip"
+                    ? `${detailRow.vipLocation ?? "—"} | Mesa #${detailRow.tableNumber ?? "—"}`
+                    : "—"}
+                </span>
+
+                <span className="text-muted-foreground">Estado</span>
+                <span className="col-span-2">
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusHue[detailRow.paymentStatus]}`}
+                  >
+                    {detailRow.paymentStatus}
+                  </span>
+                </span>
+
+                <span className="text-muted-foreground">Motivo</span>
+                <span className="col-span-2">
+                  {reasonLabel[detailRow.archiveReason]}
+                </span>
+
+                <span className="text-muted-foreground">Archivado</span>
+                <span className="col-span-2">
+                  {formatDate(detailRow.archivedAt)}
+                </span>
+
+                <span className="text-muted-foreground">Compra</span>
+                <span className="col-span-2">
+                  {formatDate(detailRow.purchaseDate)}
+                </span>
+
+                <span className="text-muted-foreground">Evento</span>
+                <span className="col-span-2">
+                  {safeSliceId(detailRow.eventId, 12)}
+                </span>
+
+                <span className="text-muted-foreground">Total</span>
+                <span className="col-span-2 font-medium">
+                  {currencyAr(detailRow.totalPrice)}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <Button onClick={() => setDetailOpen(false)}>Cerrar</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
