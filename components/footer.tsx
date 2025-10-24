@@ -85,7 +85,7 @@ export function Footer() {
                 asChild
               >
                 <a
-                  href="https://wa.me/1234567890"
+                  href="https://wa.me/+5491136529318"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
