@@ -1,4 +1,6 @@
 "use client";
+
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AdminTicket, TicketsConfig } from "../types";
@@ -6,15 +8,29 @@ import { makeQrDataUrl } from "../utils/qr";
 import RowActionsMenu from "./RowActionsMenu";
 import {
   CheckCircle,
+  Clock,
   Crown,
   Edit,
   Mail,
   MapPin,
   Ticket,
   Trash2,
+  XCircle,
+  RotateCw,
+  AlertTriangle,
+  Undo2,
+  ShieldAlert,
 } from "lucide-react";
 
-/** ✅ helper defensivo para mostrar el “short code” del QR sin romper */
+/** Estado de pago estrictamente como viene del ticket (sin null/undefined) */
+type PaymentStatusStrict = Exclude<
+  AdminTicket["paymentStatus"],
+  null | undefined
+>;
+/** Filtro que acepta 'all' además de los estados estrictos */
+type PaymentStatusFilter = "all" | PaymentStatusStrict;
+
+/** Helper: short code legible del QR */
 function shortQr(qr: unknown): string {
   if (typeof qr === "string") return qr.length > 8 ? qr.slice(-8) : qr;
   if (typeof qr === "number") return String(qr);
@@ -22,6 +38,54 @@ function shortQr(qr: unknown): string {
     return (qr as any).toString();
   return "—";
 }
+
+/** (Opcional) listado de estados soportados, útil si querés iterar */
+const ALL_STATUSES = [
+  "approved",
+  "rejected",
+  "pending",
+  "in_process",
+  "failed_preference",
+  "cancelled",
+  "refunded",
+  "charged_back",
+] as const satisfies readonly PaymentStatusStrict[];
+
+/** Etiqueta legible por estado (sin 'all') */
+const STATUS_LABEL: Record<PaymentStatusStrict, string> = {
+  approved: "approved",
+  rejected: "rejected",
+  pending: "pending",
+  in_process: "in process",
+  failed_preference: "failed preference",
+  cancelled: "cancelled",
+  refunded: "refunded",
+  charged_back: "charged back",
+};
+
+/** Icono por estado (sin 'all') */
+const STATUS_ICON: Record<PaymentStatusStrict, ReactNode> = {
+  approved: <CheckCircle className="w-3.5 h-3.5 mr-1.5" />,
+  rejected: <XCircle className="w-3.5 h-3.5 mr-1.5" />,
+  pending: <Clock className="w-3.5 h-3.5 mr-1.5" />,
+  in_process: <RotateCw className="w-3.5 h-3.5 mr-1.5" />,
+  failed_preference: <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />,
+  cancelled: <XCircle className="w-3.5 h-3.5 mr-1.5" />,
+  refunded: <Undo2 className="w-3.5 h-3.5 mr-1.5" />,
+  charged_back: <ShieldAlert className="w-3.5 h-3.5 mr-1.5" />,
+};
+
+/** Estilos por estado (sin 'all') */
+const STATUS_STYLE: Record<PaymentStatusStrict, string> = {
+  approved: "bg-emerald-100 text-emerald-700",
+  rejected: "bg-rose-100 text-rose-700",
+  pending: "bg-amber-100 text-amber-700",
+  in_process: "bg-blue-100 text-blue-700",
+  failed_preference: "bg-orange-100 text-orange-700",
+  cancelled: "bg-gray-100 text-gray-700",
+  refunded: "bg-purple-100 text-purple-700",
+  charged_back: "bg-red-100 text-red-700",
+};
 
 export default function TicketRow({
   ticket,
@@ -32,6 +96,8 @@ export default function TicketRow({
   onSendEmail,
   sending = false,
   vipRanges,
+  /** opcional: filtro activo para resaltar/atenuar visualmente */
+  statusFilter = "all",
 }: {
   ticket: AdminTicket;
   onApprove: (t: AdminTicket) => void;
@@ -41,6 +107,7 @@ export default function TicketRow({
   onSendEmail: (t: AdminTicket) => void;
   sending?: boolean;
   vipRanges: TicketsConfig["vipTables"];
+  statusFilter?: PaymentStatusFilter;
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
 
@@ -74,7 +141,7 @@ export default function TicketRow({
     const span = end - start + 1;
     return rawNums.map((n) => {
       const num = Number(n);
-      if (!Number.isFinite(num)) return n;
+      if (!Number.isFinite(num)) return n as any;
       if (num >= start && num <= end) return num; // ya es global
       if (num >= 1 && num <= span) return num + (start - 1); // local → global
       return num;
@@ -107,35 +174,26 @@ export default function TicketRow({
     };
   }, [ticket?.validationCode]);
 
-  const approveBtn = (
-    <Button
-      variant="default"
-      size="sm"
-      onClick={() => onApprove(ticket)}
-      className="bg-emerald-600 hover:bg-emerald-700 text-white"
-    >
-      <CheckCircle className="w-3.5 h-3.5 mr-1.5" /> Aprobar
-    </Button>
-  );
-
-  const sendBtn = (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => onSendEmail(ticket)}
-      disabled={sending}
-      className="border-border/50"
-      title="Enviar email de confirmación"
-    >
-      <Mail className="w-4 h-4 mr-1.5" />{" "}
-      {sending ? "Enviando…" : "Enviar mail"}
-    </Button>
-  );
+  /** Visual: si hay filtro de estado activo y no coincide, atenuamos la fila */
+  const rowDim =
+    statusFilter !== "all" &&
+    ticket?.paymentStatus &&
+    ticket.paymentStatus !== statusFilter
+      ? "opacity-60"
+      : "";
 
   const totalPriceNumber = Number(ticket?.totalPrice ?? 0) || 0;
+  const hasStatus = Boolean(ticket?.paymentStatus);
+
+  // Cast seguro para usar los mapas solo cuando hay estado
+  const ps = (hasStatus ? ticket.paymentStatus : undefined) as
+    | PaymentStatusStrict
+    | undefined;
 
   return (
-    <tr className="border-b border-border/50 hover:bg-gray/50 transition-colors">
+    <tr
+      className={`border-b border-border/50 hover:bg-gray/50 transition-colors ${rowDim}`}
+    >
       {/* Cliente */}
       <td className="p-4 min-w-[180px]">
         <div className="space-y-1">
@@ -214,20 +272,21 @@ export default function TicketRow({
 
       {/* Estado */}
       <td className="p-4">
-        <span
-          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
-            ticket?.paymentStatus === "approved"
-              ? "bg-emerald-100 text-emerald-700"
-              : ticket?.paymentStatus === "rejected"
-                ? "bg-red-100 text-red-700"
-                : "bg-amber-100 text-amber-700"
-          }`}
-        >
-          {ticket?.paymentStatus === "approved" && "✓ "}
-          {ticket?.paymentStatus === "rejected" && "✕ "}
-          {ticket?.paymentStatus === "pending" && "⏱ "}
-          {ticket?.paymentStatus ?? "—"}
-        </span>
+        {ps ? (
+          <span
+            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${STATUS_STYLE[ps]} ${
+              statusFilter !== "all" && ps === statusFilter
+                ? "ring-2 ring-offset-1 ring-black/10"
+                : ""
+            }`}
+            title={STATUS_LABEL[ps]}
+          >
+            {STATUS_ICON[ps]}
+            {STATUS_LABEL[ps]}
+          </span>
+        ) : (
+          <span className="text-sm text-muted-foreground">—</span>
+        )}
       </td>
 
       {/* Código / QR */}
@@ -263,13 +322,39 @@ export default function TicketRow({
       {/* Acciones */}
       <td className="p-4 text-right">
         <div className="hidden sm:flex items-center justify-end gap-2">
-          {ticket?.paymentStatus !== "approved" && approveBtn}
-          {ticket?.paymentStatus === "approved" && sendBtn}
+          {ticket?.paymentStatus === "pending" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onApprove(ticket)}
+              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+              title="Aprobar"
+            >
+              <RotateCw className="w-4 h-4 mr-1.5" />
+              Aprobar
+            </Button>
+          )}
+
+          {ticket?.paymentStatus === "approved" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onSendEmail(ticket)}
+              disabled={sending}
+              className="border-border/50"
+              title="Enviar email de confirmación"
+            >
+              <Mail className="w-4 h-4 mr-1.5" />
+              {sending ? "Enviando…" : "Enviar mail"}
+            </Button>
+          )}
+
           <Button
             variant="ghost"
             size="sm"
             onClick={() => onEdit(ticket)}
             className="hover:bg-blue-50"
+            title="Editar"
           >
             <Edit className="w-4 h-4 text-blue-600" />
           </Button>
@@ -278,6 +363,7 @@ export default function TicketRow({
             size="sm"
             onClick={() => onDelete(ticket.id)}
             className="hover:bg-red-50"
+            title="Eliminar"
           >
             <Trash2 className="w-4 h-4 text-red-600" />
           </Button>
@@ -289,7 +375,7 @@ export default function TicketRow({
             onSendEmail={() => onSendEmail(ticket)}
             onEdit={() => onEdit(ticket)}
             onDelete={() => onDelete(ticket.id)}
-            canApprove={ticket?.paymentStatus !== "approved"}
+            canApprove={ticket?.paymentStatus === "pending"}
             canEmail={ticket?.paymentStatus === "approved"}
             sending={!!sending}
           />

@@ -12,7 +12,7 @@ import {
   TicketType as TT,
   Gender as G,
   TableLocation as TL,
-  ArchiveReason as AR, // 👈 enum nuevo para historial
+  ArchiveReason as AR,
 } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -20,7 +20,7 @@ import {
   normalizeSixDigitCode,
 } from "@/lib/validation-code";
 
-// 🔹 Usamos la numeración secuencial global del evento
+// 🔹 Rango global de numeración VIP
 import { getVipSequentialRanges } from "@/lib/vip-tables";
 
 /* ========================= Alias DB ========================= */
@@ -108,17 +108,6 @@ const parseLocation = (v?: string): TL | undefined => {
   if (s === "general") return TL.general;
   return undefined;
 };
-
-const ALL_STATUSES: PS[] = [
-  PS.pending,
-  PS.approved,
-  PS.rejected,
-  PS.in_process,
-  PS.failed_preference,
-  PS.cancelled,
-  PS.refunded,
-  PS.charged_back,
-];
 
 /* ========================= Dominio / Stock ========================= */
 async function getActiveEventBasic() {
@@ -280,7 +269,6 @@ async function copyTicketToArchive(
   const t = await tx.ticket.findUnique({ where: { id: ticketId } });
   if (!t) throw new Error("ticket_not_found");
 
-  // Crear registro en archivo. Importante: NO usamos unique en paymentId/qr/validationCode dentro del archivo.
   await tx.ticketArchive.create({
     data: {
       archivedFromId: t.id,
@@ -315,7 +303,6 @@ async function copyTicketToArchive(
     },
   });
 
-  // Si estaba aprobado y era VIP, revertir stock
   if (
     t.ticketType === TT.vip &&
     t.paymentStatus === PS.approved &&
@@ -325,7 +312,6 @@ async function copyTicketToArchive(
     await adjustVipSoldCount(tx, t.eventId, t.vipLocation, -t.vipTables);
   }
 
-  // Borrar ticket activo
   await tx.ticket.delete({ where: { id: t.id } });
 }
 
@@ -345,7 +331,7 @@ async function archiveTicket(params: {
 }
 
 /* =========================================================
-   GET /api/admin/tickets  — SOLO Ticket (general y VIP)
+   GET /api/admin/tickets — SOLO Ticket (general y VIP)
 ========================================================= */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
@@ -355,7 +341,10 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
 
-    const status = searchParams.get("status");
+    // ✅ robusto: parsea status con case-insensitive
+    const statusRaw = searchParams.get("status") ?? undefined;
+    const statusEnum = parsePaymentStatus(statusRaw || undefined);
+
     const q = normString(searchParams.get("q"));
     const typeFilter = normString(searchParams.get("type")); // "general" | "vip" | undefined
 
@@ -373,8 +362,8 @@ export async function GET(request: NextRequest) {
     const skip = (page - 1) * pageSize;
 
     const where: Prisma.TicketWhereInput = {};
-    if (status && ALL_STATUSES.includes(status as PS)) {
-      where.paymentStatus = status as PS;
+    if (statusEnum) {
+      where.paymentStatus = statusEnum;
     }
     if (typeFilter === "general") where.ticketType = TT.general;
     if (typeFilter === "vip") where.ticketType = TT.vip;
@@ -780,7 +769,7 @@ export async function PUT(request: NextRequest) {
     const quantity = normNumber(body.quantity);
     if (quantity !== undefined) dataToUpdate.quantity = Math.max(1, quantity);
 
-    // VIP fields
+    // VIP fields (solo si NO estaba aprobado)
     const wantsLocation = body.location !== undefined;
     const wantsTables = body.tables !== undefined;
     const wantsCapacity = body.capacityPerTable !== undefined;
@@ -1010,8 +999,7 @@ export async function DELETE(request: NextRequest) {
     if (!id)
       return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    // Opcionalmente podés pasar ?reason=... para especificar motivo
-    // valores: admin_cancelled | user_deleted | refunded | charged_back | payment_timeout | other
+    // Motivo opcional (?reason=admin_cancelled|user_deleted|payment_timeout|refunded|charged_back|other)
     const reasonParam = normString(searchParams.get("reason"));
     const reasonMap: Record<string, AR> = {
       user_deleted: AR.user_deleted,
@@ -1025,10 +1013,9 @@ export async function DELETE(request: NextRequest) {
       ? (reasonMap[reasonParam] ?? AR.other)
       : AR.admin_cancelled;
 
-    // (Opcional) quién archiva
-    const archivedBy = typeof auth?.sub === "string" ? auth.sub : undefined;
+    const archivedBy =
+      typeof (auth as any)?.sub === "string" ? (auth as any).sub : undefined;
 
-    // ⚠️ Archivar en vez de borrar
     await archiveTicket({
       ticketId: id,
       reason,

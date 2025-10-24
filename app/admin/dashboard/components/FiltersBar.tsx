@@ -1,4 +1,6 @@
 "use client";
+
+import type React from "react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -10,6 +12,30 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ArrowUpDown, Filter, Search } from "lucide-react";
+
+type Status = "all" | "approved" | "pending" | "rejected";
+type TypeFilter = "all" | "general" | "vip";
+type Gender = "all" | "hombre" | "mujer";
+type Pay = "all" | "efectivo" | "transferencia" | "mercadopago";
+type Order = "asc" | "desc";
+type OrderBy = "purchaseDate" | "totalPrice";
+
+interface FiltersBarProps {
+  q: string;
+  setQ: React.Dispatch<React.SetStateAction<string>>;
+  fStatus: Status;
+  setFStatus: React.Dispatch<React.SetStateAction<Status>>;
+  fType: TypeFilter;
+  setFType: React.Dispatch<React.SetStateAction<TypeFilter>>;
+  fGender: Gender;
+  setFGender: React.Dispatch<React.SetStateAction<Gender>>;
+  fPay: Pay;
+  setFPay: React.Dispatch<React.SetStateAction<Pay>>;
+  order: Order;
+  setOrder: React.Dispatch<React.SetStateAction<Order>>;
+  orderBy: OrderBy;
+  setOrderBy: React.Dispatch<React.SetStateAction<OrderBy>>;
+}
 
 export default function FiltersBar({
   q,
@@ -26,7 +52,7 @@ export default function FiltersBar({
   setOrder,
   orderBy,
   setOrderBy,
-}: any) {
+}: FiltersBarProps) {
   return (
     <div className="mb-6 border-border/50 shadow-sm rounded-lg overflow-hidden">
       <div className="bg-white px-6 py-4 border-b border-border/50 flex items-center gap-3">
@@ -58,7 +84,10 @@ export default function FiltersBar({
 
           <div>
             <Label className="text-sm font-medium mb-2 block">Estado</Label>
-            <Select value={fStatus} onValueChange={setFStatus}>
+            <Select
+              value={fStatus}
+              onValueChange={(v) => setFStatus(v as Status)}
+            >
               <SelectTrigger className="border-border/50">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
@@ -73,7 +102,10 @@ export default function FiltersBar({
 
           <div>
             <Label className="text-sm font-medium mb-2 block">Tipo</Label>
-            <Select value={fType} onValueChange={setFType}>
+            <Select
+              value={fType}
+              onValueChange={(v) => setFType(v as TypeFilter)}
+            >
               <SelectTrigger className="border-border/50">
                 <SelectValue placeholder="Tipo" />
               </SelectTrigger>
@@ -87,7 +119,10 @@ export default function FiltersBar({
 
           <div>
             <Label className="text-sm font-medium mb-2 block">Género</Label>
-            <Select value={fGender} onValueChange={setFGender}>
+            <Select
+              value={fGender}
+              onValueChange={(v) => setFGender(v as Gender)}
+            >
               <SelectTrigger className="border-border/50">
                 <SelectValue placeholder="Género" />
               </SelectTrigger>
@@ -101,7 +136,7 @@ export default function FiltersBar({
 
           <div>
             <Label className="text-sm font-medium mb-2 block">Pago</Label>
-            <Select value={fPay} onValueChange={setFPay}>
+            <Select value={fPay} onValueChange={(v) => setFPay(v as Pay)}>
               <SelectTrigger className="border-border/50">
                 <SelectValue placeholder="Método" />
               </SelectTrigger>
@@ -120,7 +155,10 @@ export default function FiltersBar({
             <Label className="text-sm font-medium mb-2 block">
               Ordenar por
             </Label>
-            <Select value={orderBy} onValueChange={setOrderBy}>
+            <Select
+              value={orderBy}
+              onValueChange={(v) => setOrderBy(v as OrderBy)}
+            >
               <SelectTrigger className="border-border/50">
                 <SelectValue placeholder="Campo" />
               </SelectTrigger>
