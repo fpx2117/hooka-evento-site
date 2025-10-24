@@ -62,7 +62,7 @@ export interface ArchiveTicket {
   totalPrice: string; // Decimal serializado
   vipLocation?: TableLocation | null;
   tableNumber?: number | null;
-  eventId: string;
+  eventId?: string | null; // <-- lo hacemos tolerante
   purchaseDate?: string | null;
 }
 
@@ -130,6 +130,17 @@ function useDebounce<T>(value: T, delay = 500) {
   return v;
 }
 
+/** ✅ Evita errores de `slice` si eventId viene null/undefined/no-string */
+function safeSliceId(id: unknown, len = 8) {
+  if (id == null) return "—";
+  try {
+    const s = String(id);
+    return s.length > len ? `${s.slice(0, len)}…` : s;
+  } catch {
+    return "—";
+  }
+}
+
 /* ===== Componente principal ===== */
 export default function ArchiveHistoryModal({
   open,
@@ -178,11 +189,14 @@ export default function ArchiveHistoryModal({
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ArchiveApiResponse = await res.json();
-      setRows(data.tickets);
-      setPagination(data.pagination);
+      setRows(Array.isArray(data?.tickets) ? data.tickets : []);
+      setPagination(
+        data?.pagination || { page: 1, pageSize, total: 0, totalPages: 1 }
+      );
       setSelected({});
     } catch (e: any) {
       setError(e?.message || "Error cargando historial");
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -264,7 +278,7 @@ export default function ArchiveHistoryModal({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Filtros: 1 columna en mobile, grilla en desktop */}
+        {/* Filtros */}
         <div className="px-4 sm:px-6 py-3 border-b grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-3">
           <div className="sm:col-span-5">
             <Input
@@ -322,7 +336,7 @@ export default function ArchiveHistoryModal({
           </div>
         </div>
 
-        {/* Acciones: columna en mobile */}
+        {/* Acciones */}
         <div className="px-4 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="text-xs sm:text-sm text-muted-foreground">
             {pagination.total.toLocaleString()} registros • Página{" "}
@@ -429,7 +443,7 @@ export default function ArchiveHistoryModal({
                         <td className="p-3 align-top">
                           <div className="font-medium">{r.customerName}</div>
                           <div className="text-xs text-muted-foreground">
-                            Evento: {r.eventId.slice(0, 8)}…
+                            Evento: {safeSliceId(r.eventId, 8)}
                           </div>
                         </td>
                         <td className="p-3 align-top">{r.customerEmail}</td>
@@ -547,14 +561,14 @@ export default function ArchiveHistoryModal({
 
                   <div className="mt-2 text-[11px] text-muted-foreground">
                     Compra: {formatDate(r.purchaseDate)} • Evento:{" "}
-                    {r.eventId.slice(0, 8)}…
+                    {safeSliceId(r.eventId, 8)}
                   </div>
                 </div>
               ))}
           </div>
         </div>
 
-        {/* Paginación: wrap en mobile */}
+        {/* Paginación */}
         <div className="px-4 sm:px-6 py-3 border-t flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs sm:text-sm text-muted-foreground">
             {error ? <span className="text-rose-600">{error}</span> : ""}

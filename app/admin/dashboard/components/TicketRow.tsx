@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AdminTicket, TicketsConfig } from "../types";
@@ -11,37 +10,19 @@ import {
   Edit,
   Mail,
   MapPin,
-  Ticket as TicketIcon,
+  Ticket,
   Trash2,
 } from "lucide-react";
 
-/* =========================
-   Estilos / Prefijos por estado
-========================= */
-const STATUS_STYLES: Record<AdminTicket["paymentStatus"], string> = {
-  approved: "bg-emerald-100 text-emerald-700",
-  pending: "bg-amber-100 text-amber-700",
-  in_process: "bg-blue-100 text-blue-700",
-  rejected: "bg-rose-100 text-rose-700",
-  failed_preference: "bg-stone-100 text-stone-700",
-  cancelled: "bg-orange-100 text-orange-700",
-  refunded: "bg-purple-100 text-purple-800",
-  charged_back: "bg-red-100 text-red-700",
-};
+/** ✅ helper defensivo para mostrar el “short code” del QR sin romper */
+function shortQr(qr: unknown): string {
+  if (typeof qr === "string") return qr.length > 8 ? qr.slice(-8) : qr;
+  if (typeof qr === "number") return String(qr);
+  if (qr && typeof (qr as any).toString === "function")
+    return (qr as any).toString();
+  return "—";
+}
 
-const STATUS_PREFIX: Partial<Record<AdminTicket["paymentStatus"], string>> = {
-  approved: "✓ ",
-  rejected: "✕ ",
-  pending: "⏱ ",
-  in_process: "⏳ ",
-  cancelled: "⛔ ",
-  refunded: "↩︎ ",
-  charged_back: "⟲ ",
-};
-
-/* =========================
-   Componente
-========================= */
 export default function TicketRow({
   ticket,
   onApprove,
@@ -63,34 +44,40 @@ export default function TicketRow({
 }) {
   const [qrSrc, setQrSrc] = useState<string | null>(null);
 
-  // Numeración local → global según rangos
+  /** Numeración local → global según rangos (con guards) */
   const displayNumbers: number[] = useMemo(() => {
-    const loc = ticket.tableLocation || undefined;
-    const nums =
-      ticket.tableNumbers && ticket.tableNumbers.length > 0
+    const loc = ticket?.tableLocation ?? undefined;
+    const rawNums =
+      Array.isArray(ticket?.tableNumbers) && ticket.tableNumbers.length > 0
         ? ticket.tableNumbers
-        : ticket.tableNumber != null
-          ? [ticket.tableNumber]
+        : Number.isFinite(ticket?.tableNumber as any)
+          ? [Number(ticket!.tableNumber)]
           : [];
-    if (!nums.length || !loc) return nums;
 
-    const sector = vipRanges.find((v) => v.location === loc);
-    if (!sector) return nums;
+    if (!rawNums.length || !loc) return rawNums;
 
-    const start = Number.isFinite(sector.startNumber as any)
-      ? Number(sector.startNumber)
-      : null;
-    const end = Number.isFinite(sector.endNumber as any)
-      ? Number(sector.endNumber)
-      : null;
+    const ranges = Array.isArray(vipRanges) ? vipRanges : [];
+    const sector = ranges.find((v) => v.location === loc);
+    if (!sector) return rawNums;
 
-    if (start == null || end == null) return nums;
+    const start =
+      sector?.startNumber != null && Number.isFinite(sector.startNumber as any)
+        ? Number(sector.startNumber)
+        : null;
+    const end =
+      sector?.endNumber != null && Number.isFinite(sector.endNumber as any)
+        ? Number(sector.endNumber)
+        : null;
+
+    if (start == null || end == null) return rawNums;
 
     const span = end - start + 1;
-    return nums.map((n) => {
-      if (n >= start && n <= end) return n;
-      if (n >= 1 && n <= span) return n + (start - 1);
-      return n;
+    return rawNums.map((n) => {
+      const num = Number(n);
+      if (!Number.isFinite(num)) return n;
+      if (num >= start && num <= end) return num; // ya es global
+      if (num >= 1 && num <= span) return num + (start - 1); // local → global
+      return num;
     });
   }, [
     ticket.tableLocation,
@@ -99,13 +86,17 @@ export default function TicketRow({
     vipRanges,
   ]);
 
-  // Generar QR preview
+  /** Generar mini QR (si hay validationCode) */
   useEffect(() => {
     let active = true;
     (async () => {
-      if (!ticket.validationCode) return setQrSrc(null);
+      const code = ticket?.validationCode;
+      if (!code || typeof code !== "string") {
+        if (active) setQrSrc(null);
+        return;
+      }
       try {
-        const dataUrl = await makeQrDataUrl(ticket.validationCode, 4);
+        const dataUrl = await makeQrDataUrl(code, 4);
         if (active) setQrSrc(dataUrl);
       } catch {
         if (active) setQrSrc(null);
@@ -114,13 +105,7 @@ export default function TicketRow({
     return () => {
       active = false;
     };
-  }, [ticket.validationCode]);
-
-  // Permitir aprobar solo estados coherentes
-  const canApprove =
-    ticket.paymentStatus === "pending" ||
-    ticket.paymentStatus === "in_process" ||
-    ticket.paymentStatus === "failed_preference";
+  }, [ticket?.validationCode]);
 
   const approveBtn = (
     <Button
@@ -142,56 +127,56 @@ export default function TicketRow({
       className="border-border/50"
       title="Enviar email de confirmación"
     >
-      <Mail className="w-4 h-4 mr-1.5" />
+      <Mail className="w-4 h-4 mr-1.5" />{" "}
       {sending ? "Enviando…" : "Enviar mail"}
     </Button>
   );
 
-  // Marcar "vencido" si pending y ya expiró (requiere ticket.expiresAt)
-  const isExpiredPending =
-    ticket.paymentStatus === "pending" &&
-    !!ticket.expiresAt &&
-    new Date(ticket.expiresAt) < new Date();
+  const totalPriceNumber = Number(ticket?.totalPrice ?? 0) || 0;
 
   return (
     <tr className="border-b border-border/50 hover:bg-gray/50 transition-colors">
+      {/* Cliente */}
       <td className="p-4 min-w-[180px]">
         <div className="space-y-1">
-          <p className="font-semibold">{ticket.customerName}</p>
+          <p className="font-semibold">{ticket?.customerName ?? "—"}</p>
           <p className="text-sm text-muted-foreground">
-            {ticket.customerEmail}
+            {ticket?.customerEmail ?? "—"}
           </p>
         </div>
       </td>
 
+      {/* DNI */}
       <td className="p-4">
         <span className="text-sm font-mono text-muted-foreground">
-          {ticket.customerDni || "—"}
+          {ticket?.customerDni ?? "—"}
         </span>
       </td>
 
+      {/* Tipo + ubicación VIP */}
       <td className="p-4">
         <div className="flex items-center gap-2">
-          {ticket.ticketType === "vip" ? (
+          {ticket?.ticketType === "vip" ? (
             <Crown className="w-4 h-4 text-amber-500" />
           ) : (
-            <TicketIcon className="w-4 h-4 text-blue-500" />
+            <Ticket className="w-4 h-4 text-blue-500" />
           )}
           <span className="capitalize font-medium text-sm">
-            {ticket.ticketType}
+            {ticket?.ticketType ?? "—"}
           </span>
-          {ticket.ticketType === "vip" && (
+          {ticket?.ticketType === "vip" && (
             <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-amber-400/50 text-amber-700 bg-amber-50">
-              <MapPin className="w-3 h-3" />
-              {(ticket.tableLocation || "—").toString()}
+              <MapPin className="w-3 h-3" />{" "}
+              {(ticket?.tableLocation ?? "—").toString()}
             </span>
           )}
         </div>
       </td>
 
+      {/* Mesa(s) */}
       <td className="p-4">
-        {ticket.ticketType === "vip" ? (
-          displayNumbers.length > 0 ? (
+        {ticket?.ticketType === "vip" ? (
+          (displayNumbers?.length ?? 0) > 0 ? (
             <span
               className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-purple-400/50 text-purple-700 bg-purple-50"
               title="Mesa(s)"
@@ -206,52 +191,60 @@ export default function TicketRow({
         )}
       </td>
 
+      {/* Género */}
       <td className="p-4">
         <span className="capitalize text-sm text-muted-foreground">
-          {ticket.gender || "—"}
+          {ticket?.gender ?? "—"}
         </span>
       </td>
 
+      {/* Precio */}
       <td className="p-4">
         <span className="font-semibold">
-          ${(Number(ticket.totalPrice) || 0).toLocaleString("es-AR")}
+          ${totalPriceNumber.toLocaleString("es-AR")}
         </span>
       </td>
 
+      {/* Método de pago */}
       <td className="p-4">
         <span className="capitalize text-sm text-muted-foreground">
-          {ticket.paymentMethod}
+          {ticket?.paymentMethod ?? "—"}
         </span>
       </td>
 
+      {/* Estado */}
       <td className="p-4">
         <span
-          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${STATUS_STYLES[ticket.paymentStatus]}`}
-          title={ticket.paymentStatus}
+          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
+            ticket?.paymentStatus === "approved"
+              ? "bg-emerald-100 text-emerald-700"
+              : ticket?.paymentStatus === "rejected"
+                ? "bg-red-100 text-red-700"
+                : "bg-amber-100 text-amber-700"
+          }`}
         >
-          {STATUS_PREFIX[ticket.paymentStatus] || ""}
-          {ticket.paymentStatus}
+          {ticket?.paymentStatus === "approved" && "✓ "}
+          {ticket?.paymentStatus === "rejected" && "✕ "}
+          {ticket?.paymentStatus === "pending" && "⏱ "}
+          {ticket?.paymentStatus ?? "—"}
         </span>
-        {isExpiredPending && (
-          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">
-            vencido
-          </span>
-        )}
       </td>
 
+      {/* Código / QR */}
       <td className="p-4">
         <div className="flex items-center gap-3">
           <code className="text-xs bg-muted/60 px-2.5 py-1.5 rounded-md font-mono border border-border/50">
-            {ticket.validationCode
+            {ticket?.validationCode
               ? ticket.validationCode
-              : ticket.qrCode
-                ? ticket.qrCode.slice(-8)
-                : "—"}
+              : shortQr(ticket?.qrCode)}
           </code>
-          {ticket.validationCode && qrSrc && (
+
+          {ticket?.validationCode && qrSrc && (
             <button
               type="button"
-              onClick={() => onShowQr(ticket.validationCode!)}
+              onClick={() =>
+                ticket?.validationCode && onShowQr(ticket.validationCode)
+              }
               title="Ver QR en grande"
               className="shrink-0 hover:scale-105 transition-transform"
             >
@@ -267,10 +260,11 @@ export default function TicketRow({
         </div>
       </td>
 
+      {/* Acciones */}
       <td className="p-4 text-right">
         <div className="hidden sm:flex items-center justify-end gap-2">
-          {canApprove && approveBtn}
-          {ticket.paymentStatus === "approved" && sendBtn}
+          {ticket?.paymentStatus !== "approved" && approveBtn}
+          {ticket?.paymentStatus === "approved" && sendBtn}
           <Button
             variant="ghost"
             size="sm"
@@ -289,15 +283,14 @@ export default function TicketRow({
           </Button>
         </div>
 
-        {/* Mobile: menú contextual */}
         <div className="sm:hidden flex justify-end">
           <RowActionsMenu
             onApprove={() => onApprove(ticket)}
             onSendEmail={() => onSendEmail(ticket)}
             onEdit={() => onEdit(ticket)}
             onDelete={() => onDelete(ticket.id)}
-            canApprove={canApprove}
-            canEmail={ticket.paymentStatus === "approved"}
+            canApprove={ticket?.paymentStatus !== "approved"}
+            canEmail={ticket?.paymentStatus === "approved"}
             sending={!!sending}
           />
         </div>
