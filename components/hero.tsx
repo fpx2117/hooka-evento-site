@@ -5,12 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Ticket, Calendar, MapPin } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { TicketSalesModal } from "./ticket-sales-modal";
+import { VIPTableModal } from "./vip-table-modal";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
 const TARGET_ISO = "2025-11-02T22:00:00-03:00"; // 02/11/2025 22:00 AR
 
 export function Hero() {
   const [showTicketModal, setShowTicketModal] = useState(false);
+  const [showVIPModal, setShowVIPModal] = useState(false);
   const [timeLeft, setTimeLeft] = useState({
     days: 0,
     hours: 0,
@@ -114,21 +116,37 @@ export function Hero() {
           </p>
 
           {/* CTA */}
-          <div className="flex items-center justify-center pt-4 md:pt-5 px-4">
+          <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-4 pt-4 md:pt-5 px-4 w-full">
             <Button
               size="lg"
               onClick={() => setShowTicketModal(true)}
               className="
-                w-full sm:w-auto
-                text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
-                bg-white text-[#5b0d0d] font-bold tracking-wide
-                transition-colors duration-200 hover:scale-105 shadow-2xl
-                hover:bg-[#5b0d0d] hover:text-white
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
-              "
+      w-full md:w-auto
+      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+      bg-white text-[#5b0d0d] font-bold tracking-wide
+      transition-transform duration-200 hover:scale-105 shadow-2xl
+      hover:bg-[#5b0d0d] hover:text-white
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+    "
             >
               <Ticket className="w-5 h-5 mr-2" />
-              ¡Reservá Ahora!
+              ¡Reservá Entradas!
+            </Button>
+
+            <Button
+              size="lg"
+              onClick={() => setShowVIPModal(true)}
+              className="
+      w-full md:w-auto
+      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+      bg-white text-[#5b0d0d] font-bold tracking-wide
+      transition-transform duration-200 hover:scale-105 shadow-2xl
+      hover:bg-[#5b0d0d] hover:text-white
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+    "
+            >
+              <Ticket className="w-5 h-5 mr-2" />
+              ¡Reservá tu MESA VIP!
             </Button>
           </div>
         </div>
@@ -141,6 +159,8 @@ export function Hero() {
         open={showTicketModal}
         onOpenChange={setShowTicketModal}
       />
+
+      <VIPTableModal open={showVIPModal} onOpenChange={setShowVIPModal} />
 
       <style jsx>{`
         @keyframes lipFloat {
