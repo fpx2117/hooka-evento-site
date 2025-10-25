@@ -38,7 +38,7 @@ export function Footer() {
                 <p>
                   2 de Noviembre
                   <br />
-                  12:00 - 21:00hs
+                  12:00pm
                 </p>
               </div>
               <p className="text-xs leading-relaxed">
