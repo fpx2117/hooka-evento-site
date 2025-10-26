@@ -40,6 +40,13 @@ const INITIAL_DJS = [
     youtubeUrl: "https://www.instagram.com/juanc_rmx",
   },
   {
+    name: "joabenitezz",
+    specialty: "",
+    image: "/joa.jpg",
+    spotifyUrl: "",
+    youtubeUrl: "",
+  },
+  {
     name: "Tato Remix",
     specialty: "",
     image: "/tatormx.jpg",
