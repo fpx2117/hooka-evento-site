@@ -8,7 +8,7 @@ import { TicketSalesModal } from "./ticket-sales-modal";
 import { VIPTableModal } from "./vip-table-modal";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
-const TARGET_ISO = "2025-11-02T22:00:00-03:00"; // 02/11/2025 22:00 AR
+const TARGET_ISO = "2025-11-16T12:00:00-03:00"; // Dom 16/11/2025 12:00 AR
 
 export function Hero() {
   const [showTicketModal, setShowTicketModal] = useState(false);
@@ -50,7 +50,6 @@ export function Hero() {
       />
 
       <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4">
-        {/* LABIO */}
         <div className="row-start-2 translate-y-[clamp(18px,5.2vh,56px)] md:translate-y-[clamp(64px,10.5vh,170px)]">
           <div className="relative lip-wrap">
             <span aria-hidden className="lip-shine" />
@@ -71,12 +70,9 @@ export function Hero() {
           </div>
         </div>
 
-        {/* CONTENIDO — subido en DESKTOP */}
         <div className="row-start-3 w-full text-center md:-translate-y-[56px]">
-          {/* aire para la gota (menos en desktop) */}
           <div className="mt-[clamp(14px,3.8vh,48px)] md:mt-3" />
 
-          {/* Countdown con halo */}
           <div className="relative inline-flex items-end justify-center gap-3 sm:gap-4 md:gap-6">
             <span
               aria-hidden
@@ -96,14 +92,12 @@ export function Hero() {
             <TimeBox value={pad(timeLeft.seconds)} label="SEG" />
           </div>
 
-          {/* separador */}
           <div className="mx-auto mt-3 h-[2px] w-[140px] sm:w-[180px] rounded-full bg-white/15" />
 
-          {/* chips meta */}
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <Calendar className="h-3.5 w-3.5 opacity-90" />
-              <span className="opacity-95">Dom 02/11 · 12:00</span>
+              <span className="opacity-95">Dom 16/11 · 12:00</span>
             </span>
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <MapPin className="h-3.5 w-3.5 opacity-90" />
@@ -115,7 +109,6 @@ export function Hero() {
             Recibí el calor con nosotros
           </p>
 
-          {/* CTA */}
           <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-4 pt-4 md:pt-5 px-4 w-full">
             <Button
               size="lg"

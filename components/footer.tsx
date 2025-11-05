@@ -36,7 +36,7 @@ export function Footer() {
               <div className="flex items-start gap-3">
                 <Clock className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <p>
-                  2 de Noviembre
+                  16 de Noviembre
                   <br />
                   12:00pm
                 </p>
