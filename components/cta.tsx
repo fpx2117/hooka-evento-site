@@ -81,12 +81,17 @@ export function CTA() {
               </Button>
 
               <Button
-                size="lg"
-                onClick={() => setVipModalOpen(true)}
-                className={`${swapSolid} text-lg px-10 py-7 font-semibold tracking-wide hover:scale-105 transition-transform bg-white`}
-              >
-                Reservar Mesa VIP
-              </Button>
+  size="lg"
+  onClick={() =>
+    window.open(
+      "https://wa.me/message/RMBFT2AUPLX5J1",
+      "_blank"
+    )
+  }
+  className={`${swapSolid} text-lg px-10 py-7 font-semibold tracking-wide hover:scale-105 transition-transform bg-white`}
+>
+  Reservar Mesa VIP
+</Button>
             </div>
 
             {/* Trust Badge */}

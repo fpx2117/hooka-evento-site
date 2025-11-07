@@ -126,21 +126,23 @@ export function Hero() {
               ¡Reservá Entradas!
             </Button>
 
-            <Button
-              size="lg"
-              onClick={() => setShowVIPModal(true)}
-              className="
-      w-full md:w-auto
-      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
-      bg-white text-[#5b0d0d] font-bold tracking-wide
-      transition-transform duration-200 hover:scale-105 shadow-2xl
-      hover:bg-[#5b0d0d] hover:text-white
-      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
-    "
-            >
-              <Ticket className="w-5 h-5 mr-2" />
-              ¡Reservá tu MESA VIP!
-            </Button>
+           <Button
+  size="lg"
+  onClick={() =>
+    window.open("https://wa.me/message/RMBFT2AUPLX5J1", "_blank")
+  }
+  className="
+    w-full md:w-auto
+    text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+    bg-white text-[#5b0d0d] font-bold tracking-wide
+    transition-transform duration-200 hover:scale-105 shadow-2xl
+    hover:bg-[#5b0d0d] hover:text-white
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+  "
+>
+  <Ticket className="w-5 h-5 mr-2" />
+  ¡Reservá tu MESA VIP!
+</Button>
           </div>
         </div>
 
