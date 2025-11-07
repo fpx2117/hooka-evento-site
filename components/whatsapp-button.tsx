@@ -44,7 +44,7 @@ function shouldHide(
 export default function WhatsAppButton({
   src = "/WhatsApp_icon.png",
   text = "¡Hola! Vengo de la web de Hooka Party",
-  phone = "5491136529318",
+  phone = "5491140833423",
   positionClassName = "bottom-4 right-4",
   variant = "compact",
   addLipEmoji = true,
