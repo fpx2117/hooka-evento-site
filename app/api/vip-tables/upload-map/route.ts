@@ -18,34 +18,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Convertir archivo en Buffer
+    // 🧠 Convertir archivo en buffer
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // 📁 Directorio donde se guardará el archivo (usando volumen persistente)
+    // 📁 Directorio de destino (usando volumen persistente)
     const uploadDir = path.join(process.cwd(), "public", "uploads");
-    await mkdir(uploadDir, { recursive: true }); // crea el directorio si no existe
+    await mkdir(uploadDir, { recursive: true }); // crear si no existe
 
-    // 📝 Nombre del archivo
-    const safeFileName = file.name.replace(/\s+/g, "_");
+    // 📝 Nombre seguro del archivo (sin espacios ni caracteres raros)
+    const safeFileName = file.name.replace(/[^\w.-]+/g, "_");
     const fileName = `${configId}-${Date.now()}-${safeFileName}`;
     const filePath = path.join(uploadDir, fileName);
 
-    // Guardar el archivo físicamente
+    // 💾 Guardar archivo en el volumen
     await writeFile(filePath, buffer);
 
-    // 🌍 Crear URL pública absoluta
-    // Esto usa el dominio actual de Railway (por ejemplo hooka.com.ar)
-    const origin =
-      process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin || "https://hooka.com.ar";
-    const publicUrl = `${origin}/uploads/${fileName}`;
+    // 🌍 Construir URL pública absoluta
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.NODE_ENV === "production"
+        ? "https://hooka.com.ar"
+        : req.nextUrl.origin);
 
-    // 🧩 Actualizar VipTableConfig con la URL
+    const publicUrl = `${baseUrl}/uploads/${fileName}`;
+
+    // 🧩 Actualizar la base de datos
     await prisma.vipTableConfig.update({
       where: { id: configId },
       data: { mapUrl: publicUrl },
     });
 
+    // ✅ Respuesta final
     return NextResponse.json({
       ok: true,
       message: "Mapa subido correctamente",
@@ -57,5 +61,7 @@ export async function POST(req: NextRequest) {
       { ok: false, error: "No se pudo subir el archivo" },
       { status: 500 }
     );
+  } finally {
+    await prisma.$disconnect();
   }
 }
