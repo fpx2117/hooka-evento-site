@@ -100,9 +100,30 @@ async function getOrCreateActiveEvent() {
 /* -------------------------------------------------------------------------- */
 /*                                 🔹 GET CONFIG                              */
 /* -------------------------------------------------------------------------- */
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
-    const event = await getOrCreateActiveEvent();
+    // Obtener eventId de los parámetros de consulta
+    const { searchParams } = new URL(req.url);
+    const eventId = searchParams.get("eventId");
+
+    if (!eventId) {
+      return json({ error: "Falta eventId" }, { status: 400 });
+    }
+
+    // Buscar evento por eventId
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      include: {
+        ticketConfigs: true,
+        vipConfigs: true,
+        vipLocations: true,
+        vipTables: true,
+      },
+    });
+
+    if (!event) {
+      return json({ error: "Evento no encontrado" }, { status: 404 });
+    }
 
     /* ---------------------- 🎟️ Entradas generales vendidas ---------------------- */
     const [soldH, soldM] = await Promise.all([
@@ -279,8 +300,8 @@ export async function GET(_req: NextRequest) {
 /* -------------------------------------------------------------------------- */
 export async function PATCH(req: NextRequest) {
   try {
-    const event = await getOrCreateActiveEvent();
     const body = (await req.json()) as {
+      eventId: string;
       totalCapacity?: number;
       general?: {
         hombre?: { price?: number | string; limit?: number };
@@ -293,6 +314,27 @@ export async function PATCH(req: NextRequest) {
         capacityPerTable?: number | string;
       }>;
     };
+
+    const { eventId } = body;
+
+    if (!eventId) {
+      return json({ error: "Falta eventId" }, { status: 400 });
+    }
+
+    // Buscar evento por eventId
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      include: {
+        ticketConfigs: true,
+        vipConfigs: true,
+        vipLocations: true,
+        vipTables: true,
+      },
+    });
+
+    if (!event) {
+      return json({ error: "Evento no encontrado" }, { status: 404 });
+    }
 
     const upserts: Promise<unknown>[] = [];
 
