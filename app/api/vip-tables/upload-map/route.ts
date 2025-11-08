@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
-import { writeFile } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 
 const prisma = new PrismaClient();
@@ -18,21 +18,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Convertir el archivo en un Buffer
+    // Convertir archivo en Buffer
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Guardar archivo en /public/uploads
+    // 📁 Directorio donde se guardará el archivo (usando volumen persistente)
     const uploadDir = path.join(process.cwd(), "public", "uploads");
-    const fileName = `${configId}-${Date.now()}-${file.name}`;
+    await mkdir(uploadDir, { recursive: true }); // crea el directorio si no existe
+
+    // 📝 Nombre del archivo
+    const safeFileName = file.name.replace(/\s+/g, "_");
+    const fileName = `${configId}-${Date.now()}-${safeFileName}`;
     const filePath = path.join(uploadDir, fileName);
 
+    // Guardar el archivo físicamente
     await writeFile(filePath, buffer);
 
-    // Crear URL pública
-    const publicUrl = `/uploads/${fileName}`;
+    // 🌍 Crear URL pública absoluta
+    // Esto usa el dominio actual de Railway (por ejemplo hooka.com.ar)
+    const origin =
+      process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin || "https://hooka.com.ar";
+    const publicUrl = `${origin}/uploads/${fileName}`;
 
-    // Actualizar VipTableConfig.mapUrl
+    // 🧩 Actualizar VipTableConfig con la URL
     await prisma.vipTableConfig.update({
       where: { id: configId },
       data: { mapUrl: publicUrl },
