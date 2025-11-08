@@ -128,9 +128,7 @@ export function Hero() {
 
            <Button
   size="lg"
-  onClick={() =>
-    window.open("https://wa.me/message/RMBFT2AUPLX5J1", "_blank")
-  }
+  onClick={() => setShowVIPModal(true)}
   className="
     w-full md:w-auto
     text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
@@ -143,6 +141,7 @@ export function Hero() {
   <Ticket className="w-5 h-5 mr-2" />
   ¡Reservá tu MESA VIP!
 </Button>
+
           </div>
         </div>
 
