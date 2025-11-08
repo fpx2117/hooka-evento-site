@@ -1,41 +1,72 @@
 -- ===========================================
--- FIX SAFE MIGRATION (Production Compatible)
--- Version funcionalmente idéntica al original
+-- SAFE ALTER TABLE: agrega columnas sin errores si ya existen
 -- ===========================================
 
--- 1️⃣ Asegurar que las columnas nuevas existan
-ALTER TABLE "TicketArchive"
-ADD COLUMN IF NOT EXISTS "capacityPerTable" INTEGER NULL,
-ADD COLUMN IF NOT EXISTS "emailSentAt" TIMESTAMP(3) NULL,
-ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP(3) NULL,
-ADD COLUMN IF NOT EXISTS "paymentId" TEXT NULL,
-ADD COLUMN IF NOT EXISTS "qrCode" TEXT NULL,
-ADD COLUMN IF NOT EXISTS "tableNumber" INTEGER NULL,
-ADD COLUMN IF NOT EXISTS "validationCode" TEXT NULL;
+DO $$
+BEGIN
+    -- Añadir columna capacityPerTable si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'capacityPerTable'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "capacityPerTable" INTEGER;
+    END IF;
 
--- 2️⃣ Asegurar índices opcionales si Prisma los requiere (según tu schema actual)
-DO $$ BEGIN
-    CREATE INDEX IF NOT EXISTS "TicketArchive_paymentId_idx" ON "TicketArchive"("paymentId");
-EXCEPTION WHEN duplicate_table THEN NULL; END $$;
+    -- Añadir columna emailSentAt si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'emailSentAt'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "emailSentAt" TIMESTAMP(3);
+    END IF;
 
-DO $$ BEGIN
-    CREATE INDEX IF NOT EXISTS "TicketArchive_tableNumber_idx" ON "TicketArchive"("tableNumber");
-EXCEPTION WHEN duplicate_table THEN NULL; END $$;
+    -- Añadir columna expiresAt si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'expiresAt'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "expiresAt" TIMESTAMP(3);
+    END IF;
 
-DO $$ BEGIN
-    CREATE INDEX IF NOT EXISTS "TicketArchive_emailSentAt_idx" ON "TicketArchive"("emailSentAt");
-EXCEPTION WHEN duplicate_table THEN NULL; END $$;
+    -- Añadir columna paymentId si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'paymentId'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "paymentId" TEXT;
+    END IF;
 
--- 3️⃣ Registrar manualmente la migración como aplicada
-UPDATE "_prisma_migrations"
-SET
-  applied_steps_count = 1,
-  finished_at = NOW(),
-  rolled_back_at = NULL,
-  logs = '✅ Columns added manually and safely in production',
-  started_at = NOW()
-WHERE migration_name = '20251107051846_init_vip_tables_v1_1';
+    -- Añadir columna qrCode si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'qrCode'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "qrCode" TEXT;
+    END IF;
 
+    -- Añadir columna tableNumber si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'tableNumber'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "tableNumber" INTEGER;
+    END IF;
+
+    -- Añadir columna validationCode si no existe
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'TicketArchive' AND column_name = 'validationCode'
+    ) THEN
+        ALTER TABLE "TicketArchive" ADD COLUMN "validationCode" TEXT;
+    END IF;
+END $$;
 -- ===========================================
--- END SAFE MIGRATION
+-- END SAFE ALTER TABLE
 -- ===========================================

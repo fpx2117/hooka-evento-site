@@ -2,12 +2,14 @@
 -- SAFE MIGRATION: agregar columnas VIP sin borrar datos
 -- ===========================================
 
+-- 1️⃣ Crear el nuevo enum solo si no existe
 DO $$ BEGIN
     CREATE TYPE "VipTableStatus" AS ENUM ('available', 'reserved', 'sold', 'blocked');
 EXCEPTION
     WHEN duplicate_object THEN NULL;
 END $$;
 
+-- 2️⃣ Crear nuevas tablas si no existen
 CREATE TABLE IF NOT EXISTS "VipLocation" (
     "id" TEXT PRIMARY KEY,
     "eventId" TEXT NOT NULL,
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS "VipTable" (
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 3️⃣ Agregar columnas nuevas a Ticket y TicketArchive sin borrar las viejas
 ALTER TABLE "Ticket"
 ADD COLUMN IF NOT EXISTS "vipLocationId" TEXT NULL,
 ADD COLUMN IF NOT EXISTS "vipTableConfigId" TEXT NULL,
@@ -41,9 +44,11 @@ ADD COLUMN IF NOT EXISTS "vipLocationId" TEXT NULL,
 ADD COLUMN IF NOT EXISTS "vipTableConfigId" TEXT NULL,
 ADD COLUMN IF NOT EXISTS "vipTableId" TEXT NULL;
 
+-- 4️⃣ Agregar columna nueva a VipTableConfig sin tocar las existentes
 ALTER TABLE "VipTableConfig"
 ADD COLUMN IF NOT EXISTS "vipLocationId" TEXT NULL;
 
+-- 5️⃣ Crear índices si no existen
 DO $$ BEGIN
     CREATE INDEX "Ticket_vipLocationId_idx" ON "Ticket"("vipLocationId");
 EXCEPTION WHEN duplicate_table THEN NULL; END $$;
@@ -64,6 +69,7 @@ DO $$ BEGIN
     CREATE INDEX "VipTableConfig_eventId_vipLocationId_idx" ON "VipTableConfig"("eventId", "vipLocationId");
 EXCEPTION WHEN duplicate_table THEN NULL; END $$;
 
+-- 6️⃣ Crear las foreign keys solo si no existen
 DO $$ BEGIN
     ALTER TABLE "VipLocation"
     ADD CONSTRAINT "VipLocation_eventId_fkey" FOREIGN KEY ("eventId")
