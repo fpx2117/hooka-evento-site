@@ -1,131 +1,93 @@
-// app/api/vip-tables/config/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  getActiveEventId,
-  getVipSequentialRanges,
-  VIP_SECTOR_ORDER,
-} from "@/lib/vip-tables";
-import { PaymentStatus, TableLocation } from "@prisma/client";
 
-/**
- * GET /api/vip-tables/config?eventId=...&eventCode=...
- * ...
- */
-
-// ===== Config bloqueos =====
-const LOCK_WINDOW_MINUTES = Number(process.env.VIP_LOCK_WINDOW_MINUTES ?? 20);
-
-function minutesAgo(d: Date, m: number) {
-  return new Date(d.getTime() - m * 60_000);
-}
-
-function json(payload: any, init?: number | ResponseInit) {
-  const initObj: ResponseInit =
-    typeof init === "number" ? { status: init } : init || {};
-  const headers = new Headers(initObj.headers || {});
-  headers.set(
-    "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate"
-  );
-  headers.set("Pragma", "no-cache");
-  headers.set("Expires", "0");
-  headers.set("Content-Type", "application/json; charset=utf-8");
-  return NextResponse.json(payload, { ...initObj, headers });
-}
+const json = (p: any, s = 200) => NextResponse.json(p, { status: s });
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const eventIdParam = (searchParams.get("eventId") || "").trim();
-    const eventCodeParam = (searchParams.get("eventCode") || "").trim();
+    const eventId = searchParams.get("eventId")?.trim();
 
-    // 1) Evento
-    const eventId = await getActiveEventId({
-      prisma,
-      eventId: eventIdParam || undefined,
-      eventCode: eventCodeParam || undefined,
-    });
-    if (!eventId) {
-      return json({ ok: false, error: "No se encontró un evento activo" }, 404);
-    }
+    if (!eventId) return json({ ok: false, error: "Falta eventId" }, 400);
 
-    // 2) Configs VIP
-    const cfgs = await prisma.vipTableConfig.findMany({
+    // 🔹 Trae todas las configuraciones del evento
+    const configs = await prisma.vipTableConfig.findMany({
       where: { eventId },
-      select: {
-        location: true,
-        price: true,
-        capacityPerTable: true,
-        stockLimit: true,
+      include: {
+        vipLocation: { select: { id: true, name: true } },
       },
+      orderBy: { createdAt: "asc" },
     });
 
-    // 3) Rangos globales
-    const { total: totalTables, ranges } = await getVipSequentialRanges({
-      prisma,
-      eventId,
-    });
-    const rangeByLoc = new Map(ranges.map((r) => [r.location, r]));
-    const cfgByLoc = new Map(cfgs.map((c) => [c.location as TableLocation, c]));
-
-    // 4) Tomadas = approved + in_process recientes
-    const now = new Date();
-    const takenGroups = await prisma.ticket.groupBy({
-      by: ["vipLocation"],
-      where: {
-        eventId,
-        ticketType: "vip",
-        tableNumber: { not: null },
-        vipLocation: { not: null }, // 👈 evita grupo null
-        OR: [
-          { paymentStatus: PaymentStatus.approved },
-          {
-            paymentStatus: PaymentStatus.in_process,
-            updatedAt: { gte: minutesAgo(now, LOCK_WINDOW_MINUTES) },
+    // 🔹 Recalculamos soldCount dinámicamente
+    const recalculated = await Promise.all(
+      configs.map(async (cfg) => {
+        // Buscamos todas las mesas asociadas a esta config
+        const tables = await prisma.vipTable.findMany({
+          where: { vipTableConfigId: cfg.id },
+          include: {
+            tickets: {
+              select: { paymentStatus: true },
+            },
           },
-        ],
-      },
-      _count: { _all: true },
-    });
+        });
 
-    const soldByLoc = new Map<TableLocation, number>(
-      takenGroups.map((g) => [g.vipLocation as TableLocation, g._count._all])
+        // ✅ Contamos las mesas con al menos un ticket aprobado (en cualquier idioma/capitalización)
+        const soldCount = tables.filter((table) =>
+          table.tickets.some((t) => {
+            const status = t.paymentStatus?.toLowerCase?.() ?? "";
+            return status === "approved" || status === "aprobado";
+          })
+        ).length;
+
+        // ✅ Actualizamos en la base si cambió
+        if (soldCount !== cfg.soldCount) {
+          await prisma.vipTableConfig.update({
+            where: { id: cfg.id },
+            data: { soldCount },
+          });
+        }
+
+        return { ...cfg, soldCount };
+      })
     );
 
-    // 5) Respuesta ordenada
-    const vipTables = VIP_SECTOR_ORDER.map((loc) => {
-      const cfg = cfgByLoc.get(loc);
-      const range = rangeByLoc.get(loc);
+    return json({ ok: true, total: recalculated.length, configs: recalculated });
+  } catch (e) {
+    console.error("[vip-tables][config][GET]", e);
+    return json({ ok: false, error: "Error listando configuraciones" }, 500);
+  }
+}
 
-      const limit = Number.isFinite(cfg?.stockLimit ?? NaN)
-        ? Number(cfg!.stockLimit)
-        : 0;
-      const sold = soldByLoc.get(loc) ?? 0;
-      const remaining = Math.max(0, limit - sold);
+export async function POST(req: NextRequest) {
+  try {
+    const { eventId, vipLocationId, price, stockLimit, capacityPerTable = 10 } =
+      await req.json();
 
-      return {
-        location: loc,
-        price: cfg?.price != null ? Number(cfg.price) : null,
-        limit,
-        sold,
-        remaining,
-        capacityPerTable:
-          cfg?.capacityPerTable != null ? Number(cfg.capacityPerTable) : null,
-        startNumber: range ? range.startNumber : null,
-        endNumber: range ? range.endNumber : null,
-      };
+    if (!eventId || !vipLocationId || price == null || stockLimit == null)
+      return json({ ok: false, error: "Faltan campos obligatorios" }, 400);
+
+    const existing = await prisma.vipTableConfig.findFirst({
+      where: { eventId, vipLocationId },
     });
 
-    return json({ ok: true, eventId, totalTables, vipTables });
-  } catch (err) {
-    console.error("[vip-tables/config] Error:", err);
-    return json(
-      { ok: false, error: "Error obteniendo configuración VIP" },
-      500
-    );
+    const cfg = existing
+      ? await prisma.vipTableConfig.update({
+          where: { id: existing.id },
+          data: { price, stockLimit, capacityPerTable },
+        })
+      : await prisma.vipTableConfig.create({
+          data: { eventId, vipLocationId, price, stockLimit, capacityPerTable },
+        });
+
+    return json({ ok: true, config: cfg }, existing ? 200 : 201);
+  } catch (e: any) {
+    console.error("[vip-tables][config][POST]", e);
+    if (e?.code === "P2002")
+      return json(
+        { ok: false, error: "Ya existe una config para esa ubicación" },
+        409
+      );
+    return json({ ok: false, error: "Error creando o actualizando config" }, 500);
   }
 }

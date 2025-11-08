@@ -17,59 +17,59 @@ import {
   Award as IdCard,
   Mail,
   Phone,
-  Music,
-  Waves,
   User,
   Map as MapIcon,
+  Music,
+  Waves,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 /* =========================
-   Tipos de la API de config
+   Tipos (alineados a tus APIs)
 ========================= */
 type TableLoc = "piscina" | "dj" | "general";
 
-type TicketsConfig = {
-  tickets?: {
-    vip?: {
-      price?: number;
-      remaining?: number;
-      remainingTables?: number;
-      unitSize?: number;
-    };
-  };
-  vipTables?: Array<{
-    location: TableLoc;
-    price: number;
-    limit: number; // mesas del sector
-    sold: number;
-    remaining: number;
-    capacityPerTable: number;
-    /** NUEVO: numeración GLOBAL por sector */
-    startNumber?: number | null;
-    endNumber?: number | null;
-  }>;
-  /** opcional si tu /config ya lo expone */
+type VipConfig = {
+  vipLocationId: string;
+  locationName: string;
+  price: number;
+  limit: number;
+  sold: number;
+  remaining: number;
+  capacityPerTable: number;
+  startNumber?: number | null;
+  endNumber?: number | null;
+};
+
+type TicketsConfigResponse = {
+  eventId: string;
+  vipTables: VipConfig[];
   totals?: {
+    unitVipSize?: number;
     totalTables?: number;
   };
 };
 
-/** El endpoint puede devolver ocupadas en global o local */
-type AvailabilityRes =
-  | {
-      taken?: number[]; // compat (global si hay numeración global)
-      takenGlobal?: number[];
-      takenLocal?: number[];
-    }
-  | any;
+type AvailabilityTable = {
+  id: string;
+  tableNumber: number;
+  status: "available" | "reserved" | "sold" | "blocked";
+  price: number;
+  capacityPerTable: number;
+  available: boolean;
+};
 
-/* =========================
-   Props
-========================= */
+type AvailabilityResponse = {
+  ok: boolean;
+  total: number;
+  tables: AvailabilityTable[];
+  mapUrl?: string | null; // 👈 nuevo campo opcional
+};
+
 interface VIPTableModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** opcional: si querés sobreescribir el endpoint */
   configEndpoint?: string; // default /api/admin/tickets/config
   availabilityEndpoint?: string; // default /api/vip-tables/availability
   mapImageUrl?: string; // default /mapa.jpg
@@ -78,49 +78,46 @@ interface VIPTableModalProps {
 /* =========================
    Utils
 ========================= */
-function formatMoney(n: number) {
+function formatMoney(n?: number | null) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "-";
   return n.toLocaleString("es-AR");
 }
 function cleanDigits(s: string) {
   return (s || "").replace(/\D+/g, "");
 }
-function range(from: number, to: number): number[] {
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return [];
-  const len = to - from + 1;
-  return Array.from({ length: len }, (_, i) => from + i);
+function range(from?: number | null, to?: number | null) {
+  if (!Number.isFinite(from as number) || !Number.isFinite(to as number)) return [];
+  if ((to as number) < (from as number)) return [];
+  const len = (to as number) - (from as number) + 1;
+  return Array.from({ length: len }, (_, i) => (from as number) + i);
 }
 
 /* =========================
-   VIPTableModal
+   Componente
 ========================= */
 export function VIPTableModal({
   open,
   onOpenChange,
   configEndpoint = "/api/admin/tickets/config",
   availabilityEndpoint = "/api/vip-tables/availability",
-  mapImageUrl = "/mapa.jpg",
 }: VIPTableModalProps) {
-  // ======= State de config VIP =======
-  const [vipPriceGlobal, setVipPriceGlobal] = useState<number | null>(null);
-  const [remainingTablesGlobal, setRemainingTablesGlobal] = useState<
-    number | null
-  >(null);
-  const [unitSizeGlobal, setUnitSizeGlobal] = useState<number | null>(null);
-  const [vipTablesCfg, setVipTablesCfg] = useState<TicketsConfig["vipTables"]>(
-    []
-  );
-  const [selectedLocation, setSelectedLocation] = useState<TableLoc | null>(
-    null
-  );
 
-  // ======= Disponibilidad por mesa SEGÚN LO QUE MOSTRAMOS =======
-  // (si mostramos global -> guardamos ocupadas en global; si local -> en local)
-  const [takenDisplaySet, setTakenDisplaySet] = useState<Set<number>>(
-    new Set()
-  );
+  /* --------- Config global --------- */
+  const [resolvedEventId, setResolvedEventId] = useState<string | null>(null);
+  const [vipTablesCfg, setVipTablesCfg] = useState<VipConfig[]>([]);
+  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgError, setCfgError] = useState<string | null>(null);
+  const [mapImageUrl, setMapImageUrl] = useState<string>("/mapa.jpg");
+
+
+  /* --------- UI selección --------- */
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
+
+  /* --------- Availability --------- */
+  const [tables, setTables] = useState<AvailabilityTable[]>([]);
   const [tablesLoading, setTablesLoading] = useState(false);
 
-  // ======= Form =======
+  /* --------- Cliente --------- */
   const [customer, setCustomer] = useState({
     name: "",
     dni: "",
@@ -128,254 +125,170 @@ export function VIPTableModal({
     phone: "",
     gender: "" as "" | "hombre" | "mujer",
   });
-  // `tableNumberDisplay` contiene el número tal como lo ve el usuario (global o local según corresponda)
-  const [tableNumberDisplay, setTableNumberDisplay] = useState<number | null>(
-    null
-  );
+  const [tableNumberDisplay, setTableNumberDisplay] = useState<number | null>(null);
 
-  const [cfgLoading, setCfgLoading] = useState(false);
-  const [cfgError, setCfgError] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  /* --------- Estado general --------- */
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [mapOpen, setMapOpen] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  // ======= Traer config =======
+  /* =========================
+     1) Cargar configuración (eventId + vipTables)
+  ========================== */
   useEffect(() => {
     let cancelled = false;
-
     async function loadConfig() {
+      if (!open) return;
       setCfgLoading(true);
       setCfgError(null);
-
-      const tryEndpoints = [
-        configEndpoint,
-        "/api/admin/tickets/config",
-        "/api/tickets/config",
-      ];
-      for (const ep of tryEndpoints) {
-        try {
-          const r = await fetch(ep, { cache: "no-store" });
-          if (!r.ok) continue;
-          const data: TicketsConfig = await r.json();
-          if (cancelled) return;
-
-          const v = data?.tickets?.vip ?? {};
-          setVipPriceGlobal(typeof v.price === "number" ? v.price : null);
-          setRemainingTablesGlobal(
-            typeof v.remainingTables === "number" ? v.remainingTables : null
-          );
-          setUnitSizeGlobal(typeof v.unitSize === "number" ? v.unitSize : null);
-
-          const tables = Array.isArray(data?.vipTables) ? data.vipTables : [];
-          setVipTablesCfg(tables);
-
-          const hasDJ = tables.find((t) => t.location === "dj");
-          const hasPiscina = tables.find((t) => t.location === "piscina");
-          const firstWithStock = tables.find((t) => (t?.remaining ?? 0) > 0);
-          const defaultLoc =
-            (hasDJ?.location as TableLoc) ||
-            (hasPiscina?.location as TableLoc) ||
-            (firstWithStock?.location as TableLoc) ||
-            (tables[0]?.location as TableLoc) ||
-            null;
-
-          setSelectedLocation(defaultLoc ?? null);
-          setCfgLoading(false);
-          return;
-        } catch {
-          /* probar siguiente endpoint */
-        }
-      }
-
-      if (!cancelled) {
-        setCfgError("No se pudo cargar la configuración de Mesas VIP.");
-        setCfgLoading(false);
-      }
-    }
-
-    if (open) {
-      loadConfig();
-      setCustomer({ name: "", dni: "", email: "", phone: "", gender: "" });
+      setTables([]); // limpiar por si cambiamos de evento
       setTableNumberDisplay(null);
-      setTakenDisplaySet(new Set());
-      setErrors({});
+
+      try {
+        const res = await fetch(configEndpoint, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: TicketsConfigResponse = await res.json();
+
+        if (cancelled) return;
+
+        const eventId = data?.eventId || null;
+        setResolvedEventId(eventId);
+
+        const list = Array.isArray(data?.vipTables) ? data.vipTables : [];
+        setVipTablesCfg(list);
+
+        // Elegir ubicación por defecto: con stock > 0 o primera
+        const firstWithStock = list.find((v) => (v?.remaining ?? 0) > 0);
+        const defId = (firstWithStock?.vipLocationId || list[0]?.vipLocationId) ?? null;
+        setSelectedLocationId(defId);
+      } catch (e) {
+        console.error("[VIPTableModal] config error:", e);
+        if (!cancelled) setCfgError("No se pudo cargar la configuración de Mesas VIP.");
+      } finally {
+        if (!cancelled) setCfgLoading(false);
+      }
     }
+    loadConfig();
     return () => {
       cancelled = true;
     };
   }, [open, configEndpoint]);
 
-  // ======= Config actual según ubicación =======
-  const currentLocCfg = useMemo(() => {
-    if (!selectedLocation) return null;
-    return vipTablesCfg?.find((t) => t.location === selectedLocation) || null;
-  }, [vipTablesCfg, selectedLocation]);
+  /* Helpers de ubicación seleccionada */
+  const selectedLocCfg: VipConfig | null = useMemo(() => {
+    if (!selectedLocationId) return null;
+    return vipTablesCfg.find((v) => v.vipLocationId === selectedLocationId) || null;
+  }, [vipTablesCfg, selectedLocationId]);
 
-  // ======= Derivados mostrados =======
-  const vipPrice = useMemo(
-    () => currentLocCfg?.price ?? vipPriceGlobal ?? 0,
-    [currentLocCfg, vipPriceGlobal]
-  );
-  const remainingTables = useMemo(
-    () => currentLocCfg?.remaining ?? remainingTablesGlobal ?? 0,
-    [currentLocCfg, remainingTablesGlobal]
-  );
-  const unitSize = useMemo(
-    () => currentLocCfg?.capacityPerTable ?? unitSizeGlobal ?? null,
-    [currentLocCfg, unitSizeGlobal]
-  );
+  /* KPIs mostrados */
+  const vipPrice = selectedLocCfg?.price ?? null;
+  const remainingTables = selectedLocCfg?.remaining ?? null;
+  const unitSize = selectedLocCfg?.capacityPerTable ?? null;
 
-  // Numeración GLOBAL por sector disponible?
-  const startGlobal = currentLocCfg?.startNumber ?? null;
-  const endGlobal = currentLocCfg?.endNumber ?? null;
-  const isGlobalNumbering = !!(
-    Number.isFinite(startGlobal) &&
-    Number.isFinite(endGlobal) &&
-    startGlobal &&
-    endGlobal
-  );
+  const startGlobal = selectedLocCfg?.startNumber ?? null;
+  const endGlobal = selectedLocCfg?.endNumber ?? null;
+  const isGlobalNumbering =
+    Number.isFinite(startGlobal as number) &&
+    Number.isFinite(endGlobal as number) &&
+    !!startGlobal &&
+    !!endGlobal;
 
-  // Fallback: si no hay global, usamos local 1..limit
-  const limitLocal = currentLocCfg?.limit ?? null;
-  const displayNumbers: number[] = useMemo(() => {
-    if (isGlobalNumbering) {
-      return range(startGlobal as number, endGlobal as number);
+  useEffect(() => {
+  let cancelled = false;
+
+  async function loadAvailability() {
+    setTables([]);
+    setTableNumberDisplay(null);
+
+    if (!open) return;
+    if (!resolvedEventId) return;
+    if (!selectedLocCfg?.vipLocationId) return;
+
+    try {
+      setTablesLoading(true);
+      const url = `${availabilityEndpoint}?eventId=${encodeURIComponent(
+        resolvedEventId
+      )}&vipLocationId=${encodeURIComponent(selectedLocCfg.vipLocationId)}`;
+
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) {
+        if (r.status === 400) {
+          console.warn("[VIPTableModal] availability 400: faltan parámetros");
+          return;
+        }
+        throw new Error(`HTTP ${r.status}`);
+      }
+      const data: AvailabilityResponse = await r.json();
+      if (cancelled) return;
+
+      const arr = Array.isArray(data?.tables) ? data.tables : [];
+      arr.sort((a, b) => a.tableNumber - b.tableNumber);
+      setTables(arr);
+
+      // ✅ NUEVO: guardar la URL del mapa
+      setMapImageUrl(data?.mapUrl || "/mapa.jpg");
+
+    } catch (err) {
+      console.error("[VIPTableModal] availability error:", err);
+      if (!cancelled) setTables([]);
+    } finally {
+      if (!cancelled) setTablesLoading(false);
     }
-    if (limitLocal && limitLocal > 0) return range(1, limitLocal);
-    return [];
-  }, [isGlobalNumbering, startGlobal, endGlobal, limitLocal]);
+  }
 
-  const total = useMemo(() => Math.max(0, vipPrice || 0), [vipPrice]);
+  loadAvailability();
+  return () => {
+    cancelled = true;
+  };
+}, [open, resolvedEventId, selectedLocCfg?.vipLocationId, availabilityEndpoint]);
+
+  /* =========================
+     3) Números visibles (preferimos los de availability)
+  ========================== */
+  const displayNumbers: number[] = useMemo(() => {
+    if (tables.length > 0) {
+      return tables.map((t) => t.tableNumber);
+    }
+    // Fallback por rango global
+    if (isGlobalNumbering) {
+      return range(startGlobal, endGlobal);
+    }
+    // Fallback a 1..limit si no hay tabla ni rango
+    const lim = selectedLocCfg?.limit ?? 0;
+    if (lim > 0) return range(1, lim);
+    return [];
+  }, [tables, isGlobalNumbering, startGlobal, endGlobal, selectedLocCfg?.limit]);
+
+  const takenSet = useMemo(() => {
+    if (tables.length === 0) return new Set<number>();
+    return new Set<number>(tables.filter((t) => !t.available).map((t) => t.tableNumber));
+  }, [tables]);
+
+  const totalTablesInLoc =
+    (displayNumbers && displayNumbers.length) || selectedLocCfg?.limit || 0;
+  const takenCount = takenSet.size;
+  const availableCount =
+    totalTablesInLoc > 0 ? Math.max(0, totalTablesInLoc - takenCount) : 0;
 
   const soldOut =
-    typeof remainingTables === "number" && Number.isFinite(remainingTables)
+    typeof remainingTables === "number"
       ? remainingTables <= 0
-      : false;
+      : availableCount <= 0;
 
-  // ======= Traer disponibilidad y ajustarla a lo que mostramos (global o local) =======
-  useEffect(() => {
-    let cancelled = false;
-    async function loadAvailability() {
-      setTablesLoading(true);
-      setTakenDisplaySet(new Set());
-      setTableNumberDisplay(null);
-
-      if (!selectedLocation) {
-        setTablesLoading(false);
-        return;
-      }
-
-      try {
-        const url = `${availabilityEndpoint}?location=${encodeURIComponent(
-          selectedLocation
-        )}`;
-        const r = await fetch(url, { cache: "no-store" });
-        if (r.ok) {
-          const data: AvailabilityRes = await r.json();
-          if (!cancelled) {
-            const takenGlobal: number[] =
-              (data?.takenGlobal as number[]) ??
-              (data?.taken as number[]) ??
-              [];
-            const takenLocal: number[] = data?.takenLocal ?? [];
-
-            let displayTaken: number[] = [];
-            if (isGlobalNumbering) {
-              // Preferimos global; si sólo vienen locales, los convertimos sumando offset
-              if (Array.isArray(takenGlobal) && takenGlobal.length) {
-                displayTaken = takenGlobal
-                  .map(Number)
-                  .filter((n) => Number.isFinite(n));
-              } else if (
-                Array.isArray(takenLocal) &&
-                takenLocal.length &&
-                Number.isFinite(startGlobal)
-              ) {
-                const base = (startGlobal as number) - 1;
-                displayTaken = takenLocal
-                  .map((n) => base + Number(n))
-                  .filter((n) => Number.isFinite(n));
-              }
-            } else {
-              // Mostramos números locales; preferimos takenLocal; si sólo hay global y no hay startGlobal no podemos convertir → mejor no bloquear por dudas
-              if (Array.isArray(takenLocal) && takenLocal.length) {
-                displayTaken = takenLocal
-                  .map(Number)
-                  .filter((n) => Number.isFinite(n));
-              } else if (
-                Array.isArray(takenGlobal) &&
-                takenGlobal.length &&
-                Number.isFinite(startGlobal)
-              ) {
-                // Si por alguna razón tenemos startGlobal sin usar global en UI
-                const base = (startGlobal as number) - 1;
-                displayTaken = takenGlobal
-                  .map((g) => Number(g) - base)
-                  .filter((n) => Number.isFinite(n) && n >= 1);
-              } else {
-                displayTaken = [];
-              }
-            }
-
-            setTakenDisplaySet(new Set(displayTaken));
-          }
-        }
-      } catch {
-        // backend validará de todas maneras
-      } finally {
-        if (!cancelled) setTablesLoading(false);
-      }
-    }
-
-    if (open) loadAvailability();
-    return () => {
-      cancelled = true;
-    };
-    // Dependemos de selectedLocation y de si mostramos global/local
-  }, [
-    open,
-    selectedLocation,
-    availabilityEndpoint,
-    isGlobalNumbering,
-    startGlobal,
-  ]);
-
-  // ======= Helper: obtener número local y global a partir del número "display" =======
-  const resolvedNumbers = useMemo(() => {
-    if (!tableNumberDisplay)
-      return { local: null as number | null, global: null as number | null };
-    if (isGlobalNumbering) {
-      const global = tableNumberDisplay;
-      const local =
-        Number.isFinite(startGlobal) && startGlobal
-          ? tableNumberDisplay - (startGlobal as number) + 1
-          : null;
-      return { local, global };
-    }
-    // Mostramos local
-    const local = tableNumberDisplay;
-    const global =
-      Number.isFinite(startGlobal) && startGlobal
-        ? (startGlobal as number) + tableNumberDisplay - 1
-        : null;
-    return { local, global };
-  }, [tableNumberDisplay, isGlobalNumbering, startGlobal]);
-
-  // ======= Validaciones =======
+  /* =========================
+     Validaciones & Checkout
+  ========================== */
   function validate() {
     const e: Record<string, string> = {};
+    if (!selectedLocCfg) e.location = "Elegí una ubicación de mesa.";
 
-    if (!vipPrice || vipPrice <= 0)
-      e.price = "Precio no disponible. Intentá nuevamente.";
+    if (!vipPrice || vipPrice <= 0) e.price = "Precio no disponible.";
     if (soldOut) e.stock = "No hay mesas disponibles.";
-    if (!selectedLocation) e.location = "Elegí una ubicación de mesa.";
 
     if (!customer.name.trim()) e.name = "Ingresá tu nombre completo";
-
     const dniDigits = cleanDigits(customer.dni);
     if (!dniDigits) e.dni = "Ingresá tu DNI";
-    else if (dniDigits.length < 7 || dniDigits.length > 9)
-      e.dni = "DNI inválido";
+    else if (dniDigits.length < 7 || dniDigits.length > 9) e.dni = "DNI inválido";
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email))
       e.email = "Ingresá un email válido";
@@ -387,18 +300,16 @@ export function VIPTableModal({
     if (!customer.gender) e.gender = "Elegí tu género";
 
     if (!tableNumberDisplay) e.table = "Elegí el número de mesa";
-    if (tableNumberDisplay && takenDisplaySet.has(tableNumberDisplay)) {
-      e.table = "Esa mesa ya está ocupada. Elegí otra.";
+    if (tableNumberDisplay && takenSet.has(tableNumberDisplay)) {
+      e.table = "Esa mesa ya está ocupada.";
     }
 
-    // Validación de rango según lo mostrado
-    if (tableNumberDisplay) {
-      if (displayNumbers.length > 0) {
-        const min = displayNumbers[0];
-        const max = displayNumbers[displayNumbers.length - 1];
-        if (tableNumberDisplay < min || tableNumberDisplay > max) {
-          e.table = "Número de mesa inválido para esta ubicación.";
-        }
+    // Validar rangos
+    if (tableNumberDisplay && displayNumbers.length > 0) {
+      const min = displayNumbers[0];
+      const max = displayNumbers[displayNumbers.length - 1];
+      if (tableNumberDisplay < min || tableNumberDisplay > max) {
+        e.table = "Número de mesa inválido para esta ubicación.";
       }
     }
 
@@ -406,26 +317,17 @@ export function VIPTableModal({
     return Object.keys(e).length === 0;
   }
 
-  // ======= Ir a checkout (1 mesa) =======
   const handleCheckout = async () => {
     if (isProcessing) return;
     if (!validate()) return;
 
     setIsProcessing(true);
     try {
-      const locLabel =
-        selectedLocation === "dj"
-          ? "Cerca del DJ"
-          : selectedLocation === "piscina"
-            ? "Cerca de la PISCINA"
-            : "General";
-
+      const locLabel = selectedLocCfg?.locationName || "VIP";
       const capacity =
         typeof unitSize === "number" && Number.isFinite(unitSize)
           ? unitSize
           : undefined;
-
-      const { local, global } = resolvedNumbers;
 
       const body = {
         items: [
@@ -435,7 +337,7 @@ export function VIPTableModal({
               ? `1 mesa = ${capacity} personas`
               : "Reserva de Mesa VIP",
             quantity: 1,
-            unit_price: vipPrice,
+            unit_price: vipPrice ?? 0,
           },
         ],
         payer: {
@@ -445,21 +347,21 @@ export function VIPTableModal({
           dni: cleanDigits(customer.dni),
           additionalInfo: {
             ticketType: "vip",
-            tables: 1,
+            vipLocationId: selectedLocationId,
+            locationId: selectedLocCfg?.vipLocationId,
+            location: locLabel,
+            tableNumber: tableNumberDisplay ?? undefined,
             unitSize: capacity,
-            location: selectedLocation ?? undefined,
-            // Enviamos ambas variantes para máxima compatibilidad
-            tableNumber: local ?? undefined, // local (1..limit del sector)
-            tableNumberGlobal: global ?? undefined, // global (1..total del evento)
             gender: customer.gender || undefined,
           },
         },
         type: "ticket" as const,
         meta: {
           ticketType: "vip",
-          location: selectedLocation ?? undefined,
-          tableNumber: local ?? undefined,
-          tableNumberGlobal: global ?? undefined,
+          locationId: selectedLocCfg?.vipLocationId,
+          location: locLabel,
+          tableNumber: tableNumberDisplay ?? undefined,
+          unitSize: capacity,
           gender: customer.gender || undefined,
         },
       };
@@ -470,15 +372,14 @@ export function VIPTableModal({
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error("create-payment error:", err);
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data) {
+        console.error("create-payment error:", data);
         alert("No pudimos iniciar el pago. Probá nuevamente.");
         setIsProcessing(false);
         return;
       }
 
-      const data = await res.json();
       const url =
         process.env.NODE_ENV === "production"
           ? data?.init_point
@@ -490,327 +391,241 @@ export function VIPTableModal({
         setIsProcessing(false);
         return;
       }
-
       window.location.assign(url);
-    } catch (error) {
-      console.error("Error al procesar la reserva:", error);
+    } catch (err) {
+      console.error("Error al procesar la reserva:", err);
       alert("Hubo un error al procesar tu reserva. Intentá nuevamente.");
       setIsProcessing(false);
     }
   };
 
-  // ======= UI helpers =======
-  const hasDJ = !!vipTablesCfg?.find((t) => t.location === "dj");
-  const hasPiscina = !!vipTablesCfg?.find((t) => t.location === "piscina");
+  /* =========================
+     UI helpers
+  ========================== */
+  const hasDJ = vipTablesCfg.some((v) =>
+    v.locationName.toLowerCase().includes("dj")
+  );
+  const hasPiscina = vipTablesCfg.some((v) =>
+    v.locationName.toLowerCase().includes("piscina")
+  );
 
   const isNumberDisabled = (n: number) => {
-    if (takenDisplaySet.has(n)) return true;
+    if (takenSet.has(n)) return true;
     if (soldOut) return true;
     return false;
   };
 
+  const totalToPay = useMemo(() => Math.max(0, vipPrice ?? 0), [vipPrice]);
+
+  /* =========================
+     Render
+  ========================== */
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[94vw] sm:max-w-lg max-h-[86svh] sm:max-h-[90vh] overflow-y-auto">
+   <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[94vw] max-w-2xl md:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-2xl sm:text-3xl font-display flex items-center gap-2 sm:gap-3">
-            <Sparkles className="w-6 h-6 sm:w-8 sm:h-8 text-[#5b0d0d]" />
+          <DialogTitle className="text-xl md:text-3xl font-display flex items-center gap-2">
+            <Sparkles className="w-6 h-6 md:w-8 md:h-8 text-[#5b0d0d]" />
             Reservar Mesa VIP
           </DialogTitle>
-          <DialogDescription className="text-sm sm:text-base">
-            Completá tus datos para reservar tu mesa VIP
+          <DialogDescription className="text-sm md:text-base">
+            Elegí ubicación, número de mesa y completá tus datos
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-2 sm:py-4">
-          {/* Price/Stock Display */}
-          <div className="relative bg-gradient-to-r from-[#4a0a0a]/100 via-[#5b0d0d]/100 to-[#7a0a0a]/100 rounded-xl p-4 sm:p-6 space-y-3 text-white">
-            <h3 className="font-display text-lg sm:text-xl font-bold text-center">
-              Mesa VIP
-              {selectedLocation
-                ? ` — ${
-                    selectedLocation === "dj"
-                      ? "Cerca del DJ"
-                      : selectedLocation === "piscina"
-                        ? "Cerca de la PISCINA"
-                        : "General"
-                  }`
-                : ""}
-            </h3>
-
-            {cfgLoading ? (
-              <p className="text-center text-sm text-white/85">
-                Cargando configuración…
-              </p>
-            ) : cfgError ? (
-              <p className="text-center text-sm text-red-200">{cfgError}</p>
-            ) : (
-              <div
-                className={`grid gap-3 sm:gap-4 ${
-                  unitSize !== null
-                    ? "grid-cols-1 sm:grid-cols-3"
-                    : "grid-cols-1 sm:grid-cols-2"
-                }`}
-              >
-                {/* Precio por mesa */}
-                <div
-                  className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
-                    soldOut ? "opacity-70" : ""
-                  }`}
-                >
-                  <p className="text-sm font-bold text-black mb-1">
-                    Precio por mesa
-                  </p>
-                  <div className="flex items-baseline justify-center gap-1">
-                    <span className="text-lg font-bold"> $ </span>
-                    <span
-                      className="
-                        text-2xl font-bold tabular-nums tracking-tight leading-none
-                        bg-gradient-to-r from-[#4a0a0a] via-[#5b0d0d] to-[#7a0a0a]
-                        bg-clip-text text-transparent
-                        bg-[length:200%_200%] animate-[gradient-move_6s_ease-in-out_infinite]
-                      "
-                    >
-                      {formatMoney(vipPrice ?? 0)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Mesas disponibles */}
-                <div className="relative text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm">
-                  <p className="text-sm font-bold text-black mb-1">
-                    Mesas disponibles
-                  </p>
-                  {soldOut ? (
-                    <div className="flex flex-col items-center gap-1">
-                      <span className="text-2xl font-extrabold tracking-wide">
-                        0
-                      </span>
-                      <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold bg-red-600 text-white">
-                        SOLD OUT
-                      </span>
-                      <span className="text-xs text-black/70">Agotadas</span>
-                    </div>
-                  ) : (
-                    <p className="text-2xl font-bold">
-                      {Math.max(0, remainingTables ?? 0)}
-                    </p>
-                  )}
-                </div>
-
-                {/* Equivalencia */}
-                {unitSize !== null && (
-                  <div
-                    className={`text-center p-4 rounded-lg bg-white text-black border border-black/100 shadow-sm ${
-                      soldOut ? "opacity-70" : ""
-                    }`}
-                  >
-                    <p className="text-sm font-bold text-black mb-1">
-                      Equivalencia
-                    </p>
-                    <p className="text-2xl font-bold">{unitSize}</p>
-                    <p className="text-xs text-black/70 mt-1">pers./mesa</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {typeof remainingTables === "number" && (
-              <p className="text-center text-xs sm:text-sm text-white/85">
-                {soldOut ? (
-                  <>
-                    <b className="text-white">No hay mesas disponibles.</b> Te
-                    avisamos cuando se libere stock.
-                  </>
-                ) : (
-                  <>
-                    La compra reserva <b className="text-white">1 mesa</b> por
-                    transacción.
-                  </>
-                )}
-              </p>
-            )}
+        {cfgError && (
+          <div className="text-red-700 bg-red-50 border border-red-200 rounded-md p-3 text-sm">
+            {cfgError}
           </div>
+        )}
 
-          {/* Selector de ubicación */}
-          <div className="rounded-xl border p-3 sm:p-4 bg-white/60">
-            <p className="text-sm font-semibold mb-3">Elegí la ubicación</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant={selectedLocation === "dj" ? "default" : "outline"}
-                onClick={() => setSelectedLocation("dj")}
-                disabled={!hasDJ}
-                className={`justify-start h-12 ${
-                  selectedLocation === "dj"
-                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
-                    : ""
+           {/* KPIs */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { label: "Precio por mesa", value: `$${formatMoney(vipPrice)}` },
+            {
+              label: "Disponibles",
+              value: `${availableCount} / ${totalTablesInLoc}`,
+              color: availableCount <= 0 ? "text-red-600" : "text-emerald-700",
+            },
+            { label: "Capacidad", value: `${unitSize ?? "-"} pers.` },
+          ].map((kpi, i) => (
+            <div
+              key={i}
+              className="rounded-xl border bg-white p-4 text-center flex flex-col justify-center"
+            >
+              <div className="text-xs md:text-sm font-semibold text-gray-700">
+                {kpi.label}
+              </div>
+              <div
+                className={`mt-1 text-2xl md:text-4xl font-extrabold tracking-tight ${
+                  kpi.color || ""
                 }`}
               >
-                <Music className="w-4 h-4 mr-2" />
-                Cerca del DJ
-              </Button>
-
-              <Button
-                type="button"
-                variant={selectedLocation === "piscina" ? "default" : "outline"}
-                onClick={() => setSelectedLocation("piscina")}
-                disabled={!hasPiscina}
-                className={`justify-start h-12 ${
-                  selectedLocation === "piscina"
-                    ? "bg-[#5b0d0d] text-white hover:bg-[#4a0a0a]"
-                    : ""
-                }`}
-              >
-                <Waves className="w-4 h-4 mr-2" />
-                Cerca de la PISCINA
-              </Button>
+                {kpi.value}
+              </div>
             </div>
-            {errors.location && (
-              <p className="text-sm text-red-600 mt-2">{errors.location}</p>
-            )}
-            {!hasDJ && !hasPiscina && (
-              <p className="text-xs text-muted-foreground mt-2">
-                * Por ahora no hay ubicaciones configuradas. Se usará el precio
-                y stock general de VIP si está disponible.
-              </p>
-            )}
+          ))}
+        </div>
+
+        {/* ======= Ubicaciones ======= */}
+        {vipTablesCfg.length > 0 && (
+          <div className="rounded-xl border p-3 sm:p-4 bg-white/60 mt-4">
+            <p className="text-sm font-semibold mb-3">Ubicaciones disponibles</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {vipTablesCfg.map((loc) => {
+                const active = selectedLocationId === loc.vipLocationId;
+                const disp = Math.max(0, loc.remaining);
+                const isDJ = /dj/i.test(loc.locationName);
+                const isPiscina = /piscina/i.test(loc.locationName);
+
+                return (
+                  <button
+                    key={loc.vipLocationId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedLocationId(loc.vipLocationId);
+                      setTableNumberDisplay(null);
+                    }}
+                    className={[
+                      "text-left w-full p-4 rounded-xl border transition shadow-sm",
+                      active
+                        ? "bg-[#5b0d0d] text-white border-[#5b0d0d]"
+                        : "bg-white hover:bg-[#fff2f2] border-gray-300 text-gray-900",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-base">
+                        {isDJ ? "Cerca del DJ" : isPiscina ? "Cerca de la PISCINA" : loc.locationName}
+                      </div>
+                      <div
+                        className={[
+                          "px-2 py-0.5 rounded-full text-xs font-semibold",
+                          disp > 0 ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-700",
+                        ].join(" ")}
+                      >
+                        {disp > 0 ? "Con lugares" : "Agotado"}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
 
             {/* Hint del rango GLOBAL visible */}
             {isGlobalNumbering && (
               <p className="mt-2 text-xs text-muted-foreground">
-                Numeración de mesas en este sector:{" "}
-                <b>
-                  {startGlobal}–{endGlobal}
-                </b>
+                Numeración de mesas en esta ubicación: <b>{startGlobal}–{endGlobal}</b>
               </p>
             )}
           </div>
+        )}
 
-          {/* Selector de número de mesa + Abrir mapa */}
-          {displayNumbers.length > 0 && (
-            <div className="rounded-xl border p-3 sm:p-4 bg-white/60">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <p className="text-sm font-semibold">
-                  Elegí tu <span className="font-bold">número de mesa</span>
-                  {selectedLocation ? ` (${selectedLocation})` : ""}
-                </p>
-
-                <div className="flex items-center gap-3">
-                  {tablesLoading && (
-                    <span className="text-xs text-muted-foreground">
-                      Actualizando disponibilidad…
-                    </span>
-                  )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setMapOpen(true)}
-                    className="h-9"
-                    aria-label="Abrir mapa de ubicación de mesas"
-                  >
-                    <MapIcon className="w-4 h-4 mr-2" />
-                    Abrir mapa
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-5 sm:grid-cols-8 gap-2">
-                {displayNumbers.map((n) => {
-                  const active = tableNumberDisplay === n;
-                  const disabled = isNumberDisabled(n);
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => !disabled && setTableNumberDisplay(n)}
-                      disabled={disabled}
-                      className={[
-                        "h-10 rounded-md border text-sm font-semibold transition",
-                        "flex items-center justify-center",
-                        disabled
-                          ? "bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed"
-                          : active
-                            ? "bg-[#5b0d0d] text-white border-[#5b0d0d] shadow"
-                            : "bg-white text-gray-900 border-gray-300 hover:bg-[#fff2f2]",
-                      ].join(" ")}
-                      aria-pressed={active}
-                    >
-                      {n}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                <span className="inline-flex items-center gap-2">
-                  <span className="inline-block w-4 h-4 rounded bg-white border border-gray-300" />
-                  Disponible
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span className="inline-block w-4 h-4 rounded bg-[#5b0d0d]" />
-                  Seleccionada
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span className="inline-block w-4 h-4 rounded bg-gray-200 border border-gray-300" />
-                  Ocupada
-                </span>
-              </div>
-
-              {errors.table && (
-                <p className="text-sm text-red-600 mt-2">{errors.table}</p>
-              )}
-
-              {/* Modal del mapa */}
-              <Dialog open={mapOpen} onOpenChange={setMapOpen}>
-                <DialogContent className="max-w-3xl w-[94vw]">
-                  <DialogHeader>
-                    <DialogTitle>Mapa de ubicación de mesas</DialogTitle>
-                    <DialogDescription>
-                      Visualizá dónde están ubicadas las mesas para elegir mejor
-                      la tuya.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="relative">
-                    <div className="w-full rounded-lg overflow-hidden border bg-black/5">
-                      <img
-                        src={mapImageUrl}
-                        alt="Mapa de mesas VIP"
-                        className="w-full h-auto object-contain max-h-[70vh] select-none"
-                        draggable={false}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      * Si tu mesa preferida está ocupada en el sistema, elegí
-                      otra disponible.
-                    </p>
-                  </div>
-                </DialogContent>
-              </Dialog>
+        {/* ======= Mesas ======= */}
+        {displayNumbers.length > 0 && (
+          <div className="rounded-xl border p-3 sm:p-4 bg-white/60 mt-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold">
+                Mesas en {selectedLocCfg?.locationName ?? "Ubicación"}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setMapOpen(true)}
+                className="h-9"
+              >
+                <MapIcon className="w-4 h-4 mr-2" />
+                Ver mapa
+              </Button>
             </div>
-          )}
 
-          {/* Datos del cliente */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-base sm:text-lg">Tus datos</h3>
+            <div className="grid grid-cols-5 sm:grid-cols-8 gap-2">
+              {displayNumbers.map((n) => {
+                const active = tableNumberDisplay === n;
+                const occupied = takenSet.has(n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => !occupied && setTableNumberDisplay(n)}
+                    disabled={isNumberDisabled(n)}
+                    className={[
+                      "h-10 rounded-md border text-sm font-semibold transition",
+                      "flex items-center justify-center",
+                      occupied
+                        ? "bg-gray-200 text-gray-500 border-gray-300 cursor-not-allowed"
+                        : active
+                        ? "bg-[#5b0d0d] text-white border-[#5b0d0d] shadow"
+                        : "bg-white text-gray-900 border-gray-300 hover:bg-[#fff2f2]",
+                    ].join(" ")}
+                    aria-pressed={active}
+                    title={occupied ? "Ocupada" : "Libre"}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
 
+            <div className="flex items-center gap-4 text-xs mt-3 text-gray-600">
+              <div className="flex items-center gap-1">
+                <span className="w-4 h-4 bg-gray-300 border border-gray-400 rounded-sm inline-block" />
+                Ocupada
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-4 h-4 bg-white border border-gray-300 rounded-sm inline-block" />
+                Libre
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-4 h-4 bg-[#5b0d0d] rounded-sm inline-block" />
+                Seleccionada
+              </div>
+              {tablesLoading && (
+                <span className="ml-auto text-gray-500">Actualizando…</span>
+              )}
+            </div>
+
+            <Dialog open={mapOpen} onOpenChange={setMapOpen}>
+              <DialogContent className="max-w-3xl w=[94vw]">
+                <DialogHeader>
+                  <DialogTitle>Mapa de ubicación de mesas</DialogTitle>
+                  <DialogDescription>
+                    Visualizá el layout del sector para elegir mejor tu mesa.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="w-full rounded-lg overflow-hidden border bg-black/5">
+                  <img
+                    src={mapImageUrl}
+                    alt="Mapa de mesas VIP"
+                    className="w-full h-auto object-contain max-h-[70vh] select-none"
+                    draggable={false}
+                  />
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {errors.table && (
+              <p className="text-sm text-red-600 mt-2">{errors.table}</p>
+            )}
+          </div>
+        )}
+
+        {/* ======= Datos del cliente ======= */}
+        <div className="space-y-4 mt-4">
+          <h3 className="font-semibold text-base sm:text-lg">Tus datos</h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="vip-name" className="flex items-center gap-2">
-                Nombre completo
-              </Label>
+              <Label htmlFor="vip-name">Nombre completo</Label>
               <Input
                 id="vip-name"
-                placeholder="Juan Pérez"
                 value={customer.name}
-                onChange={(e) =>
-                  setCustomer({ ...customer, name: e.target.value })
-                }
+                onChange={(e) => setCustomer({ ...customer, name: e.target.value })}
                 className="h-12"
+                placeholder="Juan Pérez"
               />
-              {errors.name && (
-                <p className="text-sm text-red-600">{errors.name}</p>
-              )}
+              {errors.name && <p className="text-sm text-red-600">{errors.name}</p>}
             </div>
 
             <div className="space-y-2">
@@ -820,17 +635,13 @@ export function VIPTableModal({
               </Label>
               <Input
                 id="vip-dni"
-                placeholder="12345678"
                 value={customer.dni}
-                onChange={(e) =>
-                  setCustomer({ ...customer, dni: e.target.value })
-                }
+                onChange={(e) => setCustomer({ ...customer, dni: e.target.value })}
                 className="h-12"
                 inputMode="numeric"
+                placeholder="12345678"
               />
-              {errors.dni && (
-                <p className="text-sm text-red-600">{errors.dni}</p>
-              )}
+              {errors.dni && <p className="text-sm text-red-600">{errors.dni}</p>}
             </div>
 
             <div className="space-y-2">
@@ -841,78 +652,12 @@ export function VIPTableModal({
               <Input
                 id="vip-email"
                 type="email"
-                placeholder="juan@ejemplo.com"
                 value={customer.email}
-                onChange={(e) =>
-                  setCustomer({ ...customer, email: e.target.value })
-                }
+                onChange={(e) => setCustomer({ ...customer, email: e.target.value })}
                 className="h-12"
+                placeholder="juan@ejemplo.com"
               />
-              {errors.email && (
-                <p className="text-sm text-red-600">{errors.email}</p>
-              )}
-            </div>
-
-            {/* GÉNERO */}
-            <div className="space-y-3">
-              <Label className="flex items-center gap-2">
-                <User className="w-4 h-4" />
-                Género
-              </Label>
-
-              <RadioGroup
-                value={customer.gender}
-                onValueChange={(value) =>
-                  setCustomer({
-                    ...customer,
-                    gender: value as "hombre" | "mujer",
-                  })
-                }
-                className="grid grid-cols-2 gap-3 sm:gap-4"
-              >
-                <div>
-                  <RadioGroupItem
-                    value="hombre"
-                    id="vip-gender-hombre"
-                    className="peer sr-only"
-                  />
-                  <Label
-                    htmlFor="vip-gender-hombre"
-                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
-                      border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
-                      peer-data-[state=checked]:border-[#5b0d0d]
-                      peer-data-[state=checked]:bg-[#5b0d0d]/10`}
-                  >
-                    <span className="text-2xl mb-2">👨</span>
-                    <span className="font-semibold text-sm sm:text-base">
-                      Hombre
-                    </span>
-                  </Label>
-                </div>
-
-                <div>
-                  <RadioGroupItem
-                    value="mujer"
-                    id="vip-gender-mujer"
-                    className="peer sr-only"
-                  />
-                  <Label
-                    htmlFor="vip-gender-mujer"
-                    className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
-                      border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
-                      peer-data-[state=checked]:border-[#7f0d0d]
-                      peer-data-[state=checked]:bg-[#7f0d0d]/10`}
-                  >
-                    <span className="text-2xl mb-2">👩</span>
-                    <span className="font-semibold text-sm sm:text-base">
-                      Mujer
-                    </span>
-                  </Label>
-                </div>
-              </RadioGroup>
-              {errors.gender && (
-                <p className="text-sm text-red-600">{errors.gender}</p>
-              )}
+              {errors.email && <p className="text-sm text-red-600">{errors.email}</p>}
             </div>
 
             <div className="space-y-2">
@@ -923,82 +668,114 @@ export function VIPTableModal({
               <Input
                 id="vip-phone"
                 type="tel"
-                placeholder="+54 11 1234-5678"
                 value={customer.phone}
-                onChange={(e) =>
-                  setCustomer({ ...customer, phone: e.target.value })
-                }
+                onChange={(e) => setCustomer({ ...customer, phone: e.target.value })}
                 className="h-12"
+                placeholder="+54 11 1234-5678"
                 inputMode="tel"
               />
-              {errors.phone && (
-                <p className="text-sm text-red-600">{errors.phone}</p>
-              )}
+              {errors.phone && <p className="text-sm text-red-600">{errors.phone}</p>}
             </div>
           </div>
 
-          {/* Summary + Pay */}
-          <div className="rounded-xl p-4 sm:p-6 space-y-4 border-2 bg-gradient-to-r from-[#4a0a0a]/10 to-[#7a0a0a]/10 border-[#5b0d0d]/20">
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between items-center text-xl sm:text-2xl">
-                <span className="font-bold">Total a pagar:</span>
-                <span className="font-bold text-[#2a0606]">
-                  ${formatMoney(total)}
-                </span>
-              </div>
-              {tableNumberDisplay && (
-                <p className="text-sm text-muted-foreground">
-                  Mesa seleccionada: <b>#{tableNumberDisplay}</b>
-                </p>
-              )}
-            </div>
-            <Button
-              size="lg"
-              onClick={handleCheckout}
-              disabled={
-                isProcessing ||
-                cfgLoading ||
-                !!cfgError ||
-                !vipPrice ||
-                (!Number.isFinite(remainingTables as number) &&
-                  remainingTables !== 0) ||
-                soldOut ||
-                !selectedLocation ||
-                !customer.gender ||
-                !tableNumberDisplay
+          {/* Género */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Género
+            </Label>
+
+            <RadioGroup
+              value={customer.gender}
+              onValueChange={(value) =>
+                setCustomer({ ...customer, gender: value as "hombre" | "mujer" })
               }
-              aria-disabled={soldOut || undefined}
-              className="
-                w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
-                bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
-                hover:scale-[1.02] hover:brightness-110
-                transition-transform disabled:opacity-60
-              "
+              className="grid grid-cols-2 gap-3 sm:gap-4"
             >
-              <CreditCard className="w-5 h-5 mr-2" />
-              {isProcessing
-                ? "Procesando..."
-                : soldOut
-                  ? "Agotadas"
-                  : "Reservar con Mercado Pago"}
-            </Button>
-            <p className="text-xs text-center text-muted-foreground">
-              Serás redirigido a Mercado Pago para completar tu reserva de forma
-              segura
-            </p>
-            {(errors.price || errors.stock || errors.table) && (
-              <p className="text-sm text-red-600 text-center">
-                {errors.price || errors.stock || errors.table}
+              <div>
+                <RadioGroupItem value="hombre" id="vip-gender-hombre" className="peer sr-only" />
+                <Label
+                  htmlFor="vip-gender-hombre"
+                  className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                    border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
+                    peer-data-[state=checked]:border-[#5b0d0d]
+                    peer-data-[state=checked]:bg-[#5b0d0d]/10`}
+                >
+                  <span className="text-2xl mb-2">👨</span>
+                  <span className="font-semibold text-sm sm:text-base">Hombre</span>
+                </Label>
+              </div>
+
+              <div>
+                <RadioGroupItem value="mujer" id="vip-gender-mujer" className="peer sr-only" />
+                <Label
+                  htmlFor="vip-gender-mujer"
+                  className={`flex flex-col items-center justify-center rounded-lg border-2 bg-white p-3 sm:p-4 cursor-pointer transition-all
+                    border-[#e5e5e5] hover:bg-[#fff2f2] hover:text-[#2a0606]
+                    peer-data-[state=checked]:border-[#7f0d0d]
+                    peer-data-[state=checked]:bg-[#7f0d0d]/10`}
+                >
+                  <span className="text-2xl mb-2">👩</span>
+                  <span className="font-semibold text-sm sm:text-base">Mujer</span>
+                </Label>
+              </div>
+            </RadioGroup>
+            {errors.gender && <p className="text-sm text-red-600">{errors.gender}</p>}
+          </div>
+        </div>
+
+        {/* ======= Summary + Pago ======= */}
+        <div className="rounded-xl p-4 sm:p-6 space-y-4 border-2 bg-gradient-to-r from-[#4a0a0a]/10 to-[#7a0a0a]/10 border-[#5b0d0d]/20 mt-4">
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between items-center text-xl sm:text-2xl">
+              <span className="font-bold">Total a pagar:</span>
+              <span className="font-bold text-[#2a0606]">
+                ${formatMoney(totalToPay)}
+              </span>
+            </div>
+            {tableNumberDisplay && (
+              <p className="text-sm text-muted-foreground">
+                Mesa seleccionada: <b>#{tableNumberDisplay}</b>
               </p>
             )}
           </div>
+
+          <Button
+            size="lg"
+            onClick={handleCheckout}
+            disabled={
+              isProcessing ||
+              cfgLoading ||
+              !!cfgError ||
+              !vipPrice ||
+              soldOut ||
+              !selectedLocCfg ||
+              !customer.gender ||
+              !tableNumberDisplay
+            }
+            aria-disabled={soldOut || undefined}
+            className="
+              w-full text-base sm:text-lg py-4 sm:py-6 rounded-full text-white
+              bg-gradient-to-r from-[#2a0606] via-[#5b0d0d] to-[#7f0d0d]
+              hover:scale-[1.02] hover:brightness-110
+              transition-transform disabled:opacity-60
+            "
+          >
+            <CreditCard className="w-5 h-5 mr-2" />
+            {isProcessing ? "Procesando..." : soldOut ? "Agotadas" : "Reservar con Mercado Pago"}
+          </Button>
+
+          <p className="text-xs text-center text-muted-foreground">
+            Serás redirigido a Mercado Pago para completar tu reserva de forma segura
+          </p>
+
+          {(errors.price || errors.stock || errors.table) && (
+            <p className="text-sm text-red-600 text-center">
+              {errors.price || errors.stock || errors.table}
+            </p>
+          )}
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-
-/* Tailwind util (animación del texto gradiente de los precios)
-   Asegurate de tener en globals.css:
-   @keyframes gradient-move { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
-*/

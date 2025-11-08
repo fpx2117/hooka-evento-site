@@ -6,7 +6,7 @@ import { PaymentStatus } from "@prisma/client";
 
 const isDev = process.env.NODE_ENV !== "production";
 
-/** Respuesta JSON con no-cache */
+/** Helper: respuesta JSON sin cache */
 function json(body: unknown, status = 200) {
   return new NextResponse(JSON.stringify(body), {
     status,
@@ -22,23 +22,19 @@ function json(body: unknown, status = 200) {
 /* ======================
    Helpers
 ====================== */
-function normLoc(x: any): "dj" | "piscina" | "general" | undefined {
-  if (!x) return undefined;
-  const s = String(x).trim().toLowerCase();
-  if (s === "dj" || s === "piscina" || s === "general") return s;
-  return undefined;
-}
-function toIso(d: any): string | undefined {
-  if (!d) return undefined;
+
+function toIso(d: any): string | null {
+  if (!d) return null;
   const dt = typeof d === "string" ? new Date(d) : d instanceof Date ? d : null;
-  return dt && !isNaN(dt.getTime()) ? dt.toISOString() : undefined;
-}
-function toInt(v: any): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
+  return dt && !isNaN(dt.getTime()) ? dt.toISOString() : null;
 }
 
-/** Campos seleccionados del Ticket (incluye VIP) */
+function toInt(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Campos seleccionados del Ticket (incluye VIP y relaciones necesarias) */
 const SELECT_FIELDS = {
   id: true,
   validationCode: true,
@@ -51,16 +47,16 @@ const SELECT_FIELDS = {
   paymentStatus: true,
   validated: true,
   validatedAt: true,
-  createdAt: true,
-  event: { select: { date: true } },
+  purchaseDate: true,
+  eventDate: true,
 
-  // VIP
-  vipLocation: true,
-  tableNumber: true,
-  vipTables: true,
-  capacityPerTable: true,
+  event: { select: { id: true, name: true, date: true } },
+  vipLocation: { select: { name: true } },
+  vipTable: { select: { tableNumber: true, capacityPerTable: true } },
+  vipTableConfig: { select: { capacityPerTable: true } },
 } as const;
 
+/** Serializador uniforme para Ticket */
 function serialize(t: any) {
   return {
     id: t.id,
@@ -68,40 +64,35 @@ function serialize(t: any) {
     customerEmail: t.customerEmail ?? "",
     customerPhone: t.customerPhone ?? "",
     customerDni: t.customerDni ?? "",
-    ticketType: t.ticketType === "vip" ? "vip" : "general",
-    paymentStatus: t.paymentStatus as "pending" | "approved" | "rejected",
+    ticketType: t.ticketType ?? "general",
     quantity: toInt(t.quantity),
+    paymentStatus: t.paymentStatus as PaymentStatus,
 
     validated: !!t.validated,
     validatedAt: toIso(t.validatedAt),
 
-    // fechas
-    purchaseDate: toIso(t.createdAt)!, // existe
-    eventDate: toIso(t.event?.date),
+    purchaseDate: toIso(t.purchaseDate),
+    eventDate: toIso(t.eventDate) ?? toIso(t.event?.date),
 
-    // VIP
-    vipLocation: normLoc(t.vipLocation),
-    tableNumber: toInt(t.tableNumber),
-    vipTables: toInt(t.vipTables),
-    capacityPerTable: toInt(t.capacityPerTable),
+    eventName: t.event?.name ?? null,
+
+    vipLocation: t.vipLocation?.name ?? null,
+    tableNumber: toInt(t.vipTable?.tableNumber),
+    capacityPerTable:
+      toInt(t.vipTable?.capacityPerTable) ??
+      toInt(t.vipTableConfig?.capacityPerTable),
   };
 }
 
-/**
- * GET /api/admin/validate?code=XXXXXX
- * Acepta ?code= o ?validationCode= (normaliza a 6 dígitos)
- */
+/* ======================
+   GET /api/admin/validate?code=XXXXXX
+====================== */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const raw = (
-      searchParams.get("code") ||
-      searchParams.get("validationCode") ||
-      ""
-    )
-      .toString()
-      .trim();
-    const code = normalizeSixDigitCode(raw);
+    const raw =
+      searchParams.get("code") || searchParams.get("validationCode") || "";
+    const code = normalizeSixDigitCode(raw.toString().trim());
 
     if (!code) return json({ ok: false, error: "code_required" }, 400);
     if (isDev) console.log("[admin/validate][GET] code:", code);
@@ -120,14 +111,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/**
- * POST /api/admin/validate
- * Body: { code } o { validationCode }
- * Marca validado atómicamente si el pago está approved.
- */
+/* ======================
+   POST /api/admin/validate
+   Body: { code } o { validationCode }
+====================== */
 export async function POST(req: NextRequest) {
   try {
-    // Soporta JSON y x-www-form-urlencoded
+    // Acepta JSON o x-www-form-urlencoded
     let body: any = {};
     const txt = await req.text();
     try {
@@ -142,7 +132,7 @@ export async function POST(req: NextRequest) {
     if (!code) return json({ ok: false, error: "code_required" }, 400);
     if (isDev) console.log("[admin/validate][POST] code:", code);
 
-    // 1) Buscamos lo mínimo para decidir
+    // 1) Buscamos el ticket
     const current = await prisma.ticket.findUnique({
       where: { validationCode: code },
       select: {
@@ -155,16 +145,29 @@ export async function POST(req: NextRequest) {
 
     if (!current) return json({ ok: false, error: "not_found" }, 404);
 
+    // 2) Verificamos estado de pago
     if (current.paymentStatus !== PaymentStatus.approved) {
-      // devolvemos también el ticket completo serializado para UI
       const t = await prisma.ticket.findUnique({
         where: { id: current.id },
         select: SELECT_FIELDS,
       });
+
+      const errorMessages: Record<PaymentStatus, string> = {
+        pending: "Pago pendiente de confirmación.",
+        in_process: "Pago en proceso.",
+        failed_preference: "Error en la preferencia de pago.",
+        cancelled: "Pago cancelado.",
+        refunded: "Pago reembolsado.",
+        charged_back: "Pago con contracargo.",
+        rejected: "Pago rechazado.",
+        approved: "Pago aprobado.",
+      };
+
       return json(
         {
           ok: false,
           error: "not_approved",
+          message: errorMessages[current.paymentStatus],
           status: current.paymentStatus,
           ticket: t ? serialize(t) : undefined,
         },
@@ -172,7 +175,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2) Intento atómico de marcar como validado (si aún no lo estaba)
+    // 3) Validación atómica
     const now = new Date();
     const result = await prisma.ticket.updateMany({
       where: { id: current.id, validated: false },
@@ -180,7 +183,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (result.count === 0) {
-      // Alguien lo validó entre medio -> ya utilizado
+      // Ya estaba validado
       const latest = await prisma.ticket.findUnique({
         where: { id: current.id },
         select: SELECT_FIELDS,
@@ -196,7 +199,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3) Éxito — devolvemos el ticket actualizado (incluye VIP)
+    // 4) Éxito → Devolvemos ticket actualizado
     const updated = await prisma.ticket.findUnique({
       where: { id: current.id },
       select: SELECT_FIELDS,

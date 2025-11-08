@@ -6,13 +6,22 @@ import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { MercadoPagoConfig, Preference } from "mercadopago";
 import {
-  ensureVipTableAvailability,
   getActiveEventId,
-  coerceLocation,
   normalizeVipNumber,
+  ensureVipTableAvailability,
 } from "@/lib/vip-tables";
 
-/* ========================= Helpers ========================= */
+/* ========================= Utils ========================= */
+const s = (v: unknown) =>
+  v === undefined || v === null ? undefined : String(v).trim();
+
+const n = (v: unknown, d = 0) => {
+  const num = Number(v);
+  return Number.isFinite(num) ? num : d;
+};
+
+const onlyDigits = (v?: string) => (v || "").replace(/\D+/g, "");
+
 function isHttps(url?: string | null) {
   return !!url && /^https:\/\/[^ ]+$/i.test((url || "").trim());
 }
@@ -32,25 +41,7 @@ function getBaseUrl(req: NextRequest) {
   return isHttps(guessed) || isLocalHttp(guessed) ? guessed : "";
 }
 
-const s = (v: unknown) =>
-  v === undefined || v === null ? undefined : String(v).trim();
-const n = (v: unknown, d = 0) => {
-  const num = Number(v);
-  return Number.isFinite(num) ? num : d;
-};
-const onlyDigits = (v?: string) => (v || "").replace(/\D+/g, "");
-
-// 1 mesa VIP = N personas (fallback si falta en BD)
-const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
-const DEFAULT_CURRENCY = "ARS";
-
-// número entero positivo o undefined
-const numOrUndef = (v: unknown): number | undefined => {
-  const x = Number(v);
-  return Number.isFinite(x) && Number.isInteger(x) && x > 0 ? x : undefined;
-};
-
-/* ========================= Tipos de request ========================= */
+/* ========================= Tipos ========================= */
 type CreateBody = {
   type: "ticket";
   items?: Array<{
@@ -67,116 +58,59 @@ type CreateBody = {
     additionalInfo?: {
       eventId?: string;
       eventCode?: string;
-      gender?: "hombre" | "mujer";
-      quantity?: number;
       ticketType?: "vip" | "general";
-      tables?: number;
-      location?: "dj" | "piscina" | "general";
-      /** Puede venir el número LOCAL o el GLOBAL */
+      // VIP
+      vipLocationId?: string;
       tableNumber?: number;
       tableNumberGlobal?: number;
+      // GENERAL
+      gender?: "hombre" | "mujer";
+      quantity?: number;
     };
   };
 };
-
-/* ========================= Descuentos ========================= */
-type RuleRow = {
-  id: string;
-  minQty: number;
-  type: "percent" | "amount";
-  value: number;
-  priority: number;
-};
-
-async function getActiveRulesFor(
-  eventId: string,
-  ticketType: "general" | "vip"
-): Promise<RuleRow[]> {
-  const rows = await prisma.discountRule.findMany({
-    where: { eventId, ticketType, isActive: true },
-    select: { id: true, minQty: true, type: true, value: true, priority: true },
-    orderBy: [{ minQty: "asc" }, { priority: "desc" }, { createdAt: "asc" }],
-  });
-  return rows.map((r) => ({
-    id: r.id,
-    minQty: r.minQty,
-    type: r.type as "percent" | "amount",
-    value: Number(r.value) || 0,
-    priority: r.priority ?? 0,
-  }));
-}
-
-function pickBestDiscount(qty: number, unit: number, rules: RuleRow[]) {
-  const subtotal = Math.max(0, unit) * Math.max(1, qty);
-  let best = 0,
-    bestId: string | undefined,
-    bestPrio = -Infinity;
-  for (const r of rules) {
-    if (qty < r.minQty) continue;
-    let d =
-      r.type === "percent" ? Math.floor((subtotal * r.value) / 100) : r.value;
-    if (d > subtotal) d = subtotal;
-    if (d > best || (d === best && r.priority > bestPrio)) {
-      best = d;
-      bestId = r.id;
-      bestPrio = r.priority;
-    }
-  }
-  return { discount: best, subtotal, total: subtotal - best, ruleId: bestId };
-}
-
-function prettyLocation(loc?: string) {
-  switch ((loc || "").toLowerCase()) {
-    case "dj":
-      return "Cerca del DJ";
-    case "piscina":
-      return "Cerca de la Piscina";
-    default:
-      return "VIP (General)";
-  }
-}
 
 /* ========================= Handler ========================= */
 export async function POST(req: NextRequest) {
   try {
     const MP_TOKEN =
       process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
-    if (!MP_TOKEN)
+    if (!MP_TOKEN) {
       return NextResponse.json(
         { error: "Mercado Pago no configurado" },
         { status: 500 }
       );
+    }
 
     const base = getBaseUrl(req);
-    if (!base)
+    if (!base) {
       return NextResponse.json(
-        { error: "Base URL inválida (NEXT_PUBLIC_BASE_URL)" },
+        { error: "Base URL inválida (configurá NEXT_PUBLIC_BASE_URL)" },
         { status: 500 }
       );
+    }
+
+    const successUrl = new URL("/payment/success", base).toString();
+    const failureUrl = new URL("/payment/failure", base).toString();
+    const pendingUrl = new URL("/payment/pending", base).toString();
+    const canAutoReturn = true; // las back_urls son absolutas, habilitamos auto_return
 
     const body: CreateBody = await req.json();
+
+    // Resolver evento (id o code o activo)
     const eventId = await getActiveEventId({
       prisma,
       eventId: s(body.payer?.additionalInfo?.eventId),
       eventCode: s(body.payer?.additionalInfo?.eventCode),
     });
-    if (!eventId)
-      return NextResponse.json(
-        { error: "Evento no encontrado o inactivo" },
-        { status: 400 }
-      );
 
     const event = await prisma.event.findUnique({
       where: { id: eventId },
       select: { id: true, code: true, date: true },
     });
-    if (!event)
+    if (!event) {
       return NextResponse.json({ error: "Evento inválido" }, { status: 400 });
-
-    const successUrl = new URL("/payment/success", base).toString();
-    const failureUrl = new URL("/payment/failure", base).toString();
-    const pendingUrl = new URL("/payment/pending", base).toString();
-    const canAutoReturn = isHttps(successUrl);
+    }
 
     const payerName = s(body.payer?.name) ?? "";
     const payerEmail = s(body.payer?.email) ?? "";
@@ -184,76 +118,68 @@ export async function POST(req: NextRequest) {
     const payerDni = onlyDigits(s(body.payer?.dni));
 
     const requestedType =
-      (s(body.payer?.additionalInfo?.ticketType)?.toLowerCase() as
-        | "general"
-        | "vip"
-        | undefined) ?? "general";
+      (s(body.payer?.additionalInfo?.ticketType) as "vip" | "general") ||
+      "general";
 
-    /* ======================================================================
-       VIP — numeración global/local coherente y validación de disponibilidad
-    ====================================================================== */
+    /* =========================================================
+       ⛱️  FLUJO VIP
+    ========================================================= */
     if (requestedType === "vip") {
-      const tables = Math.max(
-        1,
-        n(body.payer?.additionalInfo?.tables, n(body.items?.[0]?.quantity, 1))
-      );
-      const location =
-        coerceLocation(s(body.payer?.additionalInfo?.location)) || "general";
-
-      // leer local y global (la UI puede enviar cualquiera de los dos)
-      const tableNumberLocalInput = numOrUndef(
-        body.payer?.additionalInfo?.tableNumber
-      );
-      const tableNumberGlobalInput = numOrUndef(
-        body.payer?.additionalInfo?.tableNumberGlobal
-      );
-
-      // Normalizar a {local, global} y validar disponibilidad
-      let normalized: { local: number; global: number };
-      try {
-        normalized = await normalizeVipNumber({
-          prisma,
-          eventId: event.id,
-          location,
-          tableNumber: tableNumberLocalInput,
-          tableNumberGlobal: tableNumberGlobalInput,
-        });
-
-        // puede validarse con local o global indistintamente (se traduce en el helper)
-        await ensureVipTableAvailability({
-          prisma,
-          eventId: event.id,
-          location,
-          tableNumberGlobal: normalized.global,
-        });
-      } catch (err: any) {
+      const vipLocationId = s(body.payer?.additionalInfo?.vipLocationId);
+      if (!vipLocationId) {
         return NextResponse.json(
-          { error: err?.message || "Mesa no disponible o fuera de rango" },
-          { status: 409 }
+          { error: "vipLocationId es requerido" },
+          { status: 400 }
         );
       }
 
-      const cfg = await prisma.vipTableConfig.findUnique({
-        where: { eventId_location: { eventId: event.id, location } },
-        select: {
-          price: true,
-          stockLimit: true,
-          soldCount: true,
-          capacityPerTable: true,
-        },
+      const tableNumber = n(body.payer?.additionalInfo?.tableNumber, undefined);
+      const tableNumberGlobal = n(
+        body.payer?.additionalInfo?.tableNumberGlobal,
+        undefined
+      );
+
+      // Normalizar mesa (local/global) y validar disponibilidad
+      const normalized = await normalizeVipNumber({
+        prisma,
+        eventId: event.id,
+        vipLocationId,
+        tableNumber:
+          typeof tableNumber === "number" && Number.isFinite(tableNumber)
+            ? tableNumber
+            : undefined,
+        tableNumberGlobal:
+          typeof tableNumberGlobal === "number" &&
+          Number.isFinite(tableNumberGlobal)
+            ? tableNumberGlobal
+            : undefined,
       });
-      if (!cfg)
+
+      // Puede validar por id de mesa (si tu helper lo soporta) o por número global
+      await ensureVipTableAvailability({
+        prisma,
+        eventId: event.id,
+        vipLocationId,
+        // priorizamos validar por id si normalizeVipNumber lo retorna
+        tableId: (normalized as any).tableId,
+      });
+
+      // Precio/capacidad desde la config del sector
+      const vipConfig = await prisma.vipTableConfig.findUnique({
+        where: { eventId_vipLocationId: { eventId: event.id, vipLocationId } },
+        select: { id: true, price: true, capacityPerTable: true },
+      });
+      if (!vipConfig) {
         return NextResponse.json(
-          { error: "Ubicación VIP no configurada" },
+          { error: "No se encontró configuración de Mesas VIP" },
           { status: 400 }
         );
+      }
 
-      const cap = Math.max(1, Number(cfg.capacityPerTable ?? VIP_UNIT_SIZE));
-      const unitPriceFromDB = Number(cfg.price) || 0;
-      const rules = await getActiveRulesFor(event.id, "vip");
-      const { total } = pickBestDiscount(tables, unitPriceFromDB, rules);
+      const unitPrice = Number(vipConfig.price) || 0;
+      const capacity = vipConfig.capacityPerTable ?? 10;
 
-      // Crear Ticket VIP (PENDING) guardando SIEMPRE el número LOCAL
+      // Crear ticket PENDING con referencias VIP
       const createdVip = await prisma.ticket.create({
         data: {
           eventId: event.id,
@@ -261,34 +187,40 @@ export async function POST(req: NextRequest) {
           ticketType: "vip",
           gender: null,
           quantity: 1,
-          vipLocation: location,
-          vipTables: tables,
-          capacityPerTable: cap,
-          tableNumber: normalized.local, // LOCAL en BD
-          totalPrice: total,
+          vipLocationId,
+          vipTableId: (normalized as any).tableId, // si tu normalize retorna tableId, lo usamos
+          vipTableConfigId: vipConfig.id,
+          totalPrice: unitPrice,
           customerName: payerName,
           customerEmail: payerEmail,
           customerPhone: payerPhone,
           customerDni: payerDni,
-          paymentStatus: "pending" as any,
-          paymentMethod: "mercadopago" as any,
+          paymentStatus: "pending",
+          paymentMethod: "mercadopago",
         },
         select: { id: true, totalPrice: true },
       });
 
-      const mpItems = [
+      // SDK MP v2
+      const mp = new MercadoPagoConfig({
+        accessToken: MP_TOKEN,
+        options: { timeout: 10000 },
+      });
+      const pref = new Preference(mp);
+
+      const items = [
         {
           id: createdVip.id,
-          title: `Mesa VIP #${normalized.global} - ${prettyLocation(location)} x${tables}`, // GLOBAL visible
-          description: `1 mesa = ${cap} personas · Ubicación: ${prettyLocation(location)}`,
+          title: `Mesa VIP #${normalized.global}`,
+          description: `1 mesa = ${capacity} personas`,
           quantity: 1,
           unit_price: Number(createdVip.totalPrice) || 0,
-          currency_id: DEFAULT_CURRENCY,
+          currency_id: "ARS",
         },
       ];
 
-      const preferenceBody = {
-        items: mpItems,
+      const prefBody = {
+        items,
         payer: {
           name: payerName,
           email: payerEmail,
@@ -297,13 +229,9 @@ export async function POST(req: NextRequest) {
             ? { type: "DNI", number: payerDni }
             : undefined,
         },
-        back_urls: {
-          success: successUrl,
-          failure: failureUrl,
-          pending: pendingUrl,
-        },
+        back_urls: { success: successUrl, failure: failureUrl, pending: pendingUrl },
         ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
-        notification_url: new URL("/api/webhooks/mercadopago", base).toString(),
+        notification_url: `${base}/api/webhooks/mercadopago`,
         external_reference: `ticket:${createdVip.id}`,
         binary_mode:
           (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
@@ -316,136 +244,109 @@ export async function POST(req: NextRequest) {
           recordId: createdVip.id,
           eventId: event.id,
           eventCode: event.code,
-          vipLocation: location,
-          tableNumberLocal: normalized.local, // para debugging
+          vipLocationId,
+          vipTableId: (normalized as any).tableId,
+          tableNumberLocal: normalized.local,
           tableNumberGlobal: normalized.global,
-          vipTables: tables,
-          capacityPerTable: cap,
-          pricePerTable: unitPriceFromDB,
+          capacityPerTable: capacity,
+          pricePerTable: unitPrice,
         },
       };
 
-      const mp = new MercadoPagoConfig({
-        accessToken: MP_TOKEN,
-        options: { timeout: 5000 },
+      const createdPref = await pref.create({
+        body: prefBody,
+        requestOptions: { idempotencyKey: `pref:ticket:${createdVip.id}` },
       });
-      const pref = new Preference(mp);
-
-      let createdPref;
-      try {
-        createdPref = await pref.create({
-          body: preferenceBody,
-          requestOptions: { idempotencyKey: `pref:ticket:${createdVip.id}` },
-        });
-      } catch (err: any) {
-        await prisma.ticket.update({
-          where: { id: createdVip.id },
-          data: { paymentStatus: "failed_preference" as any },
-        });
-        console.error("[MP preference error][VIP]", err);
-        return NextResponse.json(
-          { error: "Error creando preferencia (VIP)" },
-          { status: 502 }
-        );
-      }
-
-      const redirect_url =
-        createdPref.sandbox_init_point ||
-        createdPref.init_point ||
-        (createdPref.id
-          ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
-              String(createdPref.id)
-            )}`
-          : undefined);
-
-      if (!redirect_url) {
-        await prisma.ticket.update({
-          where: { id: createdVip.id },
-          data: { paymentStatus: "failed_preference" as any },
-        });
-        return NextResponse.json(
-          { error: "Preferencia sin URL utilizable" },
-          { status: 502 }
-        );
-      }
 
       return NextResponse.json({
         id: createdPref.id,
-        redirect_url,
+        redirect_url:
+          createdPref.sandbox_init_point ||
+          createdPref.init_point ||
+          null,
         init_point: createdPref.init_point,
         sandbox_init_point: createdPref.sandbox_init_point,
       });
     }
 
-    /* ======================================================================
-       ENTRADA GENERAL (sin cambios significativos)
-    ====================================================================== */
+    /* =========================================================
+       🎟️  FLUJO ENTRADA GENERAL
+    ========================================================= */
     const gender = s(body.payer?.additionalInfo?.gender) as
       | "hombre"
       | "mujer"
       | undefined;
-    const qty = Math.max(
-      1,
-      Math.floor(
-        n(body.payer?.additionalInfo?.quantity, n(body.items?.[0]?.quantity, 1))
-      )
-    );
-    if (!gender)
-      return NextResponse.json({ error: "Género requerido" }, { status: 400 });
 
-    const cfgGen = await prisma.ticketConfig.findFirst({
-      where: { eventId: event.id, ticketType: "general", gender },
-      select: { id: true, price: true },
+    // si tenés configs separadas por género, exigimos gender
+    const cfgGeneral = await prisma.ticketConfig.findFirst({
+      where: {
+        eventId: event.id,
+        ticketType: "general",
+        ...(gender ? { gender } : {}),
+      },
+      select: { id: true, price: true, gender: true },
     });
-    if (!cfgGen)
+    if (!cfgGeneral) {
       return NextResponse.json(
-        { error: "Precio de entrada no configurado" },
+        { error: "Precio de entrada general no configurado" },
         { status: 400 }
       );
+    }
 
-    const unitPriceFromDB = Number(cfgGen.price) || 0;
-    const rules = await getActiveRulesFor(event.id, "general");
-    const { total } = pickBestDiscount(qty, unitPriceFromDB, rules);
+    const qty = Math.max(
+      1,
+      Math.floor(n(body.payer?.additionalInfo?.quantity, 1))
+    );
+    const unitPrice = Number(cfgGeneral.price) || 0;
+    const total = unitPrice * qty;
 
     const created = await prisma.ticket.create({
       data: {
         eventId: event.id,
         eventDate: event.date,
         ticketType: "general",
-        gender,
+        gender: gender ?? null,
         quantity: qty,
         totalPrice: total,
         customerName: payerName,
         customerEmail: payerEmail,
         customerPhone: payerPhone,
         customerDni: payerDni,
-        paymentStatus: "pending" as any,
-        paymentMethod: "mercadopago" as any,
-        ticketConfigId: cfgGen.id,
+        paymentStatus: "pending",
+        paymentMethod: "mercadopago",
+        ticketConfigId: cfgGeneral.id,
       },
       select: { id: true, totalPrice: true },
     });
 
-    const mpItems = [
+    const mp = new MercadoPagoConfig({
+      accessToken: MP_TOKEN,
+      options: { timeout: 10000 },
+    });
+    const pref = new Preference(mp);
+
+    const items = [
       {
         id: created.id,
-        title: `Entrada General - ${gender === "hombre" ? "Hombre" : "Mujer"} x${qty}`,
+        title: `Entrada General${gender ? ` - ${gender}` : ""} x${qty}`,
         quantity: 1,
         unit_price: Number(created.totalPrice) || 0,
-        currency_id: DEFAULT_CURRENCY,
+        currency_id: "ARS",
       },
     ];
 
-    const preferenceBody = {
-      items: mpItems,
-      payer: { name: payerName, email: payerEmail },
-      back_urls: {
-        success: successUrl,
-        failure: failureUrl,
-        pending: pendingUrl,
+    const prefBody = {
+      items,
+      payer: {
+        name: payerName,
+        email: payerEmail,
+        identification: payerDni
+          ? { type: "DNI", number: payerDni }
+          : undefined,
       },
+      back_urls: { success: successUrl, failure: failureUrl, pending: pendingUrl },
       ...(canAutoReturn ? { auto_return: "approved" as const } : {}),
-      notification_url: new URL("/api/webhooks/mercadopago", base).toString(),
+      notification_url: `${base}/api/webhooks/mercadopago`,
       external_reference: `ticket:${created.id}`,
       binary_mode:
         (process.env.MP_BINARY_MODE ?? "true").toLowerCase() === "true",
@@ -455,38 +356,30 @@ export async function POST(req: NextRequest) {
         recordId: created.id,
         eventId: event.id,
         eventCode: event.code,
+        gender: gender ?? null,
+        quantity: qty,
+        unitPrice,
       },
     };
 
-    const mp = new MercadoPagoConfig({
-      accessToken: MP_TOKEN,
-      options: { timeout: 5000 },
-    });
-    const pref = new Preference(mp);
     const createdPref = await pref.create({
-      body: preferenceBody,
+      body: prefBody,
       requestOptions: { idempotencyKey: `pref:ticket:${created.id}` },
     });
 
-    const redirect_url =
-      createdPref.sandbox_init_point ||
-      createdPref.init_point ||
-      (createdPref.id
-        ? `https://www.mercadopago.com/checkout/v1/redirect?pref_id=${encodeURIComponent(
-            String(createdPref.id)
-          )}`
-        : undefined);
-
     return NextResponse.json({
       id: createdPref.id,
-      redirect_url,
+      redirect_url:
+        createdPref.sandbox_init_point ||
+        createdPref.init_point ||
+        null,
       init_point: createdPref.init_point,
       sandbox_init_point: createdPref.sandbox_init_point,
     });
-  } catch (e) {
-    console.error("[create-payment] error:", e);
+  } catch (err: any) {
+    console.error("[create-payment] error:", err);
     return NextResponse.json(
-      { error: "Error al procesar el pago" },
+      { error: err?.message || "Error interno" },
       { status: 500 }
     );
   }

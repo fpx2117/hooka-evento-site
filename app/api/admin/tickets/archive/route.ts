@@ -30,7 +30,6 @@ async function verifyAuth(request: NextRequest) {
 /* ============ Helpers ============ */
 const parseEnum = <T extends object>(e: T, raw?: string | null) => {
   if (!raw) return undefined;
-  // aceptamos mayúsculas/minúsculas; guiones → guiones bajos
   const key = raw.trim().replace(/-/g, "_");
   // @ts-ignore
   return e[key] ?? undefined;
@@ -71,10 +70,7 @@ export async function GET(request: NextRequest) {
 
   // Paginación
   const page = Math.max(1, parseIntSafe(searchParams.get("page"), 1));
-  const pageSize = Math.min(
-    200,
-    parseIntSafe(searchParams.get("pageSize"), 50)
-  );
+  const pageSize = Math.min(200, parseIntSafe(searchParams.get("pageSize"), 50));
   const skip = (page - 1) * pageSize;
 
   // Construir where
@@ -105,7 +101,7 @@ export async function GET(request: NextRequest) {
         orderBy: { [orderByField]: order },
         skip,
         take: pageSize,
-        // seleccionar lo necesario para la tabla/modal
+        // Usamos SELECT explícito para incluir sólo campos existentes + relaciones necesarias
         select: {
           id: true,
           archivedAt: true,
@@ -117,10 +113,8 @@ export async function GET(request: NextRequest) {
           gender: true,
           quantity: true,
 
-          vipLocation: true,
-          vipTables: true,
-          capacityPerTable: true,
-          tableNumber: true,
+          vipLocationId: true,
+          vipTableId: true,
 
           totalPrice: true,
 
@@ -129,21 +123,70 @@ export async function GET(request: NextRequest) {
           customerPhone: true,
           customerDni: true,
 
-          paymentId: true,
           paymentStatus: true,
           paymentMethod: true,
 
-          qrCode: true,
-          validationCode: true,
           validated: true,
           validatedAt: true,
 
           purchaseDate: true,
           eventDate: true,
-          expiresAt: true,
+
+          // Relaciones (para datos derivados)
+          vipLocation: {
+            select: { name: true },
+          },
+          vipTable: {
+            select: {
+              tableNumber: true, // número local (si la mesa sigue existiendo)
+              vipTableConfig: {
+                select: { capacityPerTable: true },
+              },
+            },
+          },
+          // Si querés mostrar datos del evento archivado:
+          // event: { select: { name: true, date: true } },
         },
       }),
     ]);
+
+    // Aplanamos para el frontend (evitamos exponer objetos anidados)
+    const tickets = rows.map((r) => ({
+      id: r.id,
+      archivedAt: r.archivedAt,
+      archivedBy: r.archivedBy,
+      archiveReason: r.archiveReason,
+      archiveNotes: r.archiveNotes,
+
+      ticketType: r.ticketType,
+      gender: r.gender,
+      quantity: r.quantity,
+
+      vipLocationId: r.vipLocationId,
+      vipLocationName: r.vipLocation?.name ?? null,
+      vipTableId: r.vipTableId,
+      tableNumberLocal: r.vipTable?.tableNumber ?? null,
+      capacityPerTable: r.vipTable?.vipTableConfig?.capacityPerTable ?? null,
+
+      totalPrice: r.totalPrice,
+
+      customerName: r.customerName,
+      customerEmail: r.customerEmail,
+      customerPhone: r.customerPhone,
+      customerDni: r.customerDni,
+
+      paymentStatus: r.paymentStatus,
+      paymentMethod: r.paymentMethod,
+
+      validated: r.validated,
+      validatedAt: r.validatedAt,
+
+      purchaseDate: r.purchaseDate,
+      eventDate: r.eventDate,
+      // Si incluís event arriba, podés aplanar también:
+      // eventName: r.event?.name ?? null,
+      // eventDateExact: r.event?.date ?? null,
+    }));
 
     return NextResponse.json({
       ok: true,
@@ -153,7 +196,7 @@ export async function GET(request: NextRequest) {
         total,
         totalPages: Math.ceil(total / pageSize),
       },
-      tickets: rows,
+      tickets,
     });
   } catch (e) {
     console.error("[archive][GET] error:", e);

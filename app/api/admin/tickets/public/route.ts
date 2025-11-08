@@ -5,71 +5,71 @@ import { PaymentStatus, TicketType } from "@prisma/client";
 
 /**
  * GET /api/admin/tickets/public?type=ticket|vip-table&id=XXXX[&requireApproved=1]
- * - Read-only (no escribe en BD)
- * - Por defecto exige approved (configurable por query o env)
+ * - Devuelve un ticket (general o VIP)
+ * - Solo lectura (no modifica la BD)
  */
 
 const REQUIRE_APPROVED_DEFAULT =
   (process.env.PUBLIC_TICKETS_REQUIRE_APPROVED || "true").toLowerCase() ===
   "true";
 
+/* ========================= Helpers ========================= */
+
+/** Respuesta JSON sin caché */
 function json(payload: any, init?: number | ResponseInit) {
   const initObj: ResponseInit =
     typeof init === "number" ? { status: init } : init || {};
   const headers = new Headers(initObj.headers || {});
-  headers.set(
-    "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate"
-  );
+  headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   headers.set("Pragma", "no-cache");
   headers.set("Expires", "0");
   headers.set("Content-Type", "application/json; charset=utf-8");
   return NextResponse.json(payload, { ...initObj, headers });
 }
 
-/* ========================= Código de validación (6 dígitos) ========================= */
+/** Valida que el código sea solo 6 dígitos numéricos */
 const SIX = /^\d{6}$/;
-function normalizeCode(v?: string | null) {
-  if (v == null) return null;
+
+function normalizeCode(v?: string | null): string | null {
+  if (!v) return null;
   const s = String(v)
-    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width
-    .replace(/\s+/g, "") // espacios
-    .replace(/\D+/g, ""); // no dígitos
-  return s;
-}
-function isSixDigits(v?: string | null) {
-  return !!v && SIX.test(v);
-}
-function safeValidationCode(v?: string | null) {
-  const n = normalizeCode(v);
-  return isSixDigits(n) ? n! : null;
+    .replace(/\s+/g, "")
+    .replace(/\D+/g, "");
+  return s.length === 6 ? s : null;
 }
 
-/* ========================= Helpers ========================= */
-function parseRequireApproved(sp: URLSearchParams) {
+function safeValidationCode(v?: string | null): string | null {
+  const n = normalizeCode(v);
+  return n && SIX.test(n) ? n : null;
+}
+
+function parseRequireApproved(sp: URLSearchParams): boolean {
   const raw = sp.get("requireApproved");
   if (raw == null) return REQUIRE_APPROVED_DEFAULT;
   const val = raw.toLowerCase();
   return val === "1" || val === "true" || val === "yes";
 }
 
-/* ========================= Handler ========================= */
+/* ========================= Handler principal ========================= */
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
-    // Compat: aceptamos "ticket" o "vip-table" (esta última es alias visual)
     const type = sp.get("type"); // "ticket" | "vip-table"
     const id = sp.get("id");
     const requireApproved = parseRequireApproved(sp);
 
     if (!type || !id) {
-      return json({ ok: false, error: "Faltan parámetros (type, id)" }, 400);
-    }
-    if (type !== "ticket" && type !== "vip-table") {
-      return json({ ok: false, error: "Tipo inválido" }, 400);
+      return json(
+        { ok: false, error: "missing_params", details: "Faltan parámetros (type, id)" },
+        400
+      );
     }
 
-    // Siempre leemos desde Ticket. Si pidieron vip-table, verificamos que el ticket sea VIP.
+    if (type !== "ticket" && type !== "vip-table") {
+      return json({ ok: false, error: "invalid_type" }, 400);
+    }
+
+    // 🔍 Buscar ticket con los campos realmente existentes
     const rec = await prisma.ticket.findUnique({
       where: { id },
       select: {
@@ -79,62 +79,62 @@ export async function GET(req: NextRequest) {
         qrCode: true,
         validationCode: true,
         totalPrice: true,
-
-        // metadata para pantalla
-        ticketType: true, // "general" | "vip"
-        gender: true, // null si VIP
-        quantity: true, // personas en general
-        vipLocation: true, // ubicación VIP
-        vipTables: true, // mesas VIP
+        ticketType: true,
+        gender: true,
+        quantity: true,
+        vipLocationId: true,
+        vipTableId: true,
       },
     });
 
-    if (!rec) return json({ ok: false, error: "Not found" }, 404);
+    if (!rec) {
+      return json({ ok: false, error: "not_found" }, 404);
+    }
 
-    // Si el cliente pidió vip-table, validamos que efectivamente sea un Ticket VIP.
+    // 🔒 Validar tipo VIP vs General
     if (type === "vip-table" && rec.ticketType !== TicketType.vip) {
-      return json({ ok: false, error: "El ID no corresponde a un VIP" }, 400);
+      return json({ ok: false, error: "not_vip_ticket" }, 400);
     }
 
-    // Si se requiere aprobado, validamos estado
+    // 🔒 Validar estado de pago si es necesario
     if (requireApproved && rec.paymentStatus !== PaymentStatus.approved) {
-      return json({ ok: false, error: "Pago no aprobado aún" }, 409);
+      return json({ ok: false, error: "payment_not_approved" }, 409);
     }
 
-    // Respuesta común
+    // ✅ Base común
     const base = {
       ok: true as const,
       recordId: rec.id,
       customerName: rec.customerName,
       paymentStatus: rec.paymentStatus,
-      qrCode: rec.qrCode || null,
+      qrCode: safeValidationCode(rec.qrCode),
       validationCode: safeValidationCode(rec.validationCode),
       totalPrice: Number(rec.totalPrice || 0),
     };
 
-    // Forma para ticket general
+    // 🎟️ Ticket general
     if (type === "ticket" && rec.ticketType !== TicketType.vip) {
       return json({
         ...base,
         type: "ticket" as const,
-        ticketType: rec.ticketType, // "general"
-        gender: rec.gender, // "hombre" | "mujer"
+        ticketType: rec.ticketType,
+        gender: rec.gender ?? null,
         quantity: rec.quantity ?? 1,
       });
     }
 
-    // Forma para vip-table (alias visual) — leemos del mismo Ticket VIP
+    // 🪩 Ticket VIP — si no existen relaciones, devolvemos IDs
     if (type === "vip-table" || rec.ticketType === TicketType.vip) {
       return json({
         ...base,
-        type: "vip-table" as const, // mantenemos el alias para la pantalla de success
-        ticketType: rec.ticketType, // "vip"
-        location: rec.vipLocation, // "piscina" | "dj" | "general"
-        tables: rec.vipTables ?? 1,
+        type: "vip-table" as const,
+        ticketType: rec.ticketType,
+        vipLocationId: rec.vipLocationId ?? null,
+        vipTableId: rec.vipTableId ?? null,
       });
     }
 
-    // fallback (general cuando pidieron "ticket")
+    // 🔁 fallback (general)
     return json({
       ...base,
       type: "ticket" as const,
@@ -144,6 +144,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error("[admin/tickets/public][GET] error:", e);
-    return json({ ok: false, error: "internal" }, 500);
+    return json({ ok: false, error: "internal_server_error" }, 500);
   }
 }

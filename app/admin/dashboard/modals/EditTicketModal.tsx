@@ -1,4 +1,5 @@
 "use client";
+
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Edit } from "lucide-react";
-import { AdminForm } from "../types";
+import { FormEvent } from "react";
+import { AdminForm, VipLocation } from "../types";
+
+type Props = {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  form: AdminForm;
+  setForm: (f: AdminForm) => void;
+  onSubmit: (e: FormEvent) => void;
+  isMobile: boolean;
+  vipLocations?: VipLocation[];
+};
 
 export default function EditTicketModal({
   open,
@@ -26,17 +38,17 @@ export default function EditTicketModal({
   setForm,
   onSubmit,
   isMobile,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  form: AdminForm;
-  setForm: (f: AdminForm) => void;
-  onSubmit: (e: React.FormEvent) => void;
-  isMobile: boolean;
-}) {
+  vipLocations = [],
+}: Props) {
   const modalClass = isMobile
     ? "w-[100vw] h-[100vh] max-w-none rounded-none overflow-y-auto"
     : "sm:max-w-2xl sm:max-h-[90vh] overflow-y-auto";
+
+  const handleNumber = (v: string): number | null => {
+    if (v.trim() === "") return null;
+    const num = Number(v);
+    return Number.isFinite(num) ? num : null;
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -47,17 +59,20 @@ export default function EditTicketModal({
               <Edit className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <DialogTitle className="text-xl">Editar Entrada</DialogTitle>
+              <DialogTitle className="text-xl font-semibold">
+                Editar Entrada
+              </DialogTitle>
               <DialogDescription>
-                Modifica los datos de la entrada
+                Modificá los datos del ticket general o VIP.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <form onSubmit={onSubmit} className="space-y-5 pt-4">
+        <form onSubmit={onSubmit} className="space-y-6 pt-4">
+          {/* === Datos del cliente === */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div>
               <Label>Nombre Completo</Label>
               <Input
                 value={form.customerName}
@@ -67,7 +82,7 @@ export default function EditTicketModal({
                 required
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label>DNI</Label>
               <Input
                 value={form.customerDni}
@@ -79,8 +94,9 @@ export default function EditTicketModal({
             </div>
           </div>
 
+          {/* === Contacto === */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div>
               <Label>Email</Label>
               <Input
                 type="email"
@@ -91,7 +107,7 @@ export default function EditTicketModal({
                 required
               />
             </div>
-            <div className="space-y-2">
+            <div>
               <Label>Teléfono</Label>
               <Input
                 value={form.customerPhone}
@@ -103,15 +119,22 @@ export default function EditTicketModal({
             </div>
           </div>
 
+          {/* === Tipo de entrada === */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div>
               <Label>Tipo de Entrada</Label>
               <Select
                 value={form.ticketType}
-                onValueChange={(v: any) => setForm({ ...form, ticketType: v })}
+                onValueChange={(v: "general" | "vip") =>
+                  setForm({
+                    ...form,
+                    ticketType: v,
+                    gender: v === "vip" ? "" : form.gender,
+                  })
+                }
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Seleccionar tipo" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="general">General</SelectItem>
@@ -121,14 +144,16 @@ export default function EditTicketModal({
             </div>
 
             {form.ticketType === "general" && (
-              <div className="space-y-2">
+              <div>
                 <Label>Género</Label>
                 <Select
-                  value={form.gender || "hombre"}
-                  onValueChange={(v: any) => setForm({ ...form, gender: v })}
+                  value={form.gender || ""}
+                  onValueChange={(v: "hombre" | "mujer" | "") =>
+                    setForm({ ...form, gender: v })
+                  }
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Seleccionar género" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="hombre">Hombre</SelectItem>
@@ -139,17 +164,65 @@ export default function EditTicketModal({
             )}
           </div>
 
+          {/* === Campos VIP === */}
+          {form.ticketType === "vip" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Ubicación VIP</Label>
+                <Select
+                  value={form.vipLocationId ?? ""}
+                  onValueChange={(v: string) =>
+                    setForm({ ...form, vipLocationId: v })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar ubicación" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {vipLocations.map((loc) => (
+                      <SelectItem key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Número de Mesa</Label>
+                <Input
+                  type="number"
+                  value={
+                    form.vipTableNumber !== null &&
+                    form.vipTableNumber !== undefined
+                      ? form.vipTableNumber
+                      : ""
+                  }
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      vipTableNumber: handleNumber(e.target.value),
+                    })
+                  }
+                  placeholder="Ej: 5"
+                  min={1}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* === Pago === */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
+            <div>
               <Label>Método de Pago</Label>
               <Select
                 value={form.paymentMethod}
-                onValueChange={(v: any) =>
-                  setForm({ ...form, paymentMethod: v })
-                }
+                onValueChange={(
+                  v: "efectivo" | "transferencia" | "mercadopago"
+                ) => setForm({ ...form, paymentMethod: v })}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Seleccionar método" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="efectivo">Efectivo</SelectItem>
@@ -159,21 +232,26 @@ export default function EditTicketModal({
               </Select>
             </div>
 
-            <div className="space-y-2">
+            <div>
               <Label>Precio Total</Label>
               <Input
                 type="number"
-                value={form.totalPrice}
+                value={Number.isFinite(form.totalPrice) ? form.totalPrice : 0}
                 onChange={(e) =>
-                  setForm({ ...form, totalPrice: Number(e.target.value) })
+                  setForm({
+                    ...form,
+                    totalPrice: Number(e.target.value) || 0,
+                  })
                 }
+                min={0}
               />
-              <p className="text-xs text-muted-foreground">
-                El servidor usa el precio de BD cuando haya configuración
+              <p className="text-xs text-muted-foreground mt-1">
+                El servidor ajustará el precio según la configuración vigente.
               </p>
             </div>
           </div>
 
+          {/* === Acciones === */}
           <div className="flex flex-col sm:flex-row gap-3 pt-4">
             <Button
               type="button"
@@ -185,7 +263,7 @@ export default function EditTicketModal({
             </Button>
             <Button
               type="submit"
-              className="flex-1 bg-blue-600 hover:bg-blue-700"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
             >
               Guardar Cambios
             </Button>

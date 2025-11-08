@@ -1,6 +1,6 @@
 // ========================================================
-// Prisma Schema — Entradas Generales y VIP (por ubicación)
-// DB: PostgreSQL
+// Prisma Schema — Sistema de Entradas Generales y VIP
+// Base de datos: PostgreSQL
 // ========================================================
 
 generator client {
@@ -12,7 +12,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ========================= Enums =========================
+// ========================= Enums ========================= //
 
 enum PaymentStatus {
   pending
@@ -32,8 +32,8 @@ enum PaymentMethod {
 }
 
 enum DiscountType {
-  percent // porcentaje (ej: 10 = 10%)
-  amount // monto fijo (ej: 500)
+  percent
+  amount
 }
 
 enum Gender {
@@ -41,18 +41,11 @@ enum Gender {
   mujer
 }
 
-enum TableLocation {
-  piscina
-  dj
-  general
-}
-
 enum TicketType {
   general
   vip
 }
 
-// Motivo por el que un ticket pasa a histórico/archivo
 enum ArchiveReason {
   user_deleted
   admin_cancelled
@@ -62,7 +55,14 @@ enum ArchiveReason {
   other
 }
 
-// ========================= Admin =========================
+enum VipTableStatus {
+  available
+  reserved
+  sold
+  blocked
+}
+
+// ========================= Admin ========================= //
 
 model Admin {
   id        String   @id @default(cuid())
@@ -74,7 +74,7 @@ model Admin {
   @@index([username])
 }
 
-// ========================= Evento =========================
+// ========================= Evento ========================= //
 
 model Event {
   id       String   @id @default(cuid())
@@ -83,22 +83,100 @@ model Event {
   date     DateTime
   isActive Boolean  @default(true)
 
-  ticketConfig TicketConfig[]
-  vipConfigs   VipTableConfig[]
-
-  tickets       Ticket[]
-  discountRules DiscountRule[]
-
-  // 🔙 back-relation hacia los archivos
-  ticketArchives TicketArchive[] @relation("Event_TicketArchive")
+  ticketConfigs  TicketConfig[]
+  vipConfigs     VipTableConfig[]
+  vipLocations   VipLocation[]
+  vipTables      VipTable[]
+  tickets        Ticket[]
+  discountRules  DiscountRule[]
+  ticketArchives TicketArchive[]  @relation("Event_TicketArchive")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([code])
+  @@index([date])
+  @@index([isActive])
 }
 
-// ========================= Ticket (ACTIVO) =========================
-// - GENERAL: quantity = personas, gender = hombre|mujer
-// - VIP:     vipLocation + vipTables + capacityPerTable + tableNumber
+// ========================= Ubicación VIP ========================= //
+
+model VipLocation {
+  id       String  @id @default(cuid())
+  eventId  String
+  event    Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name     String
+  isActive Boolean @default(true)
+  order    Int     @default(0)
+
+  tables   VipTable[]
+  configs  VipTableConfig[]
+  tickets  Ticket[]
+  archives TicketArchive[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, name])
+  @@index([eventId, name])
+  @@index([isActive])
+}
+
+// ========================= Configuración Mesas VIP ========================= //
+
+model VipTableConfig {
+  id            String      @id @default(cuid())
+  eventId       String
+  event         Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  vipLocationId String
+  vipLocation   VipLocation @relation(fields: [vipLocationId], references: [id], onDelete: Cascade)
+
+  mapUrl String? // 🆕 URL o path del plano / mapa de la ubicación VIP
+
+  price            Decimal @db.Decimal(10, 2)
+  stockLimit       Int
+  soldCount        Int     @default(0)
+  capacityPerTable Int     @default(10)
+
+  tables   VipTable[]
+  tickets  Ticket[]
+  archives TicketArchive[] @relation("VipTableConfig_TicketArchive")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, vipLocationId])
+  @@index([eventId, vipLocationId])
+}
+
+// ========================= Mesa VIP ========================= //
+
+model VipTable {
+  id               String          @id @default(cuid())
+  eventId          String
+  event            Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  vipLocationId    String
+  vipLocation      VipLocation     @relation(fields: [vipLocationId], references: [id], onDelete: Cascade)
+  vipTableConfigId String?
+  vipTableConfig   VipTableConfig? @relation(fields: [vipTableConfigId], references: [id], onDelete: SetNull)
+
+  tableNumber      Int
+  capacityPerTable Int            @default(10)
+  price            Decimal        @db.Decimal(10, 2)
+  status           VipTableStatus @default(available)
+
+  tickets  Ticket[]
+  archives TicketArchive[] @relation("VipTable_TicketArchive")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([eventId, vipLocationId, tableNumber])
+  @@index([eventId, vipLocationId])
+  @@index([status])
+}
+
+// ========================= Ticket (ACTIVO) ========================= //
 
 model Ticket {
   id String @id @default(cuid())
@@ -107,17 +185,15 @@ model Ticket {
   event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   ticketType TicketType
-  gender     Gender? // sólo en general
-  quantity   Int        @default(1) // personas (sólo general)
+  gender     Gender?
+  quantity   Int        @default(1)
 
-  // VIP (por ubicación, en mesas)
-  vipLocation      TableLocation?
-  vipTables        Int? // mesas compradas (VIP)
-  capacityPerTable Int? // personas por mesa (VIP)
-  tableNumber      Int? // número de mesa específica
+  vipLocationId String?
+  vipLocation   VipLocation? @relation(fields: [vipLocationId], references: [id], onDelete: SetNull)
+  vipTableId    String?
+  vipTable      VipTable?    @relation(fields: [vipTableId], references: [id], onDelete: SetNull)
 
-  totalPrice Decimal @db.Decimal(10, 2)
-
+  totalPrice    Decimal @db.Decimal(10, 2)
   customerName  String
   customerEmail String
   customerPhone String
@@ -136,36 +212,30 @@ model Ticket {
   eventDate    DateTime?
   expiresAt    DateTime?
 
-  ticketConfigId String?
-  ticketConfig   TicketConfig? @relation(fields: [ticketConfigId], references: [id], onDelete: SetNull)
+  ticketConfigId   String?
+  ticketConfig     TicketConfig?   @relation(fields: [ticketConfigId], references: [id], onDelete: SetNull)
+  vipTableConfigId String?
+  vipTableConfig   VipTableConfig? @relation(fields: [vipTableConfigId], references: [id], onDelete: SetNull)
 
   emailSentAt DateTime?
-
-  // 🔙 back-relation: un Ticket puede tener muchos archivos derivados
-  archives TicketArchive[] @relation("Ticket_ArchivedFrom")
+  archives    TicketArchive[] @relation("Ticket_ArchivedFrom")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([eventId])
-  @@index([customerEmail])
-  @@index([customerDni])
   @@index([paymentId])
   @@index([paymentStatus, purchaseDate])
   @@index([ticketType, gender])
-  @@index([emailSentAt])
-  @@index([vipLocation])
-  @@index([tableNumber])
+  @@index([vipLocationId])
+  @@index([vipTableId])
 }
 
-// ========================= TicketArchive (HISTÓRICO) =========================
-// Copia de Ticket + metadatos de archivo. NOTA: aquí NO usamos unique en
-// paymentId/qrCode/validationCode para permitir conservar duplicados históricos.
+// ========================= TicketArchive (HISTÓRICO) ========================= //
 
 model TicketArchive {
   id String @id @default(cuid())
 
-  // referencia al Ticket original (si proviene de uno activo)
   archivedFromId String?
   archivedFrom   Ticket? @relation("Ticket_ArchivedFrom", fields: [archivedFromId], references: [id], onDelete: SetNull)
 
@@ -176,22 +246,27 @@ model TicketArchive {
   gender     Gender?
   quantity   Int        @default(1)
 
-  vipLocation      TableLocation?
-  vipTables        Int?
+  vipLocationId String?
+  vipLocation   VipLocation? @relation(fields: [vipLocationId], references: [id], onDelete: SetNull)
+  vipTableId    String?
+  vipTable      VipTable?    @relation("VipTable_TicketArchive", fields: [vipTableId], references: [id], onDelete: SetNull)
+
+  // snapshots útiles para UI/exports
   capacityPerTable Int?
   tableNumber      Int?
 
-  totalPrice Decimal @db.Decimal(10, 2)
-
+  totalPrice    Decimal @db.Decimal(10, 2)
   customerName  String
   customerEmail String
   customerPhone String
   customerDni   String
 
+  // pagos (incluye paymentId para trazabilidad)
   paymentId     String?
   paymentStatus PaymentStatus @default(pending)
   paymentMethod PaymentMethod @default(mercadopago)
 
+  // validaciones / QR
   qrCode         String?
   validationCode String?
   validated      Boolean   @default(false)
@@ -201,102 +276,67 @@ model TicketArchive {
   eventDate    DateTime?
   expiresAt    DateTime?
 
-  ticketConfigId String?
-  ticketConfig   TicketConfig? @relation("TicketConfig_TicketArchive", fields: [ticketConfigId], references: [id], onDelete: SetNull)
-
-  emailSentAt DateTime?
-
-  // Metadatos de archivo
   archivedAt    DateTime      @default(now())
   archivedBy    String?
   archiveReason ArchiveReason @default(other)
   archiveNotes  String?
+
+  ticketConfigId   String?
+  ticketConfig     TicketConfig?   @relation("TicketConfig_TicketArchive", fields: [ticketConfigId], references: [id], onDelete: SetNull)
+  vipTableConfigId String?
+  vipTableConfig   VipTableConfig? @relation("VipTableConfig_TicketArchive", fields: [vipTableConfigId], references: [id], onDelete: SetNull)
+
+  emailSentAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([eventId])
   @@index([customerEmail])
-  @@index([customerDni])
-  @@index([paymentId])
-  @@index([paymentStatus, purchaseDate])
-  @@index([ticketType, gender])
-  @@index([emailSentAt])
-  @@index([vipLocation])
-  @@index([tableNumber])
+  @@index([paymentStatus])
+  @@index([vipLocationId])
+  @@index([vipTableId])
 }
 
-// ========================= Reglas de descuento =========================
+// ========================= Reglas de Descuento ========================= //
 
 model DiscountRule {
-  id String @id @default(cuid())
-
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  ticketType String
+  id         String       @id @default(cuid())
+  eventId    String
+  event      Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType TicketType
   gender     Gender?
-
-  minQty   Int
-  type     DiscountType
-  value    Decimal      @db.Decimal(10, 2)
-  isActive Boolean      @default(true)
-  priority Int          @default(0)
+  minQty     Int
+  type       DiscountType
+  value      Decimal      @db.Decimal(10, 2)
+  isActive   Boolean      @default(true)
+  priority   Int          @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([eventId, ticketType, gender, minQty])
-  @@index([eventId, ticketType, gender, isActive])
+  @@index([eventId, isActive])
 }
 
-// ========================= Configuración de ENTRADAS =========================
+// ========================= Configuración General de Entradas ========================= //
 
 model TicketConfig {
-  id String @id @default(cuid())
-
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  ticketType String
+  id         String     @id @default(cuid())
+  eventId    String
+  event      Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType TicketType
   gender     Gender?
+  price      Decimal    @db.Decimal(10, 2)
+  stockLimit Int        @default(0)
+  soldCount  Int        @default(0)
 
-  price      Decimal @db.Decimal(10, 2)
-  stockLimit Int     @default(0)
-  soldCount  Int     @default(0)
-
-  tickets Ticket[]
-
-  // 🔙 back-relation: archivos asociados a esta config
+  tickets  Ticket[]
   archives TicketArchive[] @relation("TicketConfig_TicketArchive")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([eventId, ticketType, gender], name: "eventId_ticketType_gender")
+  @@unique([eventId, ticketType, gender])
   @@index([eventId, ticketType, gender])
-  @@index([eventId])
-  @@index([ticketType])
-}
-
-// ========================= Configuración MESAS VIP =========================
-
-model VipTableConfig {
-  id String @id @default(cuid())
-
-  eventId String
-  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  location TableLocation
-  price    Decimal       @db.Decimal(10, 2)
-
-  stockLimit       Int
-  soldCount        Int @default(0)
-  capacityPerTable Int @default(10)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([eventId, location])
-  @@index([eventId, location])
 }

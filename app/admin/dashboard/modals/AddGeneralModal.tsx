@@ -1,4 +1,6 @@
 "use client";
+
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +21,17 @@ import {
 import { Ticket } from "lucide-react";
 import { AddGeneralForm, DiscountCfg, TicketsConfig } from "../types";
 import { applyDiscount, pickDiscountRule } from "../utils/discounts";
-import { useMemo } from "react";
+
+interface AddGeneralModalProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  cfg: TicketsConfig | null;
+  discounts: DiscountCfg[];
+  form: AddGeneralForm;
+  setForm: React.Dispatch<React.SetStateAction<AddGeneralForm>>; // ✅ CORREGIDO
+  onSubmit: (e: React.FormEvent) => void;
+  isMobile: boolean;
+}
 
 export default function AddGeneralModal({
   open,
@@ -30,34 +42,58 @@ export default function AddGeneralModal({
   setForm,
   onSubmit,
   isMobile,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  cfg: TicketsConfig | null;
-  discounts: DiscountCfg[];
-  form: AddGeneralForm;
-  setForm: (f: AddGeneralForm) => void;
-  onSubmit: (e: React.FormEvent) => void;
-  isMobile: boolean;
-}) {
+}: AddGeneralModalProps) {
+  const [loadingEvent, setLoadingEvent] = useState(true);
+
+  // ✅ Buscar el evento activo automáticamente al abrir el modal
+  useEffect(() => {
+    const fetchActiveEvent = async () => {
+      try {
+        const res = await fetch("/api/admin/events/active");
+        if (!res.ok) throw new Error("No se pudo obtener el evento activo");
+        const data = await res.json();
+
+        if (data?.ok && data?.event?.id) {
+          // Actualizar formulario con el ID del evento
+          setForm((prev) => ({
+            ...prev,
+            eventId: data.event.id,
+          }));
+        } else {
+          console.warn("⚠️ No se encontró evento activo.");
+        }
+      } catch (error) {
+        console.error("❌ Error al obtener el evento activo:", error);
+      } finally {
+        setLoadingEvent(false);
+      }
+    };
+
+    fetchActiveEvent();
+  }, [setForm]);
+
+  // ===========================
+  // Cálculos de precios
+  // ===========================
   const generalUnitPrice = useMemo(() => {
     if (!cfg) return 0;
     return form.gender === "hombre"
-      ? cfg.tickets.general.hombre?.price || 0
-      : cfg.tickets.general.mujer?.price || 0;
+      ? cfg.tickets.general.hombre?.price ?? 0
+      : cfg.tickets.general.mujer?.price ?? 0;
   }, [cfg, form.gender]);
 
   const generalRemaining = useMemo(() => {
     if (!cfg) return 0;
     return form.gender === "hombre"
-      ? cfg.tickets.general.hombre?.remaining || 0
-      : cfg.tickets.general.mujer?.remaining || 0;
+      ? cfg.tickets.general.hombre?.remaining ?? 0
+      : cfg.tickets.general.mujer?.remaining ?? 0;
   }, [cfg, form.gender]);
 
   const rule = useMemo(
     () => pickDiscountRule(discounts, "general", form.quantity),
     [discounts, form.quantity]
   );
+
   const totals = useMemo(
     () => applyDiscount(generalUnitPrice, form.quantity, rule),
     [generalUnitPrice, form.quantity, rule]
@@ -67,6 +103,9 @@ export default function AddGeneralModal({
     ? "w-[100vw] h-[100vh] max-w-none rounded-none overflow-y-auto"
     : "sm:max-w-2xl sm:max-h-[90vh] overflow-y-auto";
 
+  // ===========================
+  // Render del modal
+  // ===========================
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={modalClass}>
@@ -76,17 +115,32 @@ export default function AddGeneralModal({
               <Ticket className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <DialogTitle className="text-xl">
+              <DialogTitle className="text-xl font-semibold">
                 Agregar Entrada General
               </DialogTitle>
               <DialogDescription>
-                El precio se toma automáticamente desde la base de datos
+                El evento se carga automáticamente desde la base de datos.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         <form onSubmit={onSubmit} className="space-y-6 pt-4">
+          {/* ID del evento */}
+          <div className="space-y-2">
+            <Label>ID del Evento</Label>
+            <Input
+              value={form.eventId ?? ""}
+              disabled
+              placeholder={
+                loadingEvent
+                  ? "Cargando evento..."
+                  : form.eventId || "No se encontró evento activo"
+              }
+              readOnly
+            />
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Nombre Completo</Label>
@@ -157,9 +211,9 @@ export default function AddGeneralModal({
               <Label>Método de Pago</Label>
               <Select
                 value={form.paymentMethod}
-                onValueChange={(v: any) =>
-                  setForm({ ...form, paymentMethod: v })
-                }
+                onValueChange={(
+                  v: "efectivo" | "transferencia" | "mercadopago"
+                ) => setForm({ ...form, paymentMethod: v })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccionar método" />
@@ -192,7 +246,7 @@ export default function AddGeneralModal({
             </div>
           </div>
 
-          {/* Resumen */}
+          {/* Totales */}
           <div className="space-y-2">
             {rule && (
               <div className="rounded-xl bg-emerald-50 p-3 text-sm border border-emerald-200/60">
@@ -231,6 +285,7 @@ export default function AddGeneralModal({
             </div>
           </div>
 
+          {/* Botones */}
           <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <Button
               type="button"
@@ -242,9 +297,10 @@ export default function AddGeneralModal({
             </Button>
             <Button
               type="submit"
+              disabled={!form.eventId || loadingEvent}
               className="flex-1 bg-blue-600 hover:bg-blue-700"
             >
-              Guardar Entrada General
+              {loadingEvent ? "Cargando evento..." : "Guardar Entrada General"}
             </Button>
           </div>
         </form>

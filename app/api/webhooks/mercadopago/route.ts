@@ -3,26 +3,28 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { MercadoPagoConfig, Payment, MerchantOrder } from "mercadopago";
+import { prisma } from "@/lib/prisma";
 import { Prisma, PaymentStatus } from "@prisma/client";
 import {
   ensureSixDigitCode,
   normalizeSixDigitCode,
 } from "@/lib/validation-code";
 
+/* -------------------------- Tipos y constantes -------------------------- */
 type Tx = Prisma.TransactionClient;
 const EXPECTED_CURRENCY = "ARS";
 
-/* ========================= Mercado Pago SDK ========================= */
+/* ------------------------- Mercado Pago SDK setup ------------------------ */
 const MP_TOKEN =
   process.env.MERCADO_PAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
+
 const mpClient = MP_TOKEN
   ? new MercadoPagoConfig({ accessToken: MP_TOKEN, options: { timeout: 5000 } })
   : null;
 
-/* ========================= Firma opcional ========================= */
+/* -------------------------- Validación de firma -------------------------- */
 function parseXSignature(sig: string | null) {
   if (!sig) return null;
   const parts = sig.split(",").reduce<Record<string, string>>((acc, kv) => {
@@ -33,9 +35,11 @@ function parseXSignature(sig: string | null) {
   if (!parts.ts || !parts.v1) return null;
   return { ts: parts.ts, v1: parts.v1.toLowerCase() };
 }
+
 function hmac(secret: string, data: string) {
   return crypto.createHmac("sha256", secret).update(data).digest("hex");
 }
+
 function buildSignatureCandidates(opts: {
   requestId: string;
   ts: string;
@@ -54,11 +58,12 @@ function buildSignatureCandidates(opts: {
   ];
   return bases.map((b) => hmac(secret, b));
 }
+
 async function isValidFromMercadoPago(req: NextRequest, body: any) {
   const sig = parseXSignature(req.headers.get("x-signature"));
   const requestId = req.headers.get("x-request-id") || "";
   const secret = process.env.MP_WEBHOOK_SECRET || "";
-  if (!secret) return true;
+  if (!secret) return true; // si no hay secret, aceptar (opcional)
   if (!sig || !requestId || !body?.data?.id) return false;
 
   const ts = sig.ts;
@@ -78,7 +83,12 @@ async function isValidFromMercadoPago(req: NextRequest, body: any) {
   return candidates.some((c) => c === v1);
 }
 
-/* ========================= Utils ========================= */
+/* ----------------------------- Utilidades ----------------------------- */
+function nearlyEqual(a: number, b: number, eps = 0.01) {
+  return Math.abs(a - b) <= eps;
+}
+
+/** Extrae referencia del pago (metadata/external_reference) */
 function extractRecordRef(payment: any): {
   type?: "ticket";
   recordId?: string;
@@ -87,7 +97,9 @@ function extractRecordRef(payment: any): {
   let metaType: any = md.type;
   let recordId: string | undefined = md.recordId || md.record_id;
 
+  // legacy compat
   if (!recordId) recordId = md.tableReservationId;
+
   if (
     (!metaType || !recordId) &&
     typeof payment?.external_reference === "string"
@@ -96,14 +108,11 @@ function extractRecordRef(payment: any): {
     if (!metaType && t) metaType = t;
     if (!recordId && id) recordId = id;
   }
-  if (metaType === "vip-table" || metaType === "vip-table-res")
-    metaType = "ticket";
+
+  // normalizamos cualquier "vip-table" a "ticket"
+  if (metaType === "vip-table" || metaType === "vip-table-res") metaType = "ticket";
   if (metaType !== "ticket" || !recordId) return {};
   return { type: "ticket", recordId };
-}
-
-function nearlyEqual(a: number, b: number, eps = 0.01) {
-  return Math.abs(a - b) <= eps;
 }
 
 function isApprovedStrong(opts: {
@@ -131,6 +140,7 @@ function isApprovedStrong(opts: {
 
   if (strong) return true;
 
+  // en sandbox aflojamos un poco
   if (!liveMode) {
     return (
       status === "approved" &&
@@ -146,12 +156,13 @@ function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
 
-/* ========================= SDK helpers ========================= */
+/* ----------------------------- SDK helpers ----------------------------- */
 async function sdkGetPayment(paymentId: string) {
   if (!mpClient) throw new Error("missing_token");
   const sdk = new Payment(mpClient);
   return sdk.get({ id: paymentId });
 }
+
 async function fetchPaymentWithRetry(paymentId: string) {
   const attempts = 8;
   for (let i = 0; i < attempts; i++) {
@@ -179,6 +190,7 @@ async function fetchPaymentWithRetry(paymentId: string) {
   }
   throw new Error("payment_not_found_after_retries");
 }
+
 async function fetchMerchantOrder(orderId: string) {
   if (!mpClient) throw new Error("missing_token");
   const mo = new MerchantOrder(mpClient);
@@ -196,7 +208,7 @@ async function fetchMerchantOrder(orderId: string) {
   return order as any;
 }
 
-/* ========================= Persistencia ========================= */
+/* -------------------------- Persistencia / DB -------------------------- */
 async function getExpectedAmount(recordId: string) {
   const rec = await prisma.ticket.findUnique({
     where: { id: recordId },
@@ -204,6 +216,7 @@ async function getExpectedAmount(recordId: string) {
   });
   return Number(rec?.totalPrice ?? 0);
 }
+
 async function getPrevPaymentInfo(recordId: string) {
   return prisma.ticket.findUnique({
     where: { id: recordId },
@@ -211,6 +224,12 @@ async function getPrevPaymentInfo(recordId: string) {
   });
 }
 
+/**
+ * Ajusta soldCount de VipTableConfig si el Ticket VIP pasa
+ * de NO aprobado → aprobado (sumar 1) o de aprobado → revertido (restar 1).
+ * Usa las relaciones correctas del schema:
+ * Ticket.vipTable -> VipTable.vipTableConfig (+ vipLocation)
+ */
 async function adjustVipSoldCountByTransition(
   tx: Tx,
   ticketId: string,
@@ -225,24 +244,26 @@ async function adjustVipSoldCountByTransition(
       id: true,
       ticketType: true,
       eventId: true,
-      vipLocation: true,
-      vipTables: true,
-      tableNumber: true,
+      vipTableId: true,
+      vipTable: {
+        select: {
+          id: true,
+          tableNumber: true,
+          vipLocation: { select: { id: true, name: true } },
+          vipTableConfig: {
+            select: { id: true, soldCount: true, stockLimit: true },
+          },
+        },
+      },
     },
   });
-  if (!t || t.ticketType !== "vip" || !t.vipLocation) return;
 
-  const tables = Math.max(1, Number(t.vipTables || 1));
+  if (!t || t.ticketType !== "vip" || !t.vipTable) return;
 
-  const cfg = await tx.vipTableConfig.findUnique({
-    where: {
-      eventId_location: { eventId: t.eventId, location: t.vipLocation },
-    },
-    select: { id: true, soldCount: true, stockLimit: true },
-  });
-  if (!cfg) return;
+  const cfg = t.vipTable.vipTableConfig;
+  if (!cfg) return; // si no hay config vinculada a la mesa, no hay nada que ajustar
 
-  const delta = toApproved && !fromApproved ? +tables : -tables;
+  const delta = toApproved && !fromApproved ? 1 : -1;
   const next = Math.max(0, Math.min(cfg.stockLimit, cfg.soldCount + delta));
 
   if (next !== cfg.soldCount) {
@@ -252,27 +273,29 @@ async function adjustVipSoldCountByTransition(
     });
   }
 
-  if (t.tableNumber && toApproved) {
+  // Aviso de posible doble asignación de mesa (no bloquea, solo log)
+  if (t.vipTable.tableNumber && toApproved) {
     const already = await tx.ticket.findFirst({
       where: {
         eventId: t.eventId,
         ticketType: "vip",
-        vipLocation: t.vipLocation,
         paymentStatus: "approved",
-        tableNumber: t.tableNumber,
-        NOT: { id: t.id },
+        vipTableId: { not: t.vipTableId },
       },
       select: { id: true },
     });
     if (already) {
       console.warn(
-        `[VIP] Mesa #${t.tableNumber} (${t.vipLocation}) ya ocupada por ticket ${already.id}.`
+        `[VIP] Mesa #${t.vipTable.tableNumber} (${t.vipTable.vipLocation.name}) ya aparece ocupada por ticket ${already.id}.`
       );
     }
   }
 }
 
-/* ========================= Persistencia de estados ========================= */
+/**
+ * Guarda el nuevo estado del pago, ajusta soldCount si corresponde
+ * y asegura el validationCode cuando queda aprobado.
+ */
 async function persistStatus(
   recordId: string,
   payment: any,
@@ -301,6 +324,7 @@ async function persistStatus(
 
     if (isApprovedNow) {
       await ensureSixDigitCode(tx, { id: recordId });
+
     }
 
     const t = await tx.ticket.findUnique({
@@ -327,7 +351,7 @@ async function sendConfirmation(recordId: string) {
   }
 }
 
-/* ========================= Core ========================= */
+/* --------------------------------- Core --------------------------------- */
 async function processPaymentById(paymentId: string) {
   if (!MP_TOKEN || !mpClient) throw new Error("missing_token");
   const payment = await fetchPaymentWithRetry(paymentId);
@@ -382,7 +406,7 @@ async function processPaymentById(paymentId: string) {
   };
 }
 
-/* ========================= Handlers ========================= */
+/* -------------------------------- Handlers ------------------------------- */
 export async function GET(req: NextRequest) {
   try {
     const topic = req.nextUrl.searchParams.get("topic");
@@ -430,6 +454,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false }, { status: 401 });
     }
 
+    // payload moderno de MP
     if (body?.type === "payment" && body?.data?.id) {
       try {
         const out = await processPaymentById(String(body.data.id));
@@ -446,6 +471,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // merchant_order con resource
     if (
       (body?.topic === "merchant_order" || body?.type === "merchant_order") &&
       body?.resource
@@ -466,6 +492,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // compat por querystring (?topic=payment&id=...)
     const urlParams = req.nextUrl.searchParams;
     const topic = urlParams.get("topic");
     const id = urlParams.get("data.id") || urlParams.get("id");

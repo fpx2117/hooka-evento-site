@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/card";
 import { ExportModal } from "@/components/export-modal";
 import DiscountsModal from "@/components/DiscountsModal";
+import { VipLocation, VipTableConfig } from "./types";
 
 import useIsMobile from "./hooks/useIsMobile";
 import MobileHeaderActions from "./components/MobileHeaderActions";
@@ -45,21 +46,23 @@ import {
   AddGeneralForm,
   AddVipForm,
   DiscountCfg,
-  TableLocation,
   TicketsConfig,
   VipAvailability,
 } from "./types";
 import { applyDiscount, pickDiscountRule, range } from "./utils/discounts";
 
+/** Tipo local compatible con FiltersBar (no importar Status del componente) */
+type FilterStatus = "all" | "approved" | "pending" | "rejected";
+
 /* ============ Normalizador seguro ============ */
 function normalizeTicket(raw: unknown): AdminTicket {
   const r = raw as Record<string, unknown>;
 
-  // mesa única
+  // mesa (nueva numeración vipTableNumber o equivalentes)
   const singleRaw =
+    r["vipTableNumber"] ??
     r["tableNumber"] ??
     r["table_number"] ??
-    r["vipTableNumber"] ??
     r["table"] ??
     r["mesa"] ??
     null;
@@ -68,23 +71,7 @@ function normalizeTicket(raw: unknown): AdminTicket {
     typeof singleRaw === "number"
       ? singleRaw
       : typeof singleRaw === "string"
-        ? Number.parseInt(singleRaw, 10) || null
-        : null;
-
-  // mesas múltiples
-  const pluralRaw =
-    r["tableNumbers"] ??
-    r["table_numbers"] ??
-    r["vipTables"] ??
-    r["tables"] ??
-    r["mesas"] ??
-    null;
-
-  const plural =
-    Array.isArray(pluralRaw) && pluralRaw.length > 0
-      ? (pluralRaw as unknown[])
-          .map((n) => Number(n))
-          .filter((n) => !Number.isNaN(n))
+      ? Number.parseInt(singleRaw, 10) || null
       : null;
 
   const id = String(
@@ -95,9 +82,7 @@ function normalizeTicket(raw: unknown): AdminTicket {
         : `tmp_${Date.now()}`)
   );
 
-  const ticketType = (r["ticketType"] ??
-    r["type"] ??
-    "general") as AdminTicket["ticketType"];
+  const ticketType = (r["ticketType"] ?? r["type"] ?? "general") as AdminTicket["ticketType"];
   const quantity = Number(r["quantity"] ?? 1) || 1;
   const totalPrice = Number(r["totalPrice"] ?? 0) || 0;
 
@@ -126,11 +111,11 @@ function normalizeTicket(raw: unknown): AdminTicket {
   const qrCode = (r["qrCode"] as string) ?? (r["Code"] as string) ?? undefined;
   const validationCode = (r["validationCode"] as string) ?? undefined;
 
-  // El GET del backend ya normaliza `tableLocation` a partir de `vipLocation`,
-  // pero este fallback deja la UI robusta si algún cliente llama otra forma.
-  const tableLocation =
-    (r["tableLocation"] as AdminTicket["tableLocation"]) ??
-    (r["location"] as AdminTicket["tableLocation"]) ??
+  // Nuevos campos VIP
+  const vipLocationId = (r["vipLocationId"] as string) ?? null;
+  const vipLocationName =
+    (r["vipLocationName"] as string) ??
+    ((r["vipLocation"] as any)?.name as string | undefined) ??
     null;
 
   return {
@@ -149,22 +134,38 @@ function normalizeTicket(raw: unknown): AdminTicket {
     validated,
     qrCode,
     validationCode,
-    tableLocation,
-    tableNumber: single,
-    tableNumbers:
-      plural && plural.length > 0 ? plural : single != null ? [single] : null,
+    expiresAt: (r["expiresAt"] as string) ?? null,
+    vipLocationId,
+    vipLocationName,
+    vipTableId: (r["vipTableId"] as string) ?? null,
+    vipTableNumber: single ?? null,
   };
 }
 
 /* =========================
    Página
 ========================= */
-export default function AdminDashboard() {
+export default function Page() {
   const router = useRouter();
   const isMobile = useIsMobile();
 
+  // ✅ Event ID centralizado
+  const [activeEventId, setActiveEventId] = useState<string | null>(null);
+  const [loadingEvent, setLoadingEvent] = useState<boolean>(true);
+
+  const [vipLocations, setVipLocations] = useState<VipLocation[]>([]);
+  const [vipConfigs, setVipConfigs] = useState<VipTableConfig[]>([]);
+
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // 🔧 Estados requeridos por ConfigModal
+  const [configForm, setConfigForm] = useState({
+    totalLimitPersons: 0,
+    genHPrice: 0,
+    genMPrice: 0,
+  });
+  const [vipTablesForm, setVipTablesForm] = useState<any[]>([]);
 
   const [cfg, setCfg] = useState<TicketsConfig | null>(null);
   const [cfgLoading, setCfgLoading] = useState<boolean>(true);
@@ -173,9 +174,7 @@ export default function AdminDashboard() {
 
   // Mesas (picker)
   const [showTablesModal, setShowTablesModal] = useState<boolean>(false);
-  const [availability, setAvailability] = useState<VipAvailability | null>(
-    null
-  );
+  const [availability, setAvailability] = useState<VipAvailability | null>(null);
   const [availableNumbers, setAvailableNumbers] = useState<number[]>([]);
   const [selectedTable, setSelectedTable] = useState<number | null>(null);
   const [loadingAvail, setLoadingAvail] = useState<boolean>(false);
@@ -184,19 +183,13 @@ export default function AdminDashboard() {
   const [discounts, setDiscounts] = useState<DiscountCfg[]>([]);
   const [showDiscountsModal, setShowDiscountsModal] = useState<boolean>(false);
 
-  // Filtros (los mismos que tu UI)
+  // Filtros (compatibles con FiltersBar)
   const [q, setQ] = useState<string>("");
-  const [fStatus, setFStatus] = useState<
-    "all" | "approved" | "pending" | "rejected"
-  >("all");
+  const [fStatus, setFStatus] = useState<FilterStatus>("all");
   const [fType, setFType] = useState<"all" | "general" | "vip">("all");
   const [fGender, setFGender] = useState<"all" | "hombre" | "mujer">("all");
-  const [fPay, setFPay] = useState<
-    "all" | "efectivo" | "transferencia" | "mercadopago"
-  >("all");
-  const [orderBy, setOrderBy] = useState<"purchaseDate" | "totalPrice">(
-    "purchaseDate"
-  );
+  const [fPay, setFPay] = useState<"all" | "efectivo" | "transferencia" | "mercadopago">("all");
+  const [orderBy, setOrderBy] = useState<"purchaseDate" | "totalPrice">("purchaseDate");
   const [order, setOrder] = useState<"desc" | "asc">("desc");
 
   // Modales
@@ -219,13 +212,14 @@ export default function AdminDashboard() {
     quantity: 1,
   });
 
-  const [formVip, setFormVip] = useState<AddVipForm>({
+  const [formVip, setFormVip] = useState<AddVipForm & { vipTableNumber: number | null }>({
     customerName: "",
     customerEmail: "",
     customerPhone: "",
     customerDni: "",
     paymentMethod: "efectivo",
-    tableLocation: "dj",
+    vipLocationId: "",
+    vipTableNumber: null,
   });
 
   const [editForm, setEditForm] = useState<AdminForm>({
@@ -239,48 +233,97 @@ export default function AdminDashboard() {
     totalPrice: 0,
   });
 
-  useEffect(() => {
-    setSelectedTable(null);
-  }, [formVip.tableLocation]);
-
-  const [configForm, setConfigForm] = useState({
-    totalLimitPersons: 0,
-    genHPrice: 0,
-    genMPrice: 0,
-  });
-  type VipTableFormRow = {
-    location: TableLocation;
-    price: number;
-    stockLimit: number;
-    capacityPerTable: number;
-    startNumber?: number | null;
-    endNumber?: number | null;
-  };
-  const [vipTablesForm, setVipTablesForm] = useState<VipTableFormRow[]>([
-    { location: "dj", price: 0, stockLimit: 0, capacityPerTable: 10 },
-    { location: "piscina", price: 0, stockLimit: 0, capacityPerTable: 10 },
-  ]);
-
   const [qrModalOpen, setQrModalOpen] = useState<boolean>(false);
   const [qrModalCode, setQrModalCode] = useState<string | null>(null);
 
   const [sendingId, setSendingId] = useState<string | null>(null);
 
+  // ========= helpers evento =========
+  const fetchActiveEventId = async (): Promise<string | null> => {
+    try {
+      // tu API original
+      const res = await fetch("/api/admin/events/active", { cache: "no-store" });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const id: string | undefined = data?.event?.id || data?.eventId || data?.id;
+      return id ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const ensureEventId = async () => {
+    if (activeEventId) return activeEventId;
+    setLoadingEvent(true);
+    const id = await fetchActiveEventId();
+    setActiveEventId(id);
+    setLoadingEvent(false);
+    return id;
+  };
+
   useEffect(() => {
-    fetchTickets();
-    fetchConfig();
-    fetchDiscounts();
-    // “patear” el timeout de pendientes (parche si aún no tienes cron)
-    fetch("/api/tasks/timeout-pending", { method: "POST" }).catch(() => {});
+    (async () => {
+      await ensureEventId(); // primero, evento
+      fetchTickets();
+      fetchConfig();
+      fetchDiscounts();
+      fetchVipData(); // ubicaciones/config VIP dependen del evento
+      // “patear” el timeout de pendientes (parche si aún no tienes cron)
+      fetch("/api/tasks/timeout-pending", { method: "POST" }).catch(() => {});
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setSelectedTable(null);
+  }, [formVip.vipLocationId]);
 
   /* =========================
      Fetchers
   ========================= */
+  const fetchVipData = async (): Promise<void> => {
+    try {
+      const eventId = activeEventId ?? (await ensureEventId());
+      if (!eventId) {
+        console.warn("[dashboard] No hay eventId para VIP data.");
+        return;
+      }
+
+      const [locRes, cfgRes] = await Promise.all([
+        fetch(`/api/vip-tables/locations?eventId=${eventId}`, { cache: "no-store" }),
+        fetch(`/api/vip-tables/config?eventId=${eventId}`, { cache: "no-store" }),
+      ]);
+
+      if (!locRes.ok) {
+        console.error(`[dashboard] Error ${locRes.status} al obtener locations`);
+        return;
+      }
+      if (!cfgRes.ok) {
+        console.error(`[dashboard] Error ${cfgRes.status} al obtener config`);
+        return;
+      }
+
+      const locJson = await locRes.json();
+      const cfgJson = await cfgRes.json();
+
+      if (locJson.ok && Array.isArray(locJson.locations)) {
+        setVipLocations(locJson.locations);
+      } else {
+        console.warn("[dashboard] Locations no válidas:", locJson);
+      }
+
+      if (cfgJson.ok && Array.isArray(cfgJson.configs)) {
+        setVipConfigs(cfgJson.configs);
+      } else {
+        console.warn("[dashboard] Configs no válidas:", cfgJson);
+      }
+    } catch (err) {
+      console.error("[dashboard] Error fetching VIP data:", err);
+    }
+  };
+
   const fetchTickets = async (): Promise<void> => {
     try {
-      // Traer TODO (sin filtrar a approved), así ves pending/rejected también
       const response = await fetch("/api/admin/tickets", { cache: "no-store" });
       if (response.status === 401) {
         router.push("/admin/login");
@@ -300,44 +343,28 @@ export default function AdminDashboard() {
     }
   };
 
-  const fetchVipAvailability = async (loc: TableLocation): Promise<void> => {
+  const fetchVipAvailability = async (vipLocationId: string): Promise<void> => {
     setLoadingAvail(true);
     setAvailError(null);
     try {
       const r = await fetch(
-        `/api/vip-tables/availability?location=${encodeURIComponent(loc)}`,
+        `/api/vip-tables/availability?vipLocationId=${encodeURIComponent(vipLocationId)}`,
         { cache: "no-store" }
       );
       const data: VipAvailability = await r.json();
       if (!r.ok || !data?.ok)
-        throw new Error(
-          (data as any)?.error || "No se pudo obtener disponibilidad"
-        );
+        throw new Error((data as any)?.error || "No se pudo obtener disponibilidad");
 
-      const sector = cfg?.vipTables.find((v) => v.location === loc);
-      const start =
-        sector?.startNumber != null && Number.isFinite(sector.startNumber)
-          ? Number(sector.startNumber)
-          : null;
-      const end =
-        sector?.endNumber != null && Number.isFinite(sector.endNumber)
-          ? Number(sector.endNumber)
-          : null;
-      const limit =
-        data.limit != null && Number.isFinite(data.limit as any)
-          ? Number(data.limit)
-          : (sector?.limit ?? 0);
+      setAvailability(data);
 
-      const allNumbers =
-        start != null && end != null
-          ? range(start, end)
-          : range(1, Math.max(0, limit || 0));
+      const start = (data.startNumber ?? 1) as number;
+      const end = (data.endNumber ?? data.limit ?? 0) as number;
+      const allNumbers = range(start, end);
       const takenSet = new Set<number>(
         (Array.isArray(data.taken) ? data.taken : []).map(Number)
       );
       const libres = allNumbers.filter((n) => !takenSet.has(n));
 
-      setAvailability(data);
       setAvailableNumbers(libres);
     } catch (e) {
       const err = e as Error;
@@ -356,42 +383,14 @@ export default function AdminDashboard() {
       if (r.ok) {
         const data: TicketsConfig = await r.json();
         setCfg(data);
-        setConfigForm({
-          totalLimitPersons: data.totals?.limitPersons ?? 0,
-          genHPrice: data.tickets.general.hombre?.price ?? 0,
-          genMPrice: data.tickets.general.mujer?.price ?? 0,
-        });
 
-        type Row = (typeof vipTablesForm)[number];
-        const byLoc = new Map<TableLocation, Row>();
-        for (const c of data.vipTables || []) {
-          byLoc.set(c.location, {
-            location: c.location,
-            price: c.price ?? 0,
-            stockLimit: c.limit ?? 0,
-            capacityPerTable:
-              typeof c.capacityPerTable === "number" && c.capacityPerTable > 0
-                ? c.capacityPerTable
-                : (data.totals?.unitVipSize ?? 10),
-            startNumber:
-              typeof c.startNumber === "number" ? c.startNumber : undefined,
-            endNumber:
-              typeof c.endNumber === "number" ? c.endNumber : undefined,
-          });
-        }
-        const merged: Row[] = [];
-        (["dj", "piscina"] as TableLocation[]).forEach((loc) => {
-          if (byLoc.has(loc)) merged.push(byLoc.get(loc)!);
-          else
-            merged.push({
-              location: loc,
-              price: 0,
-              stockLimit: 0,
-              capacityPerTable: data.totals?.unitVipSize ?? 10,
-            });
-        });
-        if (byLoc.has("general")) merged.push(byLoc.get("general")!);
-        setVipTablesForm(merged);
+        // Precargar form para ConfigModal
+        setConfigForm((prev) => ({
+          ...prev,
+          totalLimitPersons: data.totals?.limitPersons ?? 0,
+          genHPrice: data.tickets?.general?.hombre?.price ?? 0,
+          genMPrice: data.tickets?.general?.mujer?.price ?? 0,
+        }));
       }
     } catch (e) {
       console.error("[dashboard] Error fetching config:", e);
@@ -410,8 +409,8 @@ export default function AdminDashboard() {
         const list: DiscountCfg[] = Array.isArray(payload)
           ? payload
           : Array.isArray(payload?.discounts)
-            ? payload.discounts
-            : [];
+          ? payload.discounts
+          : [];
         setDiscounts(list);
       }
     } catch (e) {
@@ -489,11 +488,22 @@ export default function AdminDashboard() {
     })();
   };
 
+  // ✅ Creación General SIEMPRE con eventId del estado
   const addGeneral: React.FormEventHandler = (e) => {
     e.preventDefault();
-    if (!cfg) return;
     (async () => {
+      const eventId = activeEventId ?? (await ensureEventId());
+      if (!eventId) {
+        alert("No se encontró el evento activo. Reintentá en unos segundos.");
+        return;
+      }
+      if (!cfg) {
+        alert("No se pudo cargar la configuración de tickets.");
+        return;
+      }
+
       try {
+        // precios desde config
         const unitPrice =
           formGeneral.gender === "hombre"
             ? cfg.tickets.general.hombre?.price || 0
@@ -507,6 +517,7 @@ export default function AdminDashboard() {
 
         const payload = {
           ticketType: "general" as const,
+          eventId, // ✅ agregado
           gender: formGeneral.gender,
           quantity: formGeneral.quantity,
           customerName: formGeneral.customerName,
@@ -546,129 +557,9 @@ export default function AdminDashboard() {
     })();
   };
 
-  const selectedVipCfg = useMemo(
-    () =>
-      !cfg
-        ? null
-        : cfg.vipTables.find((v) => v.location === formVip.tableLocation) ||
-          null,
-    [cfg, formVip.tableLocation]
-  );
-  const vipUnitPrice = useMemo<number>(
-    () => (selectedVipCfg ? selectedVipCfg.price : 0),
-    [selectedVipCfg]
-  );
-  const vipTotalInfo = useMemo(
-    () => applyDiscount(vipUnitPrice, 1, null),
-    [vipUnitPrice]
-  );
-
-  const addVip: React.FormEventHandler = (e) => {
-    e.preventDefault();
-    if (!cfg) return;
-    if (!selectedTable) {
-      alert("Seleccioná 1 mesa.");
-      return;
-    }
-
-    (async () => {
-      try {
-        const sector = cfg.vipTables.find(
-          (v) => v.location === formVip.tableLocation
-        );
-        const start =
-          sector?.startNumber != null && Number.isFinite(sector.startNumber)
-            ? Number(sector.startNumber)
-            : null;
-        const end =
-          sector?.endNumber != null && Number.isFinite(sector.endNumber)
-            ? Number(sector.endNumber)
-            : null;
-        const localNumber =
-          start != null && end != null
-            ? selectedTable - start + 1
-            : selectedTable;
-
-        const payload: Record<string, unknown> = {
-          ticketType: "vip",
-          customerName: formVip.customerName,
-          customerEmail: formVip.customerEmail,
-          customerPhone: formVip.customerPhone,
-          customerDni: formVip.customerDni,
-          paymentMethod: formVip.paymentMethod,
-          totalPrice: vipTotalInfo.total,
-          forceTotalPrice: true,
-          location: formVip.tableLocation,
-          tableNumber: selectedTable, // global
-          tableNumberLocal: localNumber, // local sugerido
-        };
-
-        const r = await fetch("/api/admin/tickets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (r.ok) {
-          setShowAddVip(false);
-          setFormVip({
-            customerName: "",
-            customerEmail: "",
-            customerPhone: "",
-            customerDni: "",
-            paymentMethod: "efectivo",
-            tableLocation: formVip.tableLocation,
-          });
-          setSelectedTable(null);
-          fetchTickets();
-          fetchConfig();
-        } else {
-          const err = await r.json().catch(() => ({}));
-          alert(err?.error || "No se pudo crear la entrada VIP");
-        }
-      } catch {
-        alert("Ocurrió un error creando la entrada VIP");
-      }
-    })();
-  };
-
   const saveConfig: React.FormEventHandler = (e) => {
     e.preventDefault();
-    (async () => {
-      try {
-        const payload = {
-          totalEntriesLimit: Number(configForm.totalLimitPersons),
-          general: {
-            hombre: { price: Number(configForm.genHPrice) },
-            mujer: { price: Number(configForm.genMPrice) },
-          },
-          vipTables: vipTablesForm.map((row) => ({
-            location: row.location,
-            price: Number(row.price),
-            stockLimit: Number(row.stockLimit),
-            capacityPerTable: Number(row.capacityPerTable),
-            ...(row.startNumber != null
-              ? { startNumber: Number(row.startNumber) }
-              : {}),
-            ...(row.endNumber != null
-              ? { endNumber: Number(row.endNumber) }
-              : {}),
-          })),
-        };
-        const r = await fetch("/api/admin/tickets/config", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!r.ok) {
-          alert("No se pudo guardar la configuración");
-          return;
-        }
-        setShowConfigModal(false);
-        await fetchConfig();
-      } catch {
-        alert("Ocurrió un error guardando la configuración");
-      }
-    })();
+    // Si tu ConfigModal guarda por su cuenta (con axios dentro), podés dejar vacío.
   };
 
   const sendConfirmationEmail = async (ticket: AdminTicket): Promise<void> => {
@@ -720,8 +611,7 @@ export default function AdminDashboard() {
       );
     if (fStatus !== "all") arr = arr.filter((t) => t.paymentStatus === fStatus);
     if (fType !== "all") arr = arr.filter((t) => t.ticketType === fType);
-    if (fGender !== "all")
-      arr = arr.filter((t) => (t.gender || "") === fGender);
+    if (fGender !== "all") arr = arr.filter((t) => (t.gender || "") === fGender);
     if (fPay !== "all") arr = arr.filter((t) => t.paymentMethod === fPay);
     arr.sort((a, b) => {
       if (orderBy === "purchaseDate") {
@@ -736,10 +626,14 @@ export default function AdminDashboard() {
     return arr;
   }, [tickets, q, fStatus, fType, fGender, fPay, orderBy, order]);
 
-  const sumVipRemainingTables = useMemo(
-    () => (cfg?.vipTables || []).reduce((a, v) => a + (v.remaining || 0), 0),
-    [cfg]
-  );
+  const sumVipRemainingTables = useMemo(() => {
+  if (!cfg?.vipTables) return 0;
+
+  return cfg.vipTables.reduce((acc, t) => {
+    const remaining = Math.max(0, (t.limit ?? 0) - (t.sold ?? 0));
+    return acc + remaining;
+  }, 0);
+}, [cfg]);
 
   /* =========================
      Render
@@ -860,8 +754,8 @@ export default function AdminDashboard() {
         <FiltersBar
           q={q}
           setQ={setQ}
-          fStatus={fStatus}
-          setFStatus={setFStatus}
+          fStatus={fStatus as any}          // ✅ compatible con FiltersBar(Status)
+          setFStatus={setFStatus as any}    // ✅ compatible con FiltersBar
           fType={fType}
           setFType={setFType}
           fGender={fGender}
@@ -891,6 +785,8 @@ export default function AdminDashboard() {
               <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
                 <Button
                   onClick={async () => {
+                    // aseguramos tener eventId antes de abrir
+                    if (!activeEventId) await ensureEventId();
                     await Promise.all([fetchConfig(), fetchDiscounts()]);
                     setShowAddGeneral(true);
                   }}
@@ -900,7 +796,9 @@ export default function AdminDashboard() {
                 </Button>
                 <Button
                   onClick={async () => {
-                    await Promise.all([fetchConfig(), fetchDiscounts()]);
+                    // aseguramos eventId
+                    if (!activeEventId) await ensureEventId();
+                    await Promise.all([fetchConfig(), fetchDiscounts(), fetchVipData()]);
                     setShowAddVip(true);
                   }}
                   className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-sm w-full sm:w-auto"
@@ -912,10 +810,12 @@ export default function AdminDashboard() {
           </CardHeader>
 
           <CardContent className="p-0">
-            {loading ? (
+            {loading || loadingEvent ? (
               <div className="text-center py-16">
                 <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4" />
-                <p className="text-muted-foreground">Cargando entradas...</p>
+                <p className="text-muted-foreground">
+                  Cargando entradas{loadingEvent ? " y evento..." : "..."}
+                </p>
               </div>
             ) : filteredSortedTickets.length === 0 ? (
               <div className="text-center py-16">
@@ -945,6 +845,9 @@ export default function AdminDashboard() {
                       </th>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Mesa
+                      </th>
+                      <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
+                        Ubicación
                       </th>
                       <th className="text-left p-4 text-xs sm:text-sm font-semibold text-muted-foreground">
                         Género
@@ -983,6 +886,8 @@ export default function AdminDashboard() {
                             gender: (ticket.gender as any) || "hombre",
                             paymentMethod: ticket.paymentMethod,
                             totalPrice: ticket.totalPrice,
+                            vipLocationId: ticket.vipLocationId ?? undefined,
+                            vipTableNumber: ticket.vipTableNumber ?? undefined,
                           });
                           setShowEditModal(true);
                         }}
@@ -993,8 +898,9 @@ export default function AdminDashboard() {
                         }}
                         onSendEmail={sendConfirmationEmail}
                         sending={sendingId === t.id}
-                        vipRanges={cfg?.vipTables || []}
-                        statusFilter={fStatus}
+                        // si tu fila usa rangos, podés mapear desde cfg.vipConfigs
+                        vipRanges={(cfg?.vipConfigs as any) || []}
+                        statusFilter={fStatus as any}
                       />
                     ))}
                   </tbody>
@@ -1006,31 +912,103 @@ export default function AdminDashboard() {
       </main>
 
       {/* Modales */}
-      <AddGeneralModal
-        open={showAddGeneral}
-        onOpenChange={setShowAddGeneral}
-        cfg={cfg}
-        discounts={discounts}
-        form={formGeneral}
-        setForm={setFormGeneral}
-        onSubmit={addGeneral}
-        isMobile={isMobile}
-      />
-
+      <AddVipModal
+  open={showAddVip}
+  onOpenChange={setShowAddVip}
+  form={formVip}
+  setForm={setFormVip} // ✅ usa directamente el setter del useState
+  configs={vipConfigs}
+  locations={vipLocations}
+  cfg={cfg}
+  onSubmit={async (e) => { /* ... */ }}
+  isMobile={isMobile}
+/>
       <ExportModal open={showExportModal} onOpenChange={setShowExportModal} />
+
+      <AddGeneralModal
+  open={showAddGeneral}
+  onOpenChange={setShowAddGeneral}
+  cfg={cfg}
+  discounts={discounts}
+  form={formGeneral}
+  setForm={setFormGeneral}
+  onSubmit={addGeneral}
+  isMobile={isMobile}
+/>
 
       <AddVipModal
         open={showAddVip}
         onOpenChange={setShowAddVip}
         form={formVip}
-        setForm={setFormVip}
+       setForm={setFormVip}
+        configs={vipConfigs}
+        locations={vipLocations}
         cfg={cfg}
-        selectedTable={selectedTable}
-        onPickTable={async () => {
-          await fetchVipAvailability(formVip.tableLocation);
-          setShowTablesModal(true);
+        onSubmit={async (e) => {
+          e.preventDefault();
+
+          const eventId = activeEventId ?? (await ensureEventId());
+          if (!eventId) {
+            alert("No se encontró el evento activo. Reintentá en unos segundos.");
+            return;
+          }
+
+          const vipTableNumber = formVip.vipTableNumber;
+
+          if (!formVip.vipLocationId) {
+            alert("Seleccioná una ubicación VIP");
+            return;
+          }
+
+          if (!vipTableNumber) {
+            alert("Seleccioná una mesa");
+            return;
+          }
+
+          try {
+            const payload = {
+              ticketType: "vip" as const,
+              eventId, // ✅ siempre presente
+              customerName: formVip.customerName.trim(),
+              customerEmail: formVip.customerEmail.trim(),
+              customerPhone: formVip.customerPhone.trim(),
+              customerDni: formVip.customerDni.trim(),
+              paymentMethod: formVip.paymentMethod,
+              vipLocationId: formVip.vipLocationId,
+              vipTableNumber: formVip.vipTableNumber,
+              totalPrice: 0,
+              forceTotalPrice: true,
+            };
+
+            const response = await fetch("/api/admin/tickets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+              const err = await response.json().catch(() => ({}));
+              throw new Error(err?.error || "No se pudo crear la entrada VIP");
+            }
+
+            alert("🎉 Entrada VIP creada correctamente.");
+
+            setFormVip({
+              customerName: "",
+              customerEmail: "",
+              customerPhone: "",
+              customerDni: "",
+              paymentMethod: "efectivo",
+              vipLocationId: "",
+              vipTableNumber: null,
+            });
+
+            setShowAddVip(false);
+            await Promise.all([fetchTickets(), fetchConfig()]);
+          } catch (error: any) {
+            alert(error.message || "Ocurrió un error creando la entrada VIP");
+          }
         }}
-        onSubmit={addVip}
         isMobile={isMobile}
       />
 
@@ -1042,9 +1020,11 @@ export default function AdminDashboard() {
         availableNumbers={availableNumbers}
         selectedTable={selectedTable}
         setSelectedTable={setSelectedTable}
-        cfg={cfg}
-        currentLocation={formVip.tableLocation}
-        onRefresh={() => fetchVipAvailability(formVip.tableLocation)}
+        cfg={cfg as any}
+        currentLocation={formVip.vipLocationId as any}
+        onRefresh={() => {
+          if (formVip.vipLocationId) fetchVipAvailability(formVip.vipLocationId);
+        }}
         isMobile={isMobile}
       />
 
@@ -1061,6 +1041,7 @@ export default function AdminDashboard() {
         open={showConfigModal}
         onOpenChange={setShowConfigModal}
         cfg={cfg}
+        // ✅ props obligatorias del modal
         configForm={configForm}
         setConfigForm={setConfigForm}
         vipTablesForm={vipTablesForm}

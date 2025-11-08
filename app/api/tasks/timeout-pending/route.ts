@@ -3,136 +3,174 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { PaymentStatus as PS, TicketType as TT } from "@prisma/client";
+import {
+  PaymentStatus as PS,
+  TicketType as TT,
+  VipTableStatus,
+} from "@prisma/client";
 
+// ============================================================
+// CONFIGURACIÓN
+// ============================================================
 const ELIGIBLE: PS[] = [PS.pending, PS.in_process, PS.failed_preference];
-// Ventana de timeout (minutos). Default: 5
 const TIMEOUT_MINUTES = Number(process.env.PENDING_TIMEOUT_MINUTES ?? "5");
-// Límite por corrida para evitar transacciones gigantes
 const BATCH_LIMIT = Number(process.env.TIMEOUT_BATCH_LIMIT ?? "1000");
+const IS_DEV = process.env.NODE_ENV === "development";
 
-async function archiveOne(ticketId: string) {
+// ============================================================
+// FUNCIÓN AUXILIAR → Archiva un ticket vencido o pendiente
+// ============================================================
+async function archiveTicket(ticketId: string) {
   return prisma.$transaction(async (tx) => {
-    const t = await tx.ticket.findUnique({ where: { id: ticketId } });
-    if (!t) return { skipped: true, reason: "not_found" as const };
+    const ticket = await tx.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        vipTable: true,
+        vipTableConfig: {
+          include: { vipLocation: true },
+        },
+      },
+    });
 
-    if (!ELIGIBLE.includes(t.paymentStatus as PS)) {
-      return { skipped: true, reason: "status_not_eligible" as const };
+    if (!ticket) return { skipped: true, reason: "not_found" };
+    if (!ELIGIBLE.includes(ticket.paymentStatus)) {
+      return { skipped: true, reason: "status_not_eligible" };
     }
 
-    // Crear registro histórico (snapshot completo)
+    // 🔹 Crear snapshot histórico
     await tx.ticketArchive.create({
       data: {
-        archivedFromId: t.id,
-        eventId: t.eventId,
+        archivedFromId: ticket.id,
+        eventId: ticket.eventId,
         archivedAt: new Date(),
         archivedBy: "system-cron",
         archiveReason: "payment_timeout",
 
-        ticketType: t.ticketType,
-        gender: t.gender,
-        quantity: t.quantity,
+        ticketType: ticket.ticketType,
+        gender: ticket.gender,
+        quantity: ticket.quantity,
 
-        vipLocation: t.vipLocation,
-        vipTables: t.vipTables,
-        capacityPerTable: t.capacityPerTable,
-        tableNumber: t.tableNumber,
+        vipTableConfigId: ticket.vipTableConfigId ?? null,
+        vipTableId: ticket.vipTableId ?? null,
 
-        totalPrice: t.totalPrice,
+        totalPrice: ticket.totalPrice,
 
-        customerName: t.customerName,
-        customerEmail: t.customerEmail,
-        customerPhone: t.customerPhone,
-        customerDni: t.customerDni,
+        customerName: ticket.customerName,
+        customerEmail: ticket.customerEmail,
+        customerPhone: ticket.customerPhone,
+        customerDni: ticket.customerDni,
 
-        paymentId: t.paymentId,
-        paymentStatus: t.paymentStatus, // 👈 snapshot real del estado
-        paymentMethod: t.paymentMethod,
+        paymentId: ticket.paymentId,
+        paymentStatus: ticket.paymentStatus,
+        paymentMethod: ticket.paymentMethod,
 
-        qrCode: t.qrCode,
-        validationCode: t.validationCode,
-        validated: t.validated,
-        validatedAt: t.validatedAt,
+        qrCode: ticket.qrCode,
+        validationCode: ticket.validationCode,
+        validated: ticket.validated,
+        validatedAt: ticket.validatedAt,
 
-        purchaseDate: t.purchaseDate,
-        eventDate: t.eventDate,
-        expiresAt: t.expiresAt,
+        purchaseDate: ticket.purchaseDate,
+        eventDate: ticket.eventDate,
+        expiresAt: ticket.expiresAt,
 
-        ticketConfigId: t.ticketConfigId,
-        emailSentAt: t.emailSentAt,
+        ticketConfigId: ticket.ticketConfigId,
+        emailSentAt: ticket.emailSentAt,
 
-        createdAt: t.createdAt,
-        updatedAt: t.updatedAt,
+        createdAt: ticket.createdAt,
+        updatedAt: ticket.updatedAt,
       },
     });
 
-    // Safety: si fuera VIP y approved (no debería llegar por el filtro), reponer stock
-    if (
-      t.ticketType === TT.vip &&
-      t.paymentStatus === PS.approved &&
-      t.vipLocation &&
-      t.vipTables
-    ) {
+    // 🔹 Si era VIP → liberar mesa y actualizar stock
+    if (ticket.ticketType === TT.vip && ticket.vipTableConfigId) {
       const cfg = await tx.vipTableConfig.findUnique({
-        where: {
-          eventId_location: { eventId: t.eventId, location: t.vipLocation },
-        },
+        where: { id: ticket.vipTableConfigId },
         select: { id: true, soldCount: true },
       });
+
       if (cfg) {
         await tx.vipTableConfig.update({
           where: { id: cfg.id },
-          data: { soldCount: Math.max(0, cfg.soldCount - t.vipTables) },
+          data: { soldCount: Math.max(0, (cfg.soldCount ?? 0) - 1) },
+        });
+      }
+
+      if (ticket.vipTableId) {
+        await tx.vipTable.update({
+          where: { id: ticket.vipTableId },
+          data: { status: VipTableStatus.available },
         });
       }
     }
 
-    // Borrar del vivo
-    await tx.ticket.delete({ where: { id: t.id } });
-    return { archived: true as const };
+    // 🔹 Eliminar ticket original
+    await tx.ticket.delete({ where: { id: ticket.id } });
+
+    return { archived: true };
   });
 }
 
+// ============================================================
+// CONTROLADOR PRINCIPAL
+// ============================================================
 async function handle(req: NextRequest) {
-  // Auth simple por cabecera (opcional)
-  const key = req.headers.get("x-cron-key");
-  if (process.env.CRON_SECRET && key !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    // 🔐 Autenticación del cron
+    const key = req.headers.get("x-cron-key");
+    const expectedKey = process.env.CRON_SECRET?.trim();
+
+    // ⚙️ Si estás en desarrollo, se permite ejecutar sin clave
+    if (!IS_DEV) {
+      if (expectedKey && key !== expectedKey) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    } else {
+      console.log("⚠️  Cron ejecutado en modo desarrollo (sin validar clave)");
+    }
+
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - TIMEOUT_MINUTES * 60_000);
+
+    // 🔎 Buscar tickets pendientes o vencidos
+    const pendingTickets = await prisma.ticket.findMany({
+      where: {
+        paymentStatus: { in: ELIGIBLE },
+        OR: [{ expiresAt: { lte: now } }, { purchaseDate: { lt: cutoff } }],
+      },
+      select: { id: true },
+      take: BATCH_LIMIT,
+    });
+
+    let archivedCount = 0;
+    for (const t of pendingTickets) {
+      try {
+        const result = await archiveTicket(t.id);
+        if (result.archived) archivedCount++;
+      } catch (error) {
+        console.error(`❌ Error archivando ticket ${t.id}:`, error);
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      checked: pendingTickets.length,
+      archived: archivedCount,
+      timeoutMinutes: TIMEOUT_MINUTES,
+      timestamp: now,
+      devMode: IS_DEV,
+    });
+  } catch (error) {
+    console.error("[timeout-pending][ERROR]", error);
+    return NextResponse.json(
+      { ok: false, error: "Error interno del servidor" },
+      { status: 500 }
+    );
   }
-
-  const now = new Date();
-  const cutoff = new Date(now.getTime() - TIMEOUT_MINUTES * 60_000);
-
-  // Elegibles por expiración o por antigüedad
-  const items = await prisma.ticket.findMany({
-    where: {
-      paymentStatus: { in: ELIGIBLE },
-      OR: [
-        { expiresAt: { lte: now } }, // si tu flujo setea expiresAt
-        { purchaseDate: { lt: cutoff } }, // fallback por antigüedad
-      ],
-    },
-    select: { id: true },
-    take: BATCH_LIMIT,
-  });
-
-  let archived = 0;
-  for (const it of items) {
-    const r = await archiveOne(it.id);
-    if (r.archived) archived++;
-  }
-
-  return NextResponse.json({
-    ok: true,
-    checked: items.length,
-    archived,
-    now,
-    cutoff,
-    timeoutMinutes: TIMEOUT_MINUTES,
-  });
 }
 
-// Soporta GET o POST para correrlo desde cron o manualmente
+// ============================================================
+// ENDPOINTS (GET y POST)
+// ============================================================
 export async function GET(req: NextRequest) {
   return handle(req);
 }

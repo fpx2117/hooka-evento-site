@@ -1,40 +1,26 @@
-// app/api/admin/tickets/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+// ========================================================
+// Tickets Admin API — Versión Final 2025 ✅ (Total VIP corregido)
+// ========================================================
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { jwtVerify } from "jose";
 import {
-  Prisma,
-  PaymentMethod as PM,
   PaymentStatus as PS,
+  PaymentMethod as PM,
   TicketType as TT,
-  Gender as G,
-  TableLocation as TL,
   ArchiveReason as AR,
+  Prisma,
 } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
-import {
-  ensureSixDigitCode,
-  normalizeSixDigitCode,
-} from "@/lib/validation-code";
+import { jwtVerify } from "jose";
+import { ensureSixDigitCode } from "@/lib/validation-code";
 
-// 🔹 Numeración global VIP por evento
-import { getVipSequentialRanges } from "@/lib/vip-tables";
-
-/* ========================= Config ========================= */
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || "your-secret-key-change-in-production"
+  process.env.JWT_SECRET || "your-secret-key"
 );
 
-/** Minutos que una reserva `in_process` bloquea la mesa */
-const LOCK_WINDOW_MINUTES = Number(process.env.VIP_LOCK_WINDOW_MINUTES ?? 20);
-
-/* ========================= Tipos ========================= */
-type DB = Prisma.TransactionClient | PrismaClient;
-
-/* ========================= Auth ========================= */
+/* ============================================================
+   Helpers
+============================================================ */
 async function verifyAuth(request: NextRequest) {
   const token = request.cookies.get("admin-token")?.value;
   if (!token) return null;
@@ -46,1014 +32,370 @@ async function verifyAuth(request: NextRequest) {
   }
 }
 
-/* ========================= Helpers genéricos ========================= */
-const normString = (v: unknown): string | undefined => {
-  if (v == null) return undefined;
-  const s = String(v).trim();
-  return s.length ? s : undefined;
-};
-const normEmail = (v: unknown): string | undefined => {
-  const s = normString(v);
-  if (!s) return undefined;
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s.toLowerCase() : undefined;
-};
-const normNumber = (v: unknown): number | undefined => {
-  if (v == null || v === "") return undefined;
-  const n = Number(v);
-  return Number.isNaN(n) ? undefined : n;
-};
-const extractCustomerDni = (obj: any): string | undefined =>
-  normString(obj?.customerDni) ??
-  normString(obj?.customerDNI) ??
-  normString(obj?.customer_dni) ??
-  (obj?.dni !== undefined ? normString(obj?.dni) : undefined);
+const normStr = (v: any) =>
+  typeof v === "string" ? v.trim() || undefined : undefined;
+const normNum = (v: any) =>
+  v === undefined || v === null || v === "" ? undefined : Number(v);
 
-const generateQr = (prefix = "TICKET") =>
-  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-
-const minutesAgo = (d: Date, m: number) => new Date(d.getTime() - m * 60_000);
-
-/* ========================= Parsers dominio ========================= */
-const parsePaymentMethod = (v?: string): PM | undefined => {
-  const s = (v || "").toLowerCase();
-  if (s === "mercadopago") return PM.mercadopago;
-  if (s === "transferencia") return PM.transferencia;
-  if (s === "efectivo") return PM.efectivo;
-  return undefined;
-};
-const parsePaymentStatus = (v?: string): PS | undefined => {
-  const s = (v || "").toLowerCase();
-  switch (s) {
-    case "pending":
-      return PS.pending;
-    case "approved":
-      return PS.approved;
-    case "rejected":
-      return PS.rejected;
-    case "in_process":
-      return PS.in_process;
-    case "failed_preference":
-      return PS.failed_preference;
-    case "cancelled":
-      return PS.cancelled;
-    case "refunded":
-      return PS.refunded;
-    case "charged_back":
-      return PS.charged_back;
-    default:
-      return undefined;
-  }
-};
-const parseGender = (v?: string): G | undefined => {
-  const s = (v || "").toLowerCase();
-  if (s === "hombre") return G.hombre;
-  if (s === "mujer") return G.mujer;
-  return undefined;
-};
-const parseLocation = (v?: string): TL | undefined => {
-  const s = (v || "").toLowerCase();
-  if (s === "dj") return TL.dj;
-  if (s === "piscina") return TL.piscina;
-  if (s === "general") return TL.general;
-  return undefined;
-};
-
-/* ========================= Dominio / Evento ========================= */
-async function getActiveEventBasic() {
+/* ============================================================
+   Obtener evento activo
+============================================================ */
+async function getActiveEvent() {
   return prisma.event.findFirst({
     where: { isActive: true },
     select: { id: true, date: true },
   });
 }
 
-/* ========================= Precios ========================= */
-async function priceForGeneral(
-  eventId: string,
-  gender: G,
-  qty: number
-): Promise<{ ticketConfigId: string; total: Prisma.Decimal }> {
-  const cfg = await prisma.ticketConfig.findFirst({
-    where: { eventId, ticketType: "general", gender },
-    select: { id: true, price: true },
-  });
-  if (!cfg) throw new Error("price_cfg_not_found");
-  const unit = new Prisma.Decimal(cfg.price);
-  return { ticketConfigId: cfg.id, total: unit.mul(qty) };
-}
-
-/** Precio y disponibilidad VIP calculados desde Tickets (approved + in_process dentro de ventana) */
-async function priceForVip(
-  eventId: string,
-  location: TL,
-  tables: number
-): Promise<{
-  vipConfigId: string;
-  capacityPerTable: number;
-  total: Prisma.Decimal;
-  remainingTables: number;
-  stockLimit: number;
-}> {
-  const cfg = await prisma.vipTableConfig.findUnique({
-    where: { eventId_location: { eventId, location } },
-    select: {
-      id: true,
-      price: true,
-      capacityPerTable: true,
-      stockLimit: true,
-    },
-  });
-  if (!cfg) throw new Error("vip_cfg_not_found");
-
-  const now = new Date();
-  const taken = await prisma.ticket.count({
-    where: {
-      eventId,
-      ticketType: TT.vip,
-      vipLocation: location,
-      tableNumber: { not: null },
-      OR: [
-        { paymentStatus: PS.approved },
-        {
-          paymentStatus: PS.in_process,
-          updatedAt: { gte: minutesAgo(now, LOCK_WINDOW_MINUTES) },
-        },
-      ],
-    },
-  });
-
-  const remaining = Math.max(0, cfg.stockLimit - taken);
-  const unit = new Prisma.Decimal(cfg.price);
-  return {
-    vipConfigId: cfg.id,
-    capacityPerTable: Number(cfg.capacityPerTable || 10),
-    total: unit.mul(tables),
-    remainingTables: remaining,
-    stockLimit: cfg.stockLimit,
-  };
-}
-
-/* ========================= Stock VIP ========================= */
-async function adjustVipSoldCount(
-  tx: DB,
-  eventId: string,
-  location: TL,
-  delta: number
-) {
-  if (!delta) return;
-  const cfg = await tx.vipTableConfig.findUnique({
-    where: { eventId_location: { eventId, location } },
-    select: { id: true, stockLimit: true, soldCount: true },
-  });
-  if (!cfg) throw new Error("vip_cfg_not_found");
-
-  const next = cfg.soldCount + delta;
-  if (next < 0) throw new Error("vip_sold_negative");
-  if (next > cfg.stockLimit) throw new Error("vip_sold_exceeds_stock");
-
-  await tx.vipTableConfig.update({
-    where: { id: cfg.id },
-    data: { soldCount: next },
-  });
-}
-
-/** Normaliza número recibido (global o local) → devuelve local + stockLimit */
-async function resolveLocalTableNumber(params: {
-  eventId: string;
-  location: TL;
-  inputNumber: number | undefined;
-}): Promise<{ localNumber: number; stockLimit: number }> {
-  const { eventId, location, inputNumber } = params;
-
-  if (
-    inputNumber === undefined ||
-    inputNumber === null ||
-    !Number.isFinite(inputNumber) ||
-    !Number.isInteger(inputNumber)
-  ) {
-    throw new Error("table_required");
-  }
-
-  const cfg = await prisma.vipTableConfig.findUnique({
-    where: { eventId_location: { eventId, location } },
-    select: { stockLimit: true },
-  });
-  if (!cfg) throw new Error("vip_cfg_not_found");
-  const stockLimit = cfg.stockLimit;
-
-  const { ranges } = await getVipSequentialRanges({ prisma, eventId });
-  const r = ranges.find((x) => x.location === location);
-  if (r && inputNumber >= r.startNumber && inputNumber <= r.endNumber) {
-    const localNumber = inputNumber - r.offset; // global → local
-    if (localNumber >= 1 && localNumber <= stockLimit) {
-      return { localNumber, stockLimit };
-    }
-  }
-
-  if (inputNumber >= 1 && inputNumber <= stockLimit) {
-    return { localNumber: inputNumber, stockLimit };
-  }
-
-  throw new Error("table_out_of_range");
-}
-
-/** Valida que la mesa exista (1..stockLimit) y no esté tomada */
-async function assertTableNumberFreeAndValid(opts: {
-  eventId: string;
-  location: TL;
-  tableNumber: number | undefined;
-  stockLimit: number;
-  excludeTicketId?: string;
-}) {
-  const { eventId, location, tableNumber, stockLimit, excludeTicketId } = opts;
-
-  if (
-    tableNumber === undefined ||
-    tableNumber === null ||
-    !Number.isFinite(tableNumber) ||
-    !Number.isInteger(tableNumber)
-  ) {
-    throw new Error("table_required");
-  }
-  if (tableNumber < 1 || tableNumber > stockLimit) {
-    throw new Error("table_out_of_range");
-  }
-
-  const now = new Date();
-  const taken = await prisma.ticket.findFirst({
-    where: {
-      eventId,
-      ticketType: TT.vip,
-      vipLocation: location,
-      tableNumber,
-      OR: [
-        { paymentStatus: PS.approved },
-        {
-          paymentStatus: PS.in_process,
-          updatedAt: { gte: minutesAgo(now, LOCK_WINDOW_MINUTES) },
-        },
-      ],
-      ...(excludeTicketId ? { id: { not: excludeTicketId } } : {}),
-    },
-    select: { id: true },
-  });
-
-  if (taken) throw new Error("table_taken");
-}
-
-/* ========================= Archivado ========================= */
-async function copyTicketToArchive(
-  tx: DB,
-  ticketId: string,
-  opts: { reason: AR; archivedBy?: string; notes?: string }
-) {
-  const t = await tx.ticket.findUnique({ where: { id: ticketId } });
-  if (!t) throw new Error("ticket_not_found");
-
-  await tx.ticketArchive.create({
-    data: {
-      archivedFromId: t.id,
-      eventId: t.eventId,
-      ticketType: t.ticketType,
-      gender: t.gender,
-      quantity: t.quantity,
-      vipLocation: t.vipLocation,
-      vipTables: t.vipTables,
-      capacityPerTable: t.capacityPerTable,
-      tableNumber: t.tableNumber,
-      totalPrice: t.totalPrice,
-      customerName: t.customerName,
-      customerEmail: t.customerEmail,
-      customerPhone: t.customerPhone,
-      customerDni: t.customerDni,
-      paymentId: t.paymentId,
-      paymentStatus: t.paymentStatus,
-      paymentMethod: t.paymentMethod,
-      qrCode: t.qrCode,
-      validationCode: t.validationCode,
-      validated: t.validated,
-      validatedAt: t.validatedAt,
-      purchaseDate: t.purchaseDate,
-      eventDate: t.eventDate,
-      expiresAt: t.expiresAt,
-      ticketConfigId: t.ticketConfigId,
-      emailSentAt: t.emailSentAt,
-      archiveReason: opts.reason,
-      archivedBy: opts.archivedBy,
-      archiveNotes: opts.notes,
-    },
-  });
-
-  if (
-    t.ticketType === TT.vip &&
-    t.paymentStatus === PS.approved &&
-    t.vipLocation &&
-    t.vipTables
-  ) {
-    await adjustVipSoldCount(tx, t.eventId, t.vipLocation, -t.vipTables);
-  }
-
-  await tx.ticket.delete({ where: { id: t.id } });
-}
-async function archiveTicket(params: {
-  ticketId: string;
-  reason: AR;
-  archivedBy?: string;
-  notes?: string;
-}) {
-  return prisma.$transaction(async (tx) => {
-    await copyTicketToArchive(tx, params.ticketId, {
-      reason: params.reason,
-      archivedBy: params.archivedBy,
-      notes: params.notes,
-    });
-  });
-}
-
-/* ========================= Handlers ========================= */
+/* ============================================================
+   GET — Listar tickets con datos completos de mesa VIP
+============================================================ */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  try {
-    const { searchParams } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
+  const q = normStr(searchParams.get("q"));
 
-    const statusEnum = parsePaymentStatus(
-      searchParams.get("status") ?? undefined
-    );
-    const q = normString(searchParams.get("q"));
-    const typeFilter = normString(searchParams.get("type")); // "general" | "vip" | undefined
+  const where: Prisma.TicketWhereInput = q
+    ? {
+        OR: [
+          { customerName: { contains: q, mode: "insensitive" } },
+          { customerEmail: { contains: q, mode: "insensitive" } },
+          { customerDni: { contains: q, mode: "insensitive" } },
+        ],
+      }
+    : {};
 
-    const orderByField =
-      (searchParams.get("orderBy") as "purchaseDate" | "totalPrice" | null) ||
-      "purchaseDate";
-    const order: "asc" | "desc" =
-      (searchParams.get("order") as any) === "asc" ? "asc" : "desc";
+  const tickets = await prisma.ticket.findMany({
+    where,
+    include: {
+      event: { select: { id: true, name: true, date: true } },
+      vipLocation: { select: { id: true, name: true} },
+      vipTable: { select: { id: true, tableNumber: true, status: true, price: true, vipTableConfigId: true } },
+      vipTableConfig: { select: { id: true, capacityPerTable: true, price: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
 
-    const page = Math.max(1, Number(searchParams.get("page") || "1"));
-    const pageSize = Math.min(
-      200,
-      Math.max(1, Number(searchParams.get("pageSize") || "50"))
-    );
-    const skip = (page - 1) * pageSize;
+  const result = tickets.map((t) => ({
+    ...t,
+    vipLocationName: t.vipLocation?.name ?? null,
+    vipTableNumber: t.vipTable?.tableNumber ?? null,
+  }));
 
-    const where: Prisma.TicketWhereInput = {};
-    if (statusEnum) where.paymentStatus = statusEnum;
-    if (typeFilter === "general") where.ticketType = TT.general;
-    if (typeFilter === "vip") where.ticketType = TT.vip;
-    if (q) {
-      where.OR = [
-        { customerName: { contains: q, mode: "insensitive" } },
-        { customerEmail: { contains: q, mode: "insensitive" } },
-        { customerDni: { contains: q, mode: "insensitive" } },
-      ];
-    }
-
-    const [total, tickets] = await Promise.all([
-      prisma.ticket.count({ where }),
-      prisma.ticket.findMany({
-        where,
-        orderBy: { [orderByField]: order },
-        skip,
-        take: pageSize,
-        select: {
-          id: true,
-          eventId: true,
-          ticketType: true,
-          gender: true,
-          quantity: true,
-          // VIP
-          vipLocation: true,
-          vipTables: true,
-          capacityPerTable: true,
-          tableNumber: true,
-
-          totalPrice: true,
-          customerName: true,
-          customerEmail: true,
-          customerPhone: true,
-          customerDni: true,
-          paymentMethod: true,
-          paymentStatus: true,
-          qrCode: true,
-          validationCode: true,
-          validated: true,
-          purchaseDate: true,
-        },
-      }),
-    ]);
-
-    // 🔹 Calcular offsets por CADA eventId presente (robusto si hay históricos)
-    const eventIds = Array.from(new Set(tickets.map((t) => t.eventId)));
-    const offsetMaps = new Map<string, Map<TL, number>>(); // eventId -> (location -> offset)
-
-    for (const evId of eventIds) {
-      const { ranges } = await getVipSequentialRanges({
-        prisma,
-        eventId: evId,
-      });
-      const map = new Map<TL, number>();
-      for (const r of ranges) map.set(r.location as TL, r.offset);
-      offsetMaps.set(evId, map);
-    }
-
-    const normalized = tickets.map((t) => {
-      const location = t.vipLocation ?? null;
-      const hasArray =
-        Array.isArray((t as any).tableNumbers) &&
-        (t as any).tableNumbers.length > 0;
-
-      // local(es) desde db (guardando null si no hay)
-      const locals: number[] = hasArray
-        ? (t as any).tableNumbers.map(Number).filter(Number.isFinite)
-        : Number.isFinite(Number(t.tableNumber))
-          ? [Number(t.tableNumber)]
-          : [];
-
-      // global(es) = offset(eventId, location) + local
-      const offset =
-        location && offsetMaps.get(t.eventId)
-          ? (offsetMaps.get(t.eventId)!.get(location as TL) ?? 0)
-          : 0;
-      const globals = locals.map((n) => offset + n);
-
-      return {
-        ...t,
-        tableLocation: location,
-        tableNumberLocal:
-          locals.length === 1 ? locals[0] : (null as number | null),
-        tableNumbersLocal:
-          locals.length > 1 ? locals : (null as number[] | null),
-        tableNumberGlobal:
-          globals.length === 1 ? globals[0] : (null as number | null),
-        tableNumbersGlobal:
-          globals.length > 1 ? globals : (null as number[] | null),
-      };
-    });
-
-    return NextResponse.json({
-      ok: true,
-      pagination: {
-        page,
-        pageSize,
-        total,
-        totalPages: Math.ceil(total / pageSize),
-      },
-      tickets: normalized,
-    });
-  } catch (error) {
-    console.error("[tickets][GET] Error:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch tickets" },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ ok: true, tickets: result });
 }
 
+/* ============================================================
+   POST — Crear ticket (VIP o general)
+============================================================ */
 export async function POST(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = (await request.json().catch(() => ({}))) as any;
+    const body = await request.json();
+    const event = await getActiveEvent();
+    if (!event)
+      return NextResponse.json({ error: "No hay evento activo" }, { status: 400 });
 
-    // Evento activo
-    const event = await getActiveEventBasic();
-    if (!event) {
+    const customerName = normStr(body.customerName);
+    const customerEmail = normStr(body.customerEmail);
+    const customerPhone = normStr(body.customerPhone);
+    const customerDni = normStr(body.customerDni);
+    if (!customerName || !customerEmail || !customerPhone || !customerDni)
       return NextResponse.json(
-        { error: "No hay evento activo" },
-        { status: 400 }
-      );
-    }
-
-    // Cliente
-    const customerName = normString(body.customerName);
-    const customerEmail = normEmail(body.customerEmail);
-    const customerPhone = normString(body.customerPhone);
-    const customerDni = extractCustomerDni(body);
-    if (!customerName)
-      return NextResponse.json(
-        { error: "customerName requerido" },
-        { status: 400 }
-      );
-    if (!customerEmail)
-      return NextResponse.json(
-        { error: "customerEmail inválido" },
-        { status: 400 }
-      );
-    if (!customerPhone)
-      return NextResponse.json(
-        { error: "customerPhone requerido" },
-        { status: 400 }
-      );
-    if (!customerDni)
-      return NextResponse.json(
-        { error: "customerDni requerido" },
+        { error: "Faltan campos del cliente" },
         { status: 400 }
       );
 
-    // Pago
-    const paymentMethod =
-      parsePaymentMethod(normString(body.paymentMethod)) ?? PM.mercadopago;
-    const paymentStatus =
-      parsePaymentStatus(normString(body.paymentStatus)) ?? PS.approved;
+    const ticketType = (normStr(body.ticketType) as TT) ?? TT.general;
+    const paymentStatus = (normStr(body.paymentStatus) as PS) ?? PS.pending;
+    const vipLocationId = normStr(body.vipLocationId);
+    const vipTableIdBody = normStr(body.vipTableId);
 
-    // Tipo
-    const ttRaw = (normString(body.ticketType) ||
-      normString(body.type) ||
-      "general")!
-      .toLowerCase()
-      .trim();
-    const isVip = ttRaw === "vip" || ttRaw === "vip-table";
+    let vipTableId: string | undefined;
+    let vipTableConfigId: string | undefined;
 
-    // ---------- GENERAL ----------
-    if (!isVip) {
-      const genderEnum = parseGender(normString(body.gender));
-      if (!genderEnum)
-        return NextResponse.json(
-          { error: "gender inválido (hombre|mujer)" },
-          { status: 400 }
-        );
+    // ✅ Determinar precio correcto
+    let totalPrice: Prisma.Decimal = new Prisma.Decimal(0);
 
-      const quantity = Math.max(1, normNumber(body.quantity) ?? 1);
-
-      const overrideTotal = normNumber(body.totalPrice);
-      const forceOverride =
-        body.forceTotalPrice === true || body.forceTotalPrice === "true";
-
-      let totalPrice: Prisma.Decimal;
-      let ticketConfigId: string | undefined;
-
-      if (forceOverride && overrideTotal !== undefined) {
-        if (overrideTotal < 0)
+    if (ticketType === TT.vip && vipLocationId) {
+      // 1) Si el cliente seleccionó una mesa, intentar usar su precio
+      if (vipTableIdBody) {
+        const mesa = await prisma.vipTable.findUnique({
+          where: { id: vipTableIdBody },
+          select: { id: true, price: true, vipTableConfigId: true },
+        });
+        if (!mesa) {
           return NextResponse.json(
-            { error: "totalPrice no puede ser negativo" },
+            { error: "La mesa seleccionada no existe" },
             { status: 400 }
           );
-        totalPrice = new Prisma.Decimal(overrideTotal);
-        const cfg = await prisma.ticketConfig.findFirst({
-          where: {
-            eventId: event.id,
-            ticketType: "general",
-            gender: genderEnum,
-          },
-          select: { id: true },
+        }
+
+        if (mesa.price !== null) {
+          totalPrice = new Prisma.Decimal(Number(mesa.price));
+        } else if (mesa.vipTableConfigId) {
+          const cfg = await prisma.vipTableConfig.findUnique({
+            where: { id: mesa.vipTableConfigId },
+            select: { id: true, price: true },
+          });
+          if (cfg?.price != null) {
+            totalPrice = new Prisma.Decimal(Number(cfg.price));
+            vipTableConfigId = cfg.id;
+          }
+        }
+
+        vipTableId = mesa.id;
+        vipTableConfigId = vipTableConfigId ?? mesa.vipTableConfigId ?? undefined;
+      }
+
+      // 2) Si aún no hay precio (o no hay mesa elegida), usar config por ubicación
+      if (totalPrice.equals(0)) {
+        const config = await prisma.vipTableConfig.findFirst({
+          where: { eventId: event.id, vipLocationId },
+          select: { id: true, price: true },
         });
-        if (cfg) ticketConfigId = cfg.id;
-      } else {
-        const priced = await priceForGeneral(event.id, genderEnum, quantity);
-        totalPrice = priced.total;
-        ticketConfigId = priced.ticketConfigId;
-      }
-
-      // Crear ticket general
-      let attempts = 0;
-      while (attempts < 5) {
-        const qr = generateQr("TICKET");
-        try {
-          const created = await prisma.ticket.create({
-            data: {
-              eventId: event.id,
-              eventDate: event.date,
-              ticketType: TT.general,
-              gender: genderEnum,
-              quantity,
-              totalPrice,
-              customerName,
-              customerEmail,
-              customerPhone,
-              customerDni,
-              paymentMethod,
-              paymentStatus,
-              qrCode: qr,
-              ...(ticketConfigId ? { ticketConfigId } : {}),
-            },
-            select: { id: true },
-          });
-
-          if (paymentStatus === PS.approved) {
-            await ensureSixDigitCode(prisma, { id: created.id });
-          }
-
-          const ticket = await prisma.ticket.findUnique({
-            where: { id: created.id },
-          });
-          return NextResponse.json({ ok: true, ticketType: "general", ticket });
-        } catch (e: any) {
-          if (e?.code === "P2002") {
-            attempts++;
-            continue;
-          }
-          throw e;
+        if (config?.price != null) {
+          totalPrice = new Prisma.Decimal(Number(config.price));
+          vipTableConfigId = config.id;
         }
       }
-      return NextResponse.json(
-        { error: "Colisión de unicidad." },
-        { status: 500 }
-      );
+    } else {
+      // 🎟️ Entrada general (usa totalPrice del body)
+      totalPrice =
+        body.totalPrice !== undefined &&
+        body.totalPrice !== null &&
+        String(body.totalPrice).trim() !== ""
+          ? new Prisma.Decimal(Number(body.totalPrice))
+          : new Prisma.Decimal(0);
     }
 
-    // ---------- VIP ----------
-    const locEnum = parseLocation(normString(body.location) || "");
-    if (!locEnum)
-      return NextResponse.json({ error: "location inválida" }, { status: 400 });
-
-    const tables = 1; // una mesa por ticket
-
-    const priced = await priceForVip(event.id, locEnum, tables);
-    if (tables > priced.remainingTables) {
-      return NextResponse.json(
-        { error: "No hay mesas suficientes en esa ubicación" },
-        { status: 409 }
-      );
-    }
-
-    const tableNumberInput =
-      typeof body.tableNumber === "number"
-        ? body.tableNumber
-        : normNumber(body.tableNumber);
-
-    let localResult;
-    try {
-      localResult = await resolveLocalTableNumber({
-        eventId: event.id,
-        location: locEnum,
-        inputNumber: tableNumberInput,
+    // 🪑 Si es VIP aprobado pero no vino mesa específica, asignar una libre
+    if (ticketType === TT.vip && vipLocationId && paymentStatus === PS.approved && !vipTableId) {
+      const mesa = await prisma.vipTable.findFirst({
+        where: {
+          eventId: event.id,
+          vipLocationId,
+          status: "available",
+        },
+        orderBy: { tableNumber: "asc" },
       });
-    } catch (e: any) {
-      if (e?.message === "table_required")
-        return NextResponse.json(
-          { error: "tableNumber requerido" },
-          { status: 400 }
-        );
-      if (e?.message === "vip_cfg_not_found")
-        return NextResponse.json(
-          { error: "No hay configuración VIP para esa ubicación" },
-          { status: 400 }
-        );
-      if (e?.message === "table_out_of_range")
-        return NextResponse.json(
-          { error: "tableNumber fuera de rango" },
-          { status: 400 }
-        );
-      throw e;
-    }
 
-    try {
-      await assertTableNumberFreeAndValid({
-        eventId: event.id,
-        location: locEnum,
-        tableNumber: localResult.localNumber,
-        stockLimit: localResult.stockLimit,
-      });
-    } catch (e: any) {
-      if (e?.message === "table_required")
+      if (!mesa)
         return NextResponse.json(
-          { error: "tableNumber requerido" },
+          { error: "No hay mesas disponibles en esta ubicación" },
           { status: 400 }
         );
-      if (e?.message === "table_out_of_range")
-        return NextResponse.json(
-          { error: "tableNumber fuera de rango" },
-          { status: 400 }
-        );
-      if (e?.message === "table_taken")
-        return NextResponse.json(
-          { error: "La mesa indicada ya está ocupada" },
-          { status: 409 }
-        );
-      throw e;
-    }
 
-    const vipCapacity = priced.capacityPerTable;
-    const totalPrice = priced.total;
-    const tableNumberLocal = localResult.localNumber;
-
-    const created = await prisma.$transaction(async (tx) => {
-      if (paymentStatus === PS.approved) {
-        await adjustVipSoldCount(tx, event.id, locEnum, +tables);
-      }
-
-      let attempts = 0;
-      while (attempts < 5) {
-        const qr = generateQr("VIP");
-        try {
-          const t = await tx.ticket.create({
-            data: {
-              eventId: event.id,
-              eventDate: event.date,
-              ticketType: TT.vip,
-              vipLocation: locEnum,
-              vipTables: tables,
-              capacityPerTable: vipCapacity,
-              tableNumber: tableNumberLocal,
-              totalPrice,
-              customerName,
-              customerEmail,
-              customerPhone,
-              customerDni,
-              paymentMethod,
-              paymentStatus,
-              qrCode: qr,
-            },
-            select: { id: true },
-          });
-          return t;
-        } catch (e: any) {
-          if (e?.code === "P2002") {
-            attempts++;
-            continue;
-          }
-          throw e;
+      // Recalcular precio con la mesa asignada (o su config)
+      if (mesa.price != null) {
+        totalPrice = new Prisma.Decimal(Number(mesa.price));
+      } else if (mesa.vipTableConfigId) {
+        const cfg = await prisma.vipTableConfig.findUnique({
+          where: { id: mesa.vipTableConfigId },
+          select: { id: true, price: true },
+        });
+        if (cfg?.price != null) {
+          totalPrice = new Prisma.Decimal(Number(cfg.price));
+          vipTableConfigId = cfg.id;
         }
       }
-      throw new Error("unique_collision");
+
+      await prisma.$transaction(async (tx) => {
+        await tx.vipTable.update({
+          where: { id: mesa.id },
+          data: { status: "sold" },
+        });
+
+        if (mesa.vipTableConfigId) {
+          await tx.vipTableConfig.update({
+            where: { id: mesa.vipTableConfigId },
+            data: { soldCount: { increment: 1 } },
+          });
+        }
+      });
+
+      vipTableId = mesa.id;
+      vipTableConfigId = vipTableConfigId ?? mesa.vipTableConfigId ?? undefined;
+    }
+
+    const ticket = await prisma.ticket.create({
+      data: {
+        event: { connect: { id: event.id } },
+        ticketType,
+        totalPrice,
+        customerName,
+        customerEmail,
+        customerPhone,
+        customerDni,
+        paymentMethod: PM.mercadopago,
+        paymentStatus,
+        ...(vipLocationId && { vipLocation: { connect: { id: vipLocationId } } }),
+        ...(vipTableId && { vipTable: { connect: { id: vipTableId } } }),
+        ...(vipTableConfigId && {
+          vipTableConfig: { connect: { id: vipTableConfigId } },
+        }),
+      },
+      include: { vipLocation: true, vipTable: true, vipTableConfig: true },
     });
 
     if (paymentStatus === PS.approved) {
-      await ensureSixDigitCode(prisma, { id: created.id });
+      await ensureSixDigitCode(prisma, { id: ticket.id });
     }
 
-    const ticket = await prisma.ticket.findUnique({
-      where: { id: created.id },
-    });
-    return NextResponse.json({ ok: true, ticketType: "vip", ticket });
-  } catch (error: any) {
-    if (error?.message === "vip_cfg_not_found") {
-      return NextResponse.json(
-        { error: "No hay configuración VIP para esa ubicación" },
-        { status: 400 }
-      );
-    }
-    if (error?.message === "vip_sold_exceeds_stock") {
-      return NextResponse.json(
-        { error: "Stock VIP excedido" },
-        { status: 409 }
-      );
-    }
-    if (error?.message === "unique_collision") {
-      return NextResponse.json(
-        { error: "Colisión de unicidad, reintente." },
-        { status: 500 }
-      );
-    }
-    console.error("[tickets][POST] Error:", error);
+    return NextResponse.json({ ok: true, ticket });
+  } catch (e) {
+    console.error("[Ticket POST Error]", e);
     return NextResponse.json(
-      { error: "Failed to create ticket" },
+      { error: "Error al crear ticket" },
       { status: 500 }
     );
   }
 }
 
+/* ============================================================
+   PUT — Actualizar ticket (VIP o general)
+============================================================ */
 export async function PUT(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = (await request.json().catch(() => ({}))) as any;
-    const id = normString(body.id);
+    const body = await request.json();
+    const id = normStr(body.id);
     if (!id)
-      return NextResponse.json({ error: "ID required" }, { status: 400 });
+      return NextResponse.json({ error: "ID requerido" }, { status: 400 });
 
-    const current = await prisma.ticket.findUnique({ where: { id } });
+    const current = await prisma.ticket.findUnique({
+      where: { id },
+      include: { vipTable: true },
+    });
     if (!current)
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json({ error: "Ticket no encontrado" }, { status: 404 });
 
-    const dataToUpdate: Prisma.TicketUpdateInput = {};
+    const newStatus = normStr(body.paymentStatus) as PS | undefined;
+    const data: Prisma.TicketUpdateInput = {};
 
-    // GENERAL / tipo
-    if (body.ticketType !== undefined) {
-      const tt = (normString(body.ticketType) || "").toLowerCase();
-      if (tt === "general") dataToUpdate.ticketType = TT.general;
-      else if (tt === "vip") dataToUpdate.ticketType = TT.vip;
-      else
-        return NextResponse.json(
-          { error: "ticketType inválido (general|vip)" },
-          { status: 400 }
-        );
-    }
+    // ====================================================
+    // Caso 1: Cambio a aprobado (VIP o general)
+    // ====================================================
+    if (newStatus === PS.approved && current.paymentStatus !== PS.approved) {
+      let vipTableIdToSet: string | undefined;
+      let vipTableConfigIdToSet: string | null | undefined = undefined;
+      let newTotal: Prisma.Decimal | undefined;
 
-    if (body.gender !== undefined) {
-      const g = parseGender(normString(body.gender));
-      dataToUpdate.gender = g ?? null;
-    }
-    const quantity = normNumber(body.quantity);
-    if (quantity !== undefined) dataToUpdate.quantity = Math.max(1, quantity);
-
-    // VIP fields (solo si NO estaba aprobado)
-    const wantsLocation = body.location !== undefined;
-    const wantsTables = body.tables !== undefined;
-    const wantsCapacity = body.capacityPerTable !== undefined;
-    const wantsTableNumber = body.tableNumber !== undefined;
-
-    if (current.paymentStatus !== PS.approved) {
-      if (wantsLocation) {
-        const loc = parseLocation(normString(body.location));
-        dataToUpdate.vipLocation = loc ?? null;
-      }
-      if (wantsTables) {
-        const t = normNumber(body.tables);
-        if (t !== undefined) dataToUpdate.vipTables = Math.max(1, t);
-      }
-      if (wantsCapacity) {
-        const c = normNumber(body.capacityPerTable);
-        if (c !== undefined) dataToUpdate.capacityPerTable = Math.max(1, c);
-      }
-      if (wantsTableNumber) {
-        const tableNumberInput =
-          typeof body.tableNumber === "number"
-            ? body.tableNumber
-            : normNumber(body.tableNumber);
-
-        const effLoc =
-          (dataToUpdate.vipLocation as TL | undefined) || current.vipLocation;
-        if (!effLoc) {
-          return NextResponse.json(
-            { error: "Definí una ubicación VIP antes de asignar mesa" },
-            { status: 400 }
-          );
-        }
-
-        let localResult;
-        try {
-          localResult = await resolveLocalTableNumber({
-            eventId: current.eventId,
-            location: effLoc,
-            inputNumber: tableNumberInput,
+      await prisma.$transaction(async (tx) => {
+        if (current.ticketType === TT.vip && current.vipLocationId) {
+          // Asignar mesa disponible
+          const mesa = await tx.vipTable.findFirst({
+            where: {
+              eventId: current.eventId,
+              vipLocationId: current.vipLocationId,
+              status: "available",
+            },
+            orderBy: { tableNumber: "asc" },
           });
-        } catch (e: any) {
-          if (e?.message === "table_required")
-            return NextResponse.json(
-              { error: "tableNumber requerido" },
-              { status: 400 }
-            );
-          if (e?.message === "vip_cfg_not_found")
-            return NextResponse.json(
-              { error: "No hay configuración VIP para esa ubicación" },
-              { status: 400 }
-            );
-          if (e?.message === "table_out_of_range")
-            return NextResponse.json(
-              { error: "tableNumber fuera de rango" },
-              { status: 400 }
-            );
-          throw e;
+
+          if (mesa) {
+            await tx.vipTable.update({
+              where: { id: mesa.id },
+              data: { status: "sold" },
+            });
+
+            if (mesa.vipTableConfigId) {
+              await tx.vipTableConfig.update({
+                where: { id: mesa.vipTableConfigId },
+                data: { soldCount: { increment: 1 } },
+              });
+            }
+
+            vipTableIdToSet = mesa.id;
+            vipTableConfigIdToSet = mesa.vipTableConfigId ?? null;
+
+            // Recalcular total con la mesa (o su config)
+            if (mesa.price != null) {
+              newTotal = new Prisma.Decimal(Number(mesa.price));
+            } else if (mesa.vipTableConfigId) {
+              const cfg = await tx.vipTableConfig.findUnique({
+                where: { id: mesa.vipTableConfigId },
+                select: { price: true },
+              });
+              if (cfg?.price != null) {
+                newTotal = new Prisma.Decimal(Number(cfg.price));
+              }
+            }
+          }
         }
 
-        try {
-          await assertTableNumberFreeAndValid({
-            eventId: current.eventId,
-            location: effLoc,
-            tableNumber: localResult.localNumber,
-            stockLimit: localResult.stockLimit,
-            excludeTicketId: current.id,
-          });
-        } catch (e: any) {
-          if (e?.message === "table_required")
-            return NextResponse.json(
-              { error: "tableNumber requerido" },
-              { status: 400 }
-            );
-          if (e?.message === "table_out_of_range")
-            return NextResponse.json(
-              { error: "tableNumber fuera de rango" },
-              { status: 400 }
-            );
-          if (e?.message === "table_taken")
-            return NextResponse.json(
-              { error: "La mesa indicada ya está ocupada" },
-              { status: 409 }
-            );
-          throw e;
-        }
+        await tx.ticket.update({
+          where: { id },
+          data: {
+            paymentStatus: PS.approved,
+            ...(vipTableIdToSet && { vipTableId: vipTableIdToSet }),
+            ...(vipTableConfigIdToSet !== undefined && {
+              vipTableConfigId: vipTableConfigIdToSet,
+            }),
+            ...(newTotal && { totalPrice: newTotal }),
+          },
+        });
 
-        dataToUpdate.tableNumber = localResult.localNumber; // LOCAL
-      }
-    } else if (
-      wantsLocation ||
-      wantsTables ||
-      wantsCapacity ||
-      wantsTableNumber
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "No se puede modificar VIP aprobado (ubicación/mesas/capacidad/mesa)",
-        },
-        { status: 400 }
-      );
+        await ensureSixDigitCode(tx, { id });
+      });
+
+      const updated = await prisma.ticket.findUnique({
+        where: { id },
+        include: { vipLocation: true, vipTable: true, vipTableConfig: true },
+      });
+
+      return NextResponse.json({ ok: true, ticket: updated });
     }
 
-    // Datos cliente / precio / fechas
-    const customerName = normString(body.customerName);
-    if (customerName) dataToUpdate.customerName = customerName;
-    const customerEmail = normEmail(body.customerEmail);
-    if (customerEmail) dataToUpdate.customerEmail = customerEmail;
-    const customerPhone = normString(body.customerPhone);
-    if (customerPhone) dataToUpdate.customerPhone = customerPhone;
-    const customerDni = extractCustomerDni(body);
-    if (customerDni) dataToUpdate.customerDni = customerDni;
+    // ====================================================
+    // Caso 2: Actualización normal
+    // ====================================================
+    if (body.customerName) data.customerName = normStr(body.customerName);
+    if (body.customerEmail) data.customerEmail = normStr(body.customerEmail);
+    if (body.customerPhone) data.customerPhone = normStr(body.customerPhone);
+    if (body.customerDni) data.customerDni = normStr(body.customerDni);
+    if (body.totalPrice !== undefined)
+      data.totalPrice =
+        body.totalPrice !== null && String(body.totalPrice).trim() !== ""
+          ? new Prisma.Decimal(Number(body.totalPrice))
+          : new Prisma.Decimal(0);
+    if (newStatus) data.paymentStatus = newStatus;
 
-    const pm = parsePaymentMethod(normString(body.paymentMethod));
-    if (pm) dataToUpdate.paymentMethod = pm;
-
-    const totalPrice = normNumber(body.totalPrice);
-    if (totalPrice !== undefined) {
-      if (totalPrice < 0)
-        return NextResponse.json(
-          { error: "totalPrice no puede ser negativo" },
-          { status: 400 }
-        );
-      dataToUpdate.totalPrice = new Prisma.Decimal(totalPrice);
-    }
-
-    if (body.eventDate !== undefined) {
-      dataToUpdate.eventDate = body.eventDate ? new Date(body.eventDate) : null;
-    }
-
-    // Estado (manejar transición VIP para stock)
-    let nextStatus = current.paymentStatus as PS;
-    if (body.paymentStatus !== undefined) {
-      const ps = parsePaymentStatus(normString(body.paymentStatus));
-      if (ps) nextStatus = ps;
-    }
-    dataToUpdate.paymentStatus = nextStatus;
-
-    const updated = await prisma.$transaction(async (tx) => {
-      // manejar cruce de aprobado <-> no aprobado (ajuste stock VIP)
-      if (
-        current.ticketType === TT.vip &&
-        current.vipLocation &&
-        current.vipTables
-      ) {
-        const wasApproved = current.paymentStatus === PS.approved;
-        const willBeApproved = nextStatus === PS.approved;
-
-        if (!wasApproved && willBeApproved) {
-          await adjustVipSoldCount(
-            tx,
-            current.eventId,
-            current.vipLocation,
-            +current.vipTables
-          );
-        } else if (wasApproved && !willBeApproved) {
-          await adjustVipSoldCount(
-            tx,
-            current.eventId,
-            current.vipLocation,
-            -current.vipTables
-          );
-        }
-      }
-
-      await tx.ticket.update({ where: { id }, data: dataToUpdate });
-      return tx.ticket.findUnique({ where: { id } });
+    const updated = await prisma.ticket.update({
+      where: { id },
+      data,
+      include: { vipLocation: true, vipTable: true, vipTableConfig: true },
     });
 
-    const hadValid = !!normalizeSixDigitCode(current.validationCode);
-    if (updated?.paymentStatus === PS.approved && !hadValid) {
+    if (updated.paymentStatus === PS.approved && !updated.validationCode) {
       await ensureSixDigitCode(prisma, { id });
     }
 
     return NextResponse.json({ ok: true, ticket: updated });
-  } catch (error) {
-    console.error("[tickets][PUT] Error:", error);
+  } catch (e) {
+    console.error("[Ticket PUT Error]", e);
     return NextResponse.json(
-      { error: "Failed to update ticket" },
+      { error: "Error al actualizar ticket" },
       { status: 500 }
     );
   }
 }
 
-export async function PATCH(request: NextRequest) {
-  const auth = await verifyAuth(request);
-  if (!auth)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+// ✅ Alias PATCH → usa la misma lógica que PUT
+export const PATCH = PUT;
 
-  try {
-    const body = (await request.json().catch(() => ({}))) as any;
-    const id = normString(body.id);
-    if (!id)
-      return NextResponse.json({ error: "ID required" }, { status: 400 });
-
-    const req2 = new Request(new URL(request.url), {
-      method: "PUT",
-      headers: request.headers,
-      body: JSON.stringify(body),
-    });
-    // @ts-ignore — reutilizamos la lógica de PUT
-    return await PUT(req2 as any);
-  } catch (error) {
-    console.error("[tickets][PATCH] Error:", error);
-    return NextResponse.json(
-      { error: "Failed to update ticket" },
-      { status: 500 }
-    );
-  }
-}
-
+/* ============================================================
+   DELETE — Archivar y liberar mesa VIP
+============================================================ */
 export async function DELETE(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth)
@@ -1061,39 +403,59 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const id = normString(searchParams.get("id"));
+    const id = normStr(searchParams.get("id"));
     if (!id)
-      return NextResponse.json({ error: "ID required" }, { status: 400 });
+      return NextResponse.json({ error: "ID requerido" }, { status: 400 });
 
-    // Motivo opcional (?reason=admin_cancelled|user_deleted|payment_timeout|refunded|charged_back|other)
-    const reasonParam = normString(searchParams.get("reason"));
-    const reasonMap: Record<string, AR> = {
-      user_deleted: AR.user_deleted,
-      admin_cancelled: AR.admin_cancelled,
-      payment_timeout: AR.payment_timeout,
-      refunded: AR.refunded,
-      charged_back: AR.charged_back,
-      other: AR.other,
-    };
-    const reason: AR = reasonParam
-      ? (reasonMap[reasonParam] ?? AR.other)
-      : AR.admin_cancelled;
+    const ticket = await prisma.ticket.findUnique({
+      where: { id },
+      include: { vipTable: true },
+    });
+    if (!ticket)
+      return NextResponse.json({ error: "No encontrado" }, { status: 404 });
 
-    const archivedBy =
-      typeof (auth as any)?.sub === "string" ? (auth as any).sub : undefined;
+    await prisma.$transaction(async (tx) => {
+      if (ticket.vipTableId) {
+        await tx.vipTable.update({
+          where: { id: ticket.vipTableId },
+          data: { status: "available" },
+        });
 
-    await archiveTicket({
-      ticketId: id,
-      reason,
-      archivedBy,
-      notes: "Archived via DELETE /admin/tickets",
+        if (ticket.vipTableConfigId) {
+          await tx.vipTableConfig.update({
+            where: { id: ticket.vipTableConfigId },
+            data: { soldCount: { decrement: 1 } },
+          });
+        }
+      }
+
+      await tx.ticketArchive.create({
+        data: {
+          archivedFrom: { connect: { id: ticket.id } },
+          event: { connect: { id: ticket.eventId } },
+          ticketType: ticket.ticketType,
+          gender: ticket.gender,
+          quantity: ticket.quantity,
+          totalPrice: ticket.totalPrice,
+          customerName: ticket.customerName,
+          customerEmail: ticket.customerEmail,
+          customerPhone: ticket.customerPhone,
+          customerDni: ticket.customerDni,
+          paymentId: ticket.paymentId,
+          paymentStatus: ticket.paymentStatus,
+          paymentMethod: ticket.paymentMethod,
+          archiveReason: AR.admin_cancelled,
+        },
+      });
+
+      await tx.ticket.delete({ where: { id } });
     });
 
-    return NextResponse.json({ ok: true, archived: true, reason });
-  } catch (error) {
-    console.error("[tickets][DELETE] Error:", error);
+    return NextResponse.json({ ok: true, archived: true });
+  } catch (e) {
+    console.error("[Ticket DELETE Error]", e);
     return NextResponse.json(
-      { error: "Failed to archive ticket" },
+      { error: "Error al eliminar ticket" },
       { status: 500 }
     );
   }
