@@ -42,7 +42,9 @@ const parseIntSafe = (v: string | null, def: number) => {
 
 const parseOrder = (v: string | null) => (v === "asc" ? "asc" : "desc");
 
-/* ============ GET /api/admin/tickets/archive ============ */
+/* ============================================================
+   GET /api/admin/tickets/archive
+============================================================ */
 export async function GET(request: NextRequest) {
   const auth = await verifyAuth(request);
   if (!auth) {
@@ -52,9 +54,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
   const q = searchParams.get("q")?.trim() || "";
-  const reason = parseEnum(AR, searchParams.get("reason")); // ArchiveReason?
-  const type = parseEnum(TT, searchParams.get("type")); // TicketType?
-  const status = parseEnum(PS, searchParams.get("status")); // PaymentStatus?
+  const reason = parseEnum(AR, searchParams.get("reason"));
+  const type = parseEnum(TT, searchParams.get("type"));
+  const status = parseEnum(PS, searchParams.get("status"));
 
   // Filtros de fecha (ISO) sobre archivedAt
   const archivedFromRaw = searchParams.get("archivedFrom");
@@ -73,7 +75,7 @@ export async function GET(request: NextRequest) {
   const pageSize = Math.min(200, parseIntSafe(searchParams.get("pageSize"), 50));
   const skip = (page - 1) * pageSize;
 
-  // Construir where
+  // Construir filtros
   const where: Prisma.TicketArchiveWhereInput = {};
 
   if (q) {
@@ -101,7 +103,6 @@ export async function GET(request: NextRequest) {
         orderBy: { [orderByField]: order },
         skip,
         take: pageSize,
-        // Usamos SELECT explícito para incluir sólo campos existentes + relaciones necesarias
         select: {
           id: true,
           archivedAt: true,
@@ -132,25 +133,23 @@ export async function GET(request: NextRequest) {
           purchaseDate: true,
           eventDate: true,
 
-          // Relaciones (para datos derivados)
-          vipLocation: {
-            select: { name: true },
-          },
+          // Relaciones reales según el schema
+          vipLocationRef: { select: { name: true } },
           vipTable: {
             select: {
-              tableNumber: true, // número local (si la mesa sigue existiendo)
+              tableNumber: true,
               vipTableConfig: {
                 select: { capacityPerTable: true },
               },
             },
           },
-          // Si querés mostrar datos del evento archivado:
+          // event opcional
           // event: { select: { name: true, date: true } },
         },
       }),
     ]);
 
-    // Aplanamos para el frontend (evitamos exponer objetos anidados)
+    // Aplanamos para el frontend
     const tickets = rows.map((r) => ({
       id: r.id,
       archivedAt: r.archivedAt,
@@ -163,7 +162,7 @@ export async function GET(request: NextRequest) {
       quantity: r.quantity,
 
       vipLocationId: r.vipLocationId,
-      vipLocationName: r.vipLocation?.name ?? null,
+      vipLocationName: r.vipLocationRef?.name ?? null,
       vipTableId: r.vipTableId,
       tableNumberLocal: r.vipTable?.tableNumber ?? null,
       capacityPerTable: r.vipTable?.vipTableConfig?.capacityPerTable ?? null,
@@ -183,7 +182,6 @@ export async function GET(request: NextRequest) {
 
       purchaseDate: r.purchaseDate,
       eventDate: r.eventDate,
-      // Si incluís event arriba, podés aplanar también:
       // eventName: r.event?.name ?? null,
       // eventDateExact: r.event?.date ?? null,
     }));

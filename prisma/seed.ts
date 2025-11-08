@@ -1,17 +1,16 @@
-// ========================================================
-// Prisma Seed — Creación de administradores iniciales
-// ========================================================
-
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("🌱 Iniciando seed de administradores...");
+  console.log("🌱 Iniciando seed de administradores y evento...");
 
   const SALT_ROUNDS = 12;
 
+  // ========================================================
+  // 1️⃣ Crear administradores iniciales
+  // ========================================================
   const admins = [
     {
       username: "vasconcel4376",
@@ -43,6 +42,32 @@ async function main() {
     } catch (error) {
       console.error(`❌ Error procesando usuario ${admin.username}:`, error);
     }
+  }
+
+  // ========================================================
+  // 2️⃣ Crear evento activo
+  // ========================================================
+  try {
+    const existingActive = await prisma.event.findFirst({
+      where: { isActive: true },
+    });
+
+    if (!existingActive) {
+      const newEvent = await prisma.event.create({
+        data: {
+          name: "Hooka Launch Party",
+          code: "HOOKA2025",
+          date: new Date("2025-12-31T23:00:00.000Z"),
+          isActive: true,
+        },
+      });
+
+      console.log(`🎉 Evento creado: ${newEvent.name}`);
+    } else {
+      console.log("⚡ Ya existe un evento activo, no se creó uno nuevo.");
+    }
+  } catch (error) {
+    console.error("💥 Error al crear el evento:", error);
   }
 
   console.log("🌿 Seed completada con éxito.");

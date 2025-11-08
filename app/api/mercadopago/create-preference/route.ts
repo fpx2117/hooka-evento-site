@@ -1,4 +1,3 @@
-// app/api/mercadopago/create-preference/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -118,8 +117,9 @@ export async function POST(req: NextRequest) {
         ticketType: true, // general | vip
         gender: true,
         quantity: true,
-        vipLocation: { select: { name: true } }, // ✅ nombre desde relación
-        vipTable: { select: { tableNumber: true } }, // ✅ número desde relación
+        vipLocationRef: { select: { name: true } },
+        vipTable: { select: { tableNumber: true } },
+        vipTableConfig: { select: { price: true, capacityPerTable: true } },
       },
     });
 
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const dbTotal = toMoney2(t.totalPrice);
+    const dbTotal = toMoney2(t.totalPrice || t.vipTableConfig?.price);
     if (!(dbTotal > 0)) {
       return NextResponse.json(
         { error: "Total inválido en base de datos" },
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
 
     if (!visualTitle) {
       if (t.ticketType === "vip") {
-        const loc = t.vipLocation?.name ?? "VIP";
+        const loc = t.vipLocationRef?.name ?? "VIP";
         const mesa = t.vipTable?.tableNumber
           ? `Mesa ${t.vipTable.tableNumber}`
           : "";

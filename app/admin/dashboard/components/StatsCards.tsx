@@ -1,10 +1,10 @@
 "use client";
+
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
 } from "@/components/ui/card";
 import {
   CheckCircle,
@@ -12,6 +12,7 @@ import {
   Ticket,
   TrendingUp,
   Users,
+  Crown,
 } from "lucide-react";
 
 export default function StatsCards({
@@ -25,8 +26,11 @@ export default function StatsCards({
   cfgLoading: boolean;
   sumVipRemainingTables: number;
 }) {
+  const remainingPersons = cfg?.totals?.remainingPersons ?? 0;
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
+      {/* Total Entradas */}
       <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -44,6 +48,7 @@ export default function StatsCards({
         </CardContent>
       </Card>
 
+      {/* Entradas validadas */}
       <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -66,6 +71,7 @@ export default function StatsCards({
         </CardContent>
       </Card>
 
+      {/* Ingresos totales */}
       <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -79,10 +85,13 @@ export default function StatsCards({
           <div className="text-2xl sm:text-3xl font-bold">
             ${stats.revenue.toLocaleString("es-AR")}
           </div>
-          <p className="text-xs text-muted-foreground mt-1">Ingresos totales</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Ingresos totales
+          </p>
         </CardContent>
       </Card>
 
+      {/* Cupos disponibles (General + VIP) */}
       <Card className="border-border/50 shadow-sm hover:shadow-md transition-shadow">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -98,12 +107,15 @@ export default function StatsCards({
           ) : cfg ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Total:</span>
-                <b>{cfg.totals.remainingPersons} restantes</b>
+                <span className="text-muted-foreground">Entradas generales:</span>
+                <b>{remainingPersons} disponibles</b>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">VIP (mesas):</span>
-                <b>{sumVipRemainingTables} mesas</b>
+                <span className="text-muted-foreground flex items-center gap-1">
+                  <Crown className="w-4 h-4 text-amber-600" />
+                  VIP (mesas):
+                </span>
+                <b>{sumVipRemainingTables} disponibles</b>
               </div>
             </div>
           ) : (

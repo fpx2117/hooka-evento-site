@@ -8,7 +8,6 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   PaymentStatus as PS,
   TicketType as TT,
-  TableLocation as TL,
 } from "@prisma/client";
 import { ensureSixDigitCode } from "@/lib/validation-code";
 import { getVipSequentialRanges } from "@/lib/vip-tables";
@@ -17,6 +16,7 @@ import { getVipSequentialRanges } from "@/lib/vip-tables";
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "your-secret-key-change-in-production"
 );
+
 async function verifyAuth(request: NextRequest) {
   const token = request.cookies.get("admin-token")?.value;
   if (!token) return null;
@@ -41,57 +41,83 @@ function generateQr(prefix = "TICKET") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+/**
+ * Ajusta el contador de mesas vendidas para la ubicación VIP
+ * usando la clave única compuesta (eventId, vipLocationId).
+ */
 async function adjustVipSoldCount(
   tx: DB,
   eventId: string,
-  location: TL,
+  vipLocationId: string,
   delta: number
 ) {
   if (!delta) return;
+
   const cfg = await tx.vipTableConfig.findUnique({
-    where: { eventId_location: { eventId, location } },
+    where: { eventId_vipLocationId: { eventId, vipLocationId } }, // ✅ clave compuesta correcta
     select: { id: true, stockLimit: true, soldCount: true },
   });
   if (!cfg) throw new Error("vip_cfg_not_found");
+
   const next = cfg.soldCount + delta;
   if (next < 0) throw new Error("vip_sold_negative");
   if (next > cfg.stockLimit) throw new Error("vip_sold_exceeds_stock");
+
   await tx.vipTableConfig.update({
     where: { id: cfg.id },
     data: { soldCount: next },
   });
 }
 
-/** Convierte número de mesa GLOBAL -> LOCAL si entra en el rango del sector */
+/**
+ * Convierte número de mesa GLOBAL → LOCAL, si entra en el rango del sector,
+ * usando vipLocationId (string). Si no matchea, se trata como local.
+ */
 async function toLocalTableNumber(
   eventId: string,
-  location: TL,
+  vipLocationId: string,
   inputNumber: number
 ): Promise<{ localNumber: number; stockLimit: number }> {
   const cfg = await prisma.vipTableConfig.findUnique({
-    where: { eventId_location: { eventId, location } },
+    where: { eventId_vipLocationId: { eventId, vipLocationId } }, // ✅
     select: { stockLimit: true },
   });
   if (!cfg) throw new Error("vip_cfg_not_found");
+
   const stockLimit = cfg.stockLimit;
 
+  // Buscamos rangos globales → locales, idealmente por vipLocationId
   const { ranges } = await getVipSequentialRanges({ prisma, eventId });
-  const r = ranges.find((x) => x.location === location);
+
+  // Intentamos distintos nombres de campo para robustez
+  const r = ranges.find(
+    (x: any) =>
+      x.vipLocationId === vipLocationId ||
+      x.locationId === vipLocationId
+  );
+
   if (r && inputNumber >= r.startNumber && inputNumber <= r.endNumber) {
-    const local = inputNumber - r.offset;
-    if (local >= 1 && local <= stockLimit)
+    const local = inputNumber - r.startNumber + 1;
+    if (local >= 1 && local <= stockLimit) {
       return { localNumber: local, stockLimit };
+    }
   }
-  // si no es global válido, tratamos el número como LOCAL directo
+
+  // Si no corresponde a rango global válido, tratamos como local directo
   if (inputNumber >= 1 && inputNumber <= stockLimit) {
     return { localNumber: inputNumber, stockLimit };
   }
+
   throw new Error("table_out_of_range");
 }
 
+/**
+ * Verifica que la mesa VIP esté libre antes de restaurar.
+ * Chequea por vipLocationId y tableNumber (local).
+ */
 async function assertVipTableAvailable(
   eventId: string,
-  location: TL,
+  vipLocationId: string,
   tableNumberLocal: number,
   excludeTicketId?: string
 ) {
@@ -99,7 +125,7 @@ async function assertVipTableAvailable(
     where: {
       eventId,
       ticketType: TT.vip,
-      vipLocation: location,
+      vipLocationId, // ✅ ahora por id
       tableNumber: tableNumberLocal,
       paymentStatus: { in: [PS.approved, PS.in_process] },
       ...(excludeTicketId ? { id: { not: excludeTicketId } } : {}),
@@ -123,16 +149,31 @@ async function restoreOne(
   const a = await tx.ticketArchive.findUnique({ where: { id: archiveId } });
   if (!a) throw new Error("archive_not_found");
 
-  // VIP: validar mesa y convertir a LOCAL si el archivo guardó número "global"
+  // --- VIP: validar mesa y convertir a LOCAL si el archivo guardó número "global"
   let tableNumberLocal: number | null = a.tableNumber ?? null;
-  if (a.ticketType === TT.vip && a.vipLocation && a.tableNumber != null) {
-    const { localNumber } = await toLocalTableNumber(
-      a.eventId,
-      a.vipLocation,
-      a.tableNumber
-    );
-    await assertVipTableAvailable(a.eventId, a.vipLocation, localNumber);
-    tableNumberLocal = localNumber;
+
+  if (a.ticketType === TT.vip) {
+    // Necesitamos el vipLocationId para operar con la config actual
+    const vipLocationId =
+      (a as any).vipLocationId ??
+      null;
+
+    if (!vipLocationId) {
+      // Si tu archivo viejo no tenía vipLocationId, en este punto
+      // deberías resolverlo buscando la ubicación por eventId + algún campo
+      // o fallar con un error claro:
+      throw new Error("vip_cfg_not_found");
+    }
+
+    if (a.tableNumber != null) {
+      const { localNumber } = await toLocalTableNumber(
+        a.eventId,
+        vipLocationId,
+        a.tableNumber
+      );
+      await assertVipTableAvailable(a.eventId, vipLocationId, localNumber);
+      tableNumberLocal = localNumber;
+    }
   }
 
   // Prepara campos únicos
@@ -142,9 +183,10 @@ async function restoreOne(
   // paymentId: si forzás null evitás colisiones con activos
   const paymentId = opts?.forcePaymentIdNull ? null : a.paymentId;
 
-  // Creamos Ticket activo
-  let created: { id: string };
+  // Creamos Ticket activo (reintentos por colisión de QR)
+  let created: { id: string } | null = null;
   let attempts = 0;
+
   while (attempts < 5) {
     try {
       created = await tx.ticket.create({
@@ -155,7 +197,8 @@ async function restoreOne(
           gender: a.gender ?? null,
           quantity: a.quantity ?? 1,
 
-          vipLocation: a.vipLocation ?? null,
+          // ✅ Esquema nuevo por id
+          vipLocationId: (a as any).vipLocationId ?? null,
           vipTables: a.vipTables ?? (a.ticketType === TT.vip ? 1 : null),
           capacityPerTable:
             a.capacityPerTable ?? (a.ticketType === TT.vip ? 10 : null),
@@ -172,8 +215,8 @@ async function restoreOne(
           paymentMethod: a.paymentMethod,
 
           // Códigos
-          qrCode, // único → regenerado si hace falta
-          validationCode: null, // se vuelve a emitir si está approved
+          qrCode,
+          validationCode: null,
 
           validated: false,
           validatedAt: null,
@@ -196,23 +239,29 @@ async function restoreOne(
       throw e;
     }
   }
-  if (!created!) throw new Error("unique_collision");
+
+  if (!created) throw new Error("unique_collision");
 
   // Si el estado era approved:
   // - VIP: reajustar soldCount
   // - emitir validationCode
   if (a.paymentStatus === PS.approved) {
-    if (a.ticketType === TT.vip && a.vipLocation) {
+    if (a.ticketType === TT.vip) {
+      const vipLocationId =
+        (a as any).vipLocationId ?? null;
+
+      if (!vipLocationId) throw new Error("vip_cfg_not_found");
+
       const delta = a.vipTables ?? 1;
-      await adjustVipSoldCount(tx, a.eventId, a.vipLocation, +delta);
+      await adjustVipSoldCount(tx, a.eventId, vipLocationId, +delta); // ✅
     }
-    await ensureSixDigitCode(tx as any, { id: created!.id });
+    await ensureSixDigitCode(tx as any, { id: created.id });
   }
 
-  // borrar el archivo
+  // borrar el archivo restaurado
   await tx.ticketArchive.delete({ where: { id: a.id } });
 
-  const restored = await tx.ticket.findUnique({ where: { id: created!.id } });
+  const restored = await tx.ticket.findUnique({ where: { id: created.id } });
   return restored;
 }
 
@@ -265,36 +314,20 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, restored: results });
   } catch (error: any) {
-    if (error?.message === "archive_not_found") {
-      return NextResponse.json(
-        { error: "Archive ID not found" },
-        { status: 404 }
-      );
-    }
-    if (error?.message === "vip_cfg_not_found") {
-      return NextResponse.json(
-        { error: "No hay configuración VIP para esa ubicación" },
-        { status: 400 }
-      );
-    }
-    if (error?.message === "table_out_of_range") {
-      return NextResponse.json(
-        { error: "tableNumber fuera de rango" },
-        { status: 400 }
-      );
-    }
-    if (error?.message === "table_taken") {
-      return NextResponse.json(
-        { error: "La mesa indicada ya está ocupada" },
-        { status: 409 }
-      );
-    }
-    if (error?.message === "unique_collision") {
-      return NextResponse.json(
-        { error: "Colisión de unicidad al restaurar, reintente." },
-        { status: 500 }
-      );
-    }
+    const errors: Record<string, string> = {
+      archive_not_found: "Archive ID not found",
+      vip_cfg_not_found:
+        "No hay configuración/ubicación VIP válida para esa ubicación",
+      table_out_of_range: "tableNumber fuera de rango",
+      table_taken: "La mesa indicada ya está ocupada",
+      unique_collision: "Colisión de unicidad al restaurar, reintente.",
+      vip_sold_negative: "El contador VIP no puede ser negativo",
+      vip_sold_exceeds_stock: "El contador VIP excede el stock",
+    };
+
+    const msg = errors[error?.message];
+    if (msg) return NextResponse.json({ error: msg }, { status: 400 });
+
     console.error("[tickets/restore][POST] Error:", error);
     return NextResponse.json(
       { error: "Failed to restore tickets" },

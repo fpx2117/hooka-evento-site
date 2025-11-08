@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
       where: { eventId, vipLocationId },
       select: {
         id: true,
-        mapUrl: true, // 👈 mapa correspondiente a la config
+        mapUrl: true,
       },
     });
 
@@ -47,9 +47,14 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // 🔍 Buscar las mesas VIP disponibles de esa configuración
+    // 🔍 Buscar las mesas VIP de esa configuración (relación corregida)
     const tables = await prisma.vipTable.findMany({
-      where: { eventId, vipLocationId },
+      where: {
+        vipTableConfig: {
+          eventId,
+          vipLocationId,
+        },
+      },
       orderBy: { tableNumber: "asc" },
       select: {
         id: true,
@@ -57,21 +62,29 @@ export async function GET(req: NextRequest) {
         status: true,
         price: true,
         capacityPerTable: true,
+        vipTableConfig: {
+          select: {
+            vipLocation: {
+              select: { id: true, name: true },
+            },
+          },
+        },
       },
     });
 
+    // 🔹 Si no hay mesas, devolver respuesta vacía pero válida
     if (!tables.length) {
       return NextResponse.json({
         ok: true,
         message: "No hay mesas registradas para esta ubicación",
         total: 0,
         availableCount: 0,
-        mapUrl: config.mapUrl, // 👈 aún devolvemos el mapa
+        mapUrl: config.mapUrl,
         tables: [],
       });
     }
 
-    // 🧩 Normalizar estado
+    // 🧩 Normalizar estado y datos
     const formatted = tables.map((t) => {
       const status = (t.status || "").toString().toLowerCase();
       return {
@@ -81,16 +94,18 @@ export async function GET(req: NextRequest) {
         price: Number(t.price),
         capacityPerTable: t.capacityPerTable,
         available: status === "available",
+        locationName: t.vipTableConfig?.vipLocation?.name ?? null,
       };
     });
 
     const availableTables = formatted.filter((t) => t.available);
 
+    // ✅ Respuesta final
     return NextResponse.json({
       ok: true,
       total: formatted.length,
       availableCount: availableTables.length,
-      mapUrl: config.mapUrl, // 👈 mapa de la config
+      mapUrl: config.mapUrl,
       tables: formatted,
     });
   } catch (err) {

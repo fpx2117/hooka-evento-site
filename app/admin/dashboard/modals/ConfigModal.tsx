@@ -14,7 +14,6 @@ import { Label } from "@/components/ui/label";
 import {
   MapPin,
   SlidersHorizontal,
-  Users,
   Crown,
   Layers,
   Trash2,
@@ -24,15 +23,16 @@ import {
 } from "lucide-react";
 import axios from "axios";
 import { toast } from "sonner";
+
 import CreateVipTablesModal from "./CreateVipTablesModal";
 import AddVipLocationModal from "./AddVipLocationModal";
 import UploadVipMapModal from "./UploadVipMapModal";
 import { TicketsConfig, VipLocation, VipTableConfig } from "../types";
 
 /* =============================================
-   Tipos
+   Tipos internos
 ============================================= */
-type VipTable = {
+interface VipTable {
   id: string;
   tableNumber?: number | null;
   vipLocationId: string;
@@ -40,149 +40,140 @@ type VipTable = {
   capacityPerTable?: number;
   status?: string;
   ticketStatus?: string;
-};
+}
 
+/* =============================================
+   COMPONENTE PRINCIPAL
+============================================= */
 export default function ConfigModal({
   open,
   onOpenChange,
   cfg,
-  configForm,
-  setConfigForm,
-  vipTablesForm,
-  setVipTablesForm,
-  onSubmit,
   isMobile,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   cfg: TicketsConfig | null;
-  configForm: {
-    totalLimitPersons: number;
-    genHPrice: number;
-    genMPrice: number;
-  };
-  setConfigForm: (f: {
-    totalLimitPersons: number;
-    genHPrice: number;
-    genMPrice: number;
-  }) => void;
-  vipTablesForm: any[];
-  setVipTablesForm: (rows: any[]) => void;
-  onSubmit: (e: React.FormEvent) => void;
   isMobile: boolean;
 }) {
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [openVipCreator, setOpenVipCreator] = useState(false);
-  const [editLocation, setEditLocation] = useState<VipLocation | null>(null);
-  const [openAddLocation, setOpenAddLocation] = useState(false);
+
   const [vipLocations, setVipLocations] = useState<VipLocation[]>([]);
   const [vipConfigs, setVipConfigs] = useState<VipTableConfig[]>([]);
   const [vipTables, setVipTables] = useState<VipTable[]>([]);
-  const [openUploadMap, setOpenUploadMap] = useState(false);
+
   const [selectedConfig, setSelectedConfig] = useState<VipTableConfig | null>(
     null
   );
 
+  const [openVipCreator, setOpenVipCreator] = useState(false);
+  const [openAddLocation, setOpenAddLocation] = useState(false);
+  const [openUploadMap, setOpenUploadMap] = useState(false);
+  const [editLocation, setEditLocation] = useState<VipLocation | null>(null);
+
+  // 🧩 Datos del evento
+  const [eventId, setEventId] = useState("");
   const [eventName, setEventName] = useState("");
   const [eventDate, setEventDate] = useState("");
-  const [savingEvent, setSavingEvent] = useState(false);
-  const [deletingEvent, setDeletingEvent] = useState(false);
+
+  // 🎟️ Configuración general
+  const [configForm, setConfigForm] = useState({
+    totalLimitPersons: 0,
+    genHPrice: 0,
+    genMPrice: 0,
+  });
 
   const modalClass = isMobile
     ? "w-[100vw] h-[100vh] max-w-none rounded-none overflow-y-auto"
-    : "sm:max-w-3xl sm:max-h-[90vh] overflow-y-auto";
-
-  const eventId = cfg?.eventId?.trim() || "";
+    : "sm:max-w-4xl sm:max-h-[90vh] overflow-y-auto";
 
   /* =============================================
-     Fetchers
+     🔄 Obtener configuración completa
   ============================================= */
-  const fetchVipLocations = async () => {
-    if (!eventId) return;
+  const fetchConfig = async () => {
+    setLoading(true);
     try {
-      const { data } = await axios.get("/api/vip-tables/locations", {
-        params: { eventId },
-      });
-      if (data.ok) setVipLocations(data.locations || []);
-    } catch {
-      toast.error("No se pudieron cargar las ubicaciones VIP.");
-    }
-  };
+      const { data } = await axios.get("/api/admin/events/config");
+      if (!data.ok) throw new Error(data.error || "Error al obtener configuración");
 
-  const fetchVipConfigs = async () => {
-    if (!eventId) return;
-    try {
-      const { data } = await axios.get("/api/vip-tables/config", {
-        params: { eventId },
-      });
-      if (data.ok) setVipConfigs(data.configs || []);
-    } catch {
-      toast.error("No se pudieron cargar las configuraciones VIP.");
-    }
-  };
+      const e = data.event;
+      setEventId(e.id);
+      setEventName(e.name || "");
+      setEventDate(e.date ? e.date.substring(0, 10) : "");
 
-  const fetchVipTables = async () => {
-    if (!eventId) return;
-    try {
-      const { data } = await axios.get("/api/vip-tables/tables", {
-        params: { eventId },
+      const male = data.tickets?.general?.hombre;
+      const female = data.tickets?.general?.mujer;
+
+      setConfigForm({
+        totalLimitPersons:
+          (male?.stockLimit ?? 0) + (female?.stockLimit ?? 0),
+        genHPrice: male ? Number(male.price) : 0,
+        genMPrice: female ? Number(female.price) : 0,
       });
-      if (data.ok) {
-        const normalized =
-          (data.data || []).map((t: any) => ({
-            ...t,
-            tableNumber:
-              typeof t.tableNumber === "number"
-                ? t.tableNumber
-                : typeof t.number === "number"
-                ? t.number
-                : typeof t.table === "number"
-                ? t.table
-                : null,
-          })) || [];
-        setVipTables(normalized);
+
+      setVipLocations(data.vipLocations || []);
+      setVipConfigs(data.vipConfigs || []);
+
+      // Opcional: si tu API incluye mesas aprobadas
+      if (Array.isArray(data.vipTables)) {
+        setVipTables(data.vipTables);
+      } else {
+        setVipTables([]);
       }
-    } catch {
-      toast.error("No se pudieron cargar las mesas VIP.");
-    }
-  };
-
-  const fetchEventBasics = async () => {
-    if (!eventId) return;
-    try {
-      const { data } = await axios.get("/api/admin/events");
-      if (data.ok && Array.isArray(data.data)) {
-        const ev = data.data.find((x: any) => x.id === eventId);
-        if (ev) {
-          setEventName(ev.name || "");
-          if (ev.date) {
-            const d = new Date(ev.date);
-            const localDate =
-              d.getFullYear() +
-              "-" +
-              String(d.getMonth() + 1).padStart(2, "0") +
-              "-" +
-              String(d.getDate()).padStart(2, "0");
-            setEventDate(localDate);
-          } else setEventDate("");
-        }
-      }
-    } catch {
-      toast.error("Error al cargar datos del evento.");
+    } catch (err) {
+      console.error(err);
+      toast.error("No se pudo cargar la configuración del evento.");
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (eventId) {
-      fetchVipLocations();
-      fetchVipConfigs();
-      fetchVipTables();
-      fetchEventBasics();
-    }
-  }, [eventId]);
+    if (open) fetchConfig();
+  }, [open]);
 
   /* =============================================
-     Acciones
+     💾 Guardar cambios de configuración
+  ============================================= */
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!eventId || !eventName.trim() || !eventDate) {
+      toast.error("Completá nombre y fecha del evento.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      const payload = {
+        eventId,
+        name: eventName.trim(),
+        date: eventDate,
+        totalLimitPersons: Number(configForm.totalLimitPersons || 0),
+        genHPrice: Number(configForm.genHPrice || 0),
+        genMPrice: Number(configForm.genMPrice || 0),
+      };
+
+      const { data } = await axios.patch("/api/admin/events/config", payload);
+
+      if (data.ok) {
+        toast.success("Configuración guardada correctamente ✅");
+        await fetchConfig();
+      } else {
+        toast.error(data.error || "Error al guardar configuración.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Error al guardar configuración.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* =============================================
+     🗑️ Eliminar ubicación VIP
   ============================================= */
   const handleDeleteLocation = async (id: string, name: string) => {
     if (!confirm(`¿Eliminar la ubicación "${name}"?`)) return;
@@ -190,11 +181,7 @@ export default function ConfigModal({
       setDeleting(id);
       await axios.delete(`/api/vip-tables/locations/${id}`);
       toast.success(`Ubicación "${name}" eliminada ✅`);
-      await Promise.all([
-        fetchVipLocations(),
-        fetchVipConfigs(),
-        fetchVipTables(),
-      ]);
+      await fetchConfig();
     } catch {
       toast.error("Error al eliminar la ubicación VIP.");
     } finally {
@@ -207,62 +194,19 @@ export default function ConfigModal({
     setOpenVipCreator(true);
   };
 
-  const handleUpdateEventBasics = async () => {
-    if (!eventId || !eventName.trim() || !eventDate) {
-      toast.error("Completá nombre y fecha del evento.");
-      return;
-    }
-    try {
-      setSavingEvent(true);
-      const { data } = await axios.patch("/api/admin/events", {
-        id: eventId,
-        name: eventName.trim(),
-        date: eventDate,
-      });
-      if (data.ok) {
-        toast.success("Evento actualizado correctamente ✅");
-        await fetchEventBasics();
-      } else toast.error(data.error || "No se pudo actualizar el evento.");
-    } catch {
-      toast.error("Error al actualizar el evento.");
-    } finally {
-      setSavingEvent(false);
-    }
-  };
-
-  const handleDeleteEvent = async () => {
-    if (!eventId) return;
-    if (!confirm("¿Seguro que querés eliminar este evento?")) return;
-    try {
-      setDeletingEvent(true);
-      const { data } = await axios.delete("/api/admin/events", {
-        data: { id: eventId },
-      });
-      if (data.ok) {
-        toast.success("Evento eliminado correctamente ✅");
-        onOpenChange(false);
-      } else toast.error(data.error || "No se pudo eliminar el evento.");
-    } catch {
-      toast.error("Error al eliminar el evento.");
-    } finally {
-      setDeletingEvent(false);
-    }
-  };
-
-  const getApprovedCount = (locationId: string) => {
+  const getApprovedCount = (locationId: string): number => {
     const approvedTables = vipTables.filter(
       (t) =>
         t.vipLocationId === locationId &&
-        (t.status?.toLowerCase() === "approved" ||
-          t.status?.toLowerCase() === "aprobado" ||
-          t.ticketStatus?.toLowerCase() === "approved" ||
-          t.ticketStatus?.toLowerCase() === "aprobado")
+        ["approved", "aprobado"].includes(
+          (t.status || t.ticketStatus || "").toLowerCase()
+        )
     );
     return approvedTables.length;
   };
 
   /* =============================================
-     Render
+     🖼️ Render UI
   ============================================= */
   return (
     <>
@@ -274,58 +218,44 @@ export default function ConfigModal({
                 <SlidersHorizontal className="w-5 h-5 text-blue-600" />
               </div>
               <div>
-                <DialogTitle className="text-xl">
-                  Configurar precios y cupos
+                <DialogTitle className="text-xl font-semibold">
+                  Configurar evento
                 </DialogTitle>
                 <DialogDescription>
-                  Cupos totales, precios generales y mesas VIP.
+                  Configurá los datos del evento, precios generales y mesas VIP.
                 </DialogDescription>
               </div>
             </div>
           </DialogHeader>
 
-          {/* ==== Edición evento ==== */}
-          <div className="rounded-xl border p-5 mt-4 space-y-4 bg-white/60">
-            <h4 className="font-semibold text-lg">Datos del evento</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <Label>Nombre</Label>
-                <Input
-                  value={eventName}
-                  onChange={(e) => setEventName(e.target.value)}
-                />
-              </div>
-              <div>
-                <Label>Fecha</Label>
-                <Input
-                  type="date"
-                  value={eventDate}
-                  onChange={(e) => setEventDate(e.target.value)}
-                />
+          {/* === FORM PRINCIPAL === */}
+          <form onSubmit={handleSaveConfig} className="space-y-6 pt-4">
+            {/* === DATOS DEL EVENTO === */}
+            <div className="rounded-xl border p-5 bg-white/70 space-y-4">
+              <h4 className="font-semibold text-lg">Datos del evento</h4>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <Label>Nombre del evento</Label>
+                  <Input
+                    value={eventName}
+                    onChange={(e) => setEventName(e.target.value)}
+                    placeholder="Ej: Hooka Fridays"
+                  />
+                </div>
+                <div>
+                  <Label>Fecha</Label>
+                  <Input
+                    type="date"
+                    value={eventDate}
+                    onChange={(e) => setEventDate(e.target.value)}
+                  />
+                </div>
               </div>
             </div>
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <Button
-                onClick={handleUpdateEventBasics}
-                disabled={savingEvent}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                {savingEvent ? "Guardando..." : "Guardar cambios"}
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={handleDeleteEvent}
-                disabled={deletingEvent}
-              >
-                {deletingEvent ? "Eliminando..." : "Eliminar evento"}
-              </Button>
-            </div>
-          </div>
 
-          {/* ==== Configuración general ==== */}
-          <form onSubmit={onSubmit} className="space-y-6 pt-4">
-            <div className="rounded-xl border p-5 bg-white/50">
-              <h4 className="font-semibold text-lg mb-3">
+            {/* === CUPOS Y PRECIOS === */}
+            <div className="rounded-xl border p-5 bg-white/50 space-y-3">
+              <h4 className="font-semibold text-lg mb-2">
                 Cupos y precios generales
               </h4>
               <div className="grid sm:grid-cols-3 gap-4">
@@ -371,7 +301,7 @@ export default function ConfigModal({
               </div>
             </div>
 
-            {/* ==== Mesas VIP ==== */}
+            {/* === MESAS VIP === */}
             <div className="rounded-xl border border-amber-200 p-5 bg-amber-50/40 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -409,9 +339,6 @@ export default function ConfigModal({
                     (c) => c.vipLocationId === loc.id
                   );
                   const approved = getApprovedCount(loc.id);
-                  const tables = vipTables.filter(
-                    (t) => t.vipLocationId === loc.id
-                  );
 
                   return (
                     <div
@@ -481,20 +408,6 @@ export default function ConfigModal({
                             </div>
                           </div>
 
-                          {tables.length > 0 && (
-                            <div className="text-xs text-muted-foreground">
-                              <b>Mesas:</b>{" "}
-                              {tables
-                                .map(
-                                  (t, i) =>
-                                    `Mesa ${
-                                      t.tableNumber || i + 1
-                                    } (${t.status || "-"})`
-                                )
-                                .join(", ")}
-                            </div>
-                          )}
-
                           {cfg.mapUrl && (
                             <div className="pt-2">
                               <a
@@ -517,46 +430,43 @@ export default function ConfigModal({
             </div>
 
             <div className="pt-2 flex justify-end">
-              <Button type="submit" className="bg-blue-600 text-white">
-                Guardar configuración
+              <Button
+                type="submit"
+                disabled={saving}
+                className="bg-blue-600 text-white"
+              >
+                {saving ? "Guardando..." : "Guardar configuración"}
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* ==== Modales hijos ==== */}
-     <CreateVipTablesModal
-  open={openVipCreator}
-  onOpenChange={setOpenVipCreator}
-  eventId={eventId}
-  vipLocations={vipLocations}
-  editLocation={editLocation}
-  onSuccess={() => {
-    fetchVipLocations();
-    fetchVipConfigs();
-    fetchVipTables();
-  }}
-  isMobile={isMobile}
-/>
+      {/* === Modales hijos === */}
+      <CreateVipTablesModal
+        open={openVipCreator}
+        onOpenChange={setOpenVipCreator}
+        eventId={eventId}
+        vipLocations={vipLocations}
+        editLocation={editLocation}
+        onSuccess={fetchConfig}
+        isMobile={isMobile}
+      />
 
       <AddVipLocationModal
-  open={openAddLocation}
-  onOpenChange={setOpenAddLocation}
-  eventId={eventId}
-  onSuccess={() => {
-    fetchVipLocations();
-    fetchVipConfigs();
-    fetchVipTables();
-  }}
-  isMobile={isMobile}
-/>
+        open={openAddLocation}
+        onOpenChange={setOpenAddLocation}
+        eventId={eventId}
+        onSuccess={fetchConfig}
+        isMobile={isMobile}
+      />
+
       <UploadVipMapModal
-  open={openUploadMap}
-  onOpenChange={setOpenUploadMap}
-  configId={selectedConfig?.id || ""}
-  onSuccess={() => fetchVipConfigs()}
-/>
+        open={openUploadMap}
+        onOpenChange={setOpenUploadMap}
+        configId={selectedConfig?.id || ""}
+        onSuccess={fetchConfig}
+      />
     </>
   );
 }

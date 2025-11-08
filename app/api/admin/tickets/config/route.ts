@@ -1,15 +1,14 @@
-// app/api/admin/tickets/config/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { Gender, PaymentStatus, TicketType } from "@prisma/client";
+import { VipTableStatus } from "@prisma/client";
 import { getVipSequentialRanges } from "@/lib/vip-tables";
 
-// ===============================
-// 🔧 Configuración general
-// ===============================
+/* -------------------------------------------------------------------------- */
+/*                               🔧 UTILIDADES                                */
+/* -------------------------------------------------------------------------- */
 const VIP_UNIT_SIZE = Math.max(1, Number(process.env.VIP_UNIT_SIZE || 10));
 
 function json(payload: unknown, init?: number | ResponseInit) {
@@ -33,11 +32,9 @@ const clampPosInt = (n: unknown, def = 1): number => {
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : def;
 };
 
-const hasValue = (v: unknown) => v !== undefined && v !== null;
-
-// ===============================
-// 🔹 Obtener o crear evento activo
-// ===============================
+/* -------------------------------------------------------------------------- */
+/*                     🔹 BUSCAR O CREAR EVENTO ACTIVO                        */
+/* -------------------------------------------------------------------------- */
 async function getOrCreateActiveEvent() {
   let event = await prisma.event.findFirst({
     where: { isActive: true },
@@ -50,16 +47,21 @@ async function getOrCreateActiveEvent() {
   });
 
   if (!event) {
+    const capEnv = Number(process.env.EVENT_CAPACITY);
+    const capacity = Number.isFinite(capEnv) && capEnv > 0 ? capEnv : 250;
+
     const created = await prisma.event.create({
       data: {
         code: process.env.EVENT_CODE || "DEFAULT",
         name: process.env.EVENT_NAME || "Evento Principal",
-        date: new Date(process.env.EVENT_DATE || "2025-11-02"),
+        date: new Date(process.env.EVENT_DATE || new Date()),
         isActive: true,
+        totalLimitPersons: capacity,
+        soldPersons: 0,
+        remainingPersons: capacity,
       },
     });
 
-    // Crear configuraciones básicas de tickets
     await prisma.ticketConfig.createMany({
       data: [
         {
@@ -95,24 +97,14 @@ async function getOrCreateActiveEvent() {
   return event!;
 }
 
-function findTicketCfg(
-  event: { ticketConfigs: Array<any> },
-  ticketType: TicketType,
-  gender: Gender | null
-) {
-  return event.ticketConfigs.find(
-    (t) => t.ticketType === ticketType && t.gender === gender
-  );
-}
-
-// ===============================
-// 🔹 GET — Obtener configuración
-// ===============================
+/* -------------------------------------------------------------------------- */
+/*                                 🔹 GET CONFIG                              */
+/* -------------------------------------------------------------------------- */
 export async function GET(_req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
 
-    // Tickets vendidos por género (GENERAL)
+    /* ---------------------- 🎟️ Entradas generales vendidas ---------------------- */
     const [soldH, soldM] = await Promise.all([
       prisma.ticket.aggregate({
         where: {
@@ -137,108 +129,163 @@ export async function GET(_req: NextRequest) {
     const soldGenH = nn0(soldH._sum.quantity);
     const soldGenM = nn0(soldM._sum.quantity);
 
-    const cfgGenH = findTicketCfg(event, "general", "hombre");
-    const cfgGenM = findTicketCfg(event, "general", "mujer");
-
-    const totalLimitPersons = nn0(
-      event.ticketConfigs.find(
-        (t) => t.ticketType === "general" && t.gender === null
-      )?.stockLimit
+    const cfgGenH = event.ticketConfigs.find(
+      (t) => t.ticketType === "general" && t.gender === "hombre"
+    );
+    const cfgGenM = event.ticketConfigs.find(
+      (t) => t.ticketType === "general" && t.gender === "mujer"
     );
 
-    // Configuración VIP por ubicación
+    /* ---------------------------- 🪑 MESAS VIP ---------------------------- */
     const vipConfigs = await prisma.vipTableConfig.findMany({
       where: { eventId: event.id },
       include: { vipLocation: true },
       orderBy: { vipLocation: { order: "asc" } },
     });
 
-    const baseVip = vipConfigs.map((c) => ({
-      vipLocationId: c.vipLocationId,
-      locationName: c.vipLocation?.name || "Ubicación",
-      price: Number(c.price),
-      limit: c.stockLimit,
-      sold: c.soldCount,
-      remaining: Math.max(0, c.stockLimit - c.soldCount),
-      capacityPerTable: c.capacityPerTable,
-    }));
-
-    // Rango secuencial (si existe helper)
-    const { total: totalTables, ranges } = await getVipSequentialRanges({
+    const { ranges } = await getVipSequentialRanges({
       prisma,
       eventId: event.id,
-    }).catch(() => ({ total: 0, ranges: [] }));
+    }).catch(() => ({ ranges: [] as any[] }));
 
-    const vipTables = baseVip.map((v) => {
+    const vipConfigMapped = vipConfigs.map((c) => {
       const range = ranges?.find(
-  (r: any) =>
-    r.vipLocationId === v.vipLocationId ||
-    r.location === v.locationName ||
-    r.locationName === v.locationName
-);
-      return { ...v, startNumber: range?.startNumber, endNumber: range?.endNumber };
+        (r: any) =>
+          r.vipLocationId === c.vipLocationId ||
+          r.location === c.vipLocation?.name
+      );
+      return {
+        vipLocationId: c.vipLocationId,
+        locationName: c.vipLocation?.name || "Ubicación",
+        price: Number(c.price),
+        limit: nn0(c.stockLimit),
+        sold: nn0(c.soldCount),
+        remaining: Math.max(0, nn0(c.stockLimit) - nn0(c.soldCount)),
+        capacityPerTable: nn0(c.capacityPerTable),
+        startNumber: range?.startNumber,
+        endNumber: range?.endNumber,
+      };
     });
 
-    const vipSoldPersons = vipTables.reduce(
-      (acc, v) => acc + v.sold * v.capacityPerTable,
+    /* ---------------------- ✅ CÁLCULO DE TOTALES ---------------------- */
+    const totalGeneralLimit =
+      nn0(cfgGenH?.stockLimit) + nn0(cfgGenM?.stockLimit);
+
+    let totalLimitPersons = nn0(event.totalLimitPersons) || totalGeneralLimit;
+
+    if (totalLimitPersons === 0 && totalGeneralLimit > 0) {
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { totalLimitPersons: totalGeneralLimit },
+      });
+      totalLimitPersons = totalGeneralLimit;
+    }
+
+    // Capacidad total VIP configurada
+    const totalVipTables = vipConfigs.reduce(
+      (acc, c) => acc + nn0(c.stockLimit),
       0
     );
 
-    const soldTotalPersons = soldGenH + soldGenM + vipSoldPersons;
-    const remainingTotalPersons = Math.max(
-      0,
-      totalLimitPersons - soldTotalPersons
+    const vipReservedCapacity = vipConfigs.reduce(
+      (acc, c) => acc + nn0(c.stockLimit) * nn0(c.capacityPerTable),
+      0
     );
 
+    // 🎟️ Mesas vendidas (tickets tipo VIP)
+    const soldVipAgg = await prisma.ticket.aggregate({
+      where: { eventId: event.id, ticketType: "vip", paymentStatus: "approved" },
+      _sum: { quantity: true },
+    });
+
+    const soldVipTables = nn0(soldVipAgg._sum.quantity);
+
+    // Capacidad promedio por mesa
+    const avgCapacityPerTable =
+      vipConfigs.length > 0
+        ? vipConfigs.reduce((acc, c) => acc + nn0(c.capacityPerTable), 0) /
+          vipConfigs.length
+        : VIP_UNIT_SIZE;
+
+    const soldVipTotalPersons = soldVipTables * avgCapacityPerTable;
+
+    // 🎫 Totales generales
+    const soldGeneralTotal = soldGenH + soldGenM;
+    const soldTotalPersons = soldGeneralTotal + soldVipTotalPersons;
+
+    // Mesas restantes (para frontend)
+    const remainingVipTables = Math.max(0, totalVipTables - soldVipTables);
+
+    // Personas restantes = capacidad total - (reservado + vendidos)
+    const remainingTotalPersons = Math.max(
+      0,
+      totalLimitPersons - (vipReservedCapacity + soldTotalPersons)
+    );
+
+    // Persistir métricas
+    await prisma.event.update({
+      where: { id: event.id },
+      data: {
+        soldPersons: soldTotalPersons,
+        remainingPersons: remainingTotalPersons,
+      },
+    });
+
+    /* ---------------------------- ✅ RESPUESTA FINAL ---------------------------- */
     return json({
+      ok: true,
       eventId: event.id,
       eventCode: event.code,
       eventName: event.name,
       eventDate: event.date.toISOString().slice(0, 10),
-      isActive: event.isActive,
       totals: {
         unitVipSize: VIP_UNIT_SIZE,
         limitPersons: totalLimitPersons,
         soldPersons: soldTotalPersons,
         remainingPersons: remainingTotalPersons,
-        totalTables,
+        totalVipTables,
+        remainingVipTables, // 🟢 NUEVO: mesas VIP disponibles reales
+        totalVipCapacity: vipReservedCapacity,
       },
       tickets: {
         general: {
           hombre: {
             price: Number(cfgGenH?.price || 0),
-            limit: totalLimitPersons,
+            limit: nn0(cfgGenH?.stockLimit),
             sold: soldGenH,
-            remaining: remainingTotalPersons,
+            remaining: Math.max(0, nn0(cfgGenH?.stockLimit) - soldGenH),
           },
           mujer: {
             price: Number(cfgGenM?.price || 0),
-            limit: totalLimitPersons,
+            limit: nn0(cfgGenM?.stockLimit),
             sold: soldGenM,
-            remaining: remainingTotalPersons,
+            remaining: Math.max(0, nn0(cfgGenM?.stockLimit) - soldGenM),
           },
         },
       },
-      vipTables,
+      vipTables: vipConfigMapped,
     });
   } catch (e) {
     console.error("[tickets/config][GET] error:", e);
-    return json({ ok: false, error: "Error interno al obtener configuración" }, 500);
+    return json(
+      { ok: false, error: "Error interno al obtener configuración" },
+      500
+    );
   }
 }
 
-// ===============================
-// 🔹 PATCH — Actualizar configuración
-// ===============================
+/* -------------------------------------------------------------------------- */
+/*                                 🔹 PATCH CONFIG                            */
+/* -------------------------------------------------------------------------- */
 export async function PATCH(req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
     const body = (await req.json()) as {
+      totalCapacity?: number;
       general?: {
-        hombre?: { price?: number | string };
-        mujer?: { price?: number | string };
+        hombre?: { price?: number | string; limit?: number };
+        mujer?: { price?: number | string; limit?: number };
       };
-      totalEntriesLimit?: number | string;
       vipConfigs?: Array<{
         vipLocationId: string;
         price?: number | string;
@@ -249,86 +296,46 @@ export async function PATCH(req: NextRequest) {
 
     const upserts: Promise<unknown>[] = [];
 
-    // Entradas generales
-    if (body.general?.hombre?.price !== undefined) {
-      const price = nn0(body.general.hombre.price);
+    // ✅ Guardar cupo total sin sumar mesas
+    if (body.totalCapacity != null) {
       upserts.push(
-        prisma.ticketConfig.upsert({
-          where: {
-            eventId_ticketType_gender: {
-              eventId: event.id,
-              ticketType: "general",
-              gender: "hombre",
-            },
-          },
-          update: { price },
-          create: {
-            eventId: event.id,
-            ticketType: "general",
-            gender: "hombre",
-            price,
-            stockLimit: 0,
-            soldCount: 0,
-          },
+        prisma.event.update({
+          where: { id: event.id },
+          data: { totalLimitPersons: nn0(body.totalCapacity) },
         })
       );
     }
 
-    if (body.general?.mujer?.price !== undefined) {
-      const price = nn0(body.general.mujer.price);
-      upserts.push(
-        prisma.ticketConfig.upsert({
-          where: {
-            eventId_ticketType_gender: {
-              eventId: event.id,
-              ticketType: "general",
-              gender: "mujer",
+    // 🎟️ Entradas generales
+    for (const gender of ["hombre", "mujer"] as const) {
+      const gen = body.general?.[gender];
+      if (gen) {
+        const price = nn0(gen.price);
+        const limit = nn0(gen.limit);
+        upserts.push(
+          prisma.ticketConfig.upsert({
+            where: {
+              eventId_ticketType_gender: {
+                eventId: event.id,
+                ticketType: "general",
+                gender,
+              },
             },
-          },
-          update: { price },
-          create: {
-            eventId: event.id,
-            ticketType: "general",
-            gender: "mujer",
-            price,
-            stockLimit: 0,
-            soldCount: 0,
-          },
-        })
-      );
-    }
-
-    // Límite total de personas
-    if (hasValue(body.totalEntriesLimit)) {
-      const stockLimit = nn0(body.totalEntriesLimit);
-      const existing = await prisma.ticketConfig.findFirst({
-        where: { eventId: event.id, ticketType: "general", gender: null },
-      });
-
-      if (existing) {
-        upserts.push(
-          prisma.ticketConfig.update({
-            where: { id: existing.id },
-            data: { stockLimit },
-          })
-        );
-      } else {
-        upserts.push(
-          prisma.ticketConfig.create({
-            data: {
+            update: { price, stockLimit: limit },
+            create: {
               eventId: event.id,
               ticketType: "general",
-              price: 0,
-              stockLimit,
+              gender,
+              price,
+              stockLimit: limit,
               soldCount: 0,
-              gender: null,
             },
           })
         );
       }
     }
 
-    // VIP Configs
+    // 🪑 Configuración VIP
     if (Array.isArray(body.vipConfigs)) {
       for (const cfg of body.vipConfigs) {
         const vipLocationId = cfg.vipLocationId;
@@ -340,16 +347,12 @@ export async function PATCH(req: NextRequest) {
           where: { eventId: event.id, vipLocationId },
         });
 
-        if (existing) {
-          upserts.push(
-            prisma.vipTableConfig.update({
+        const vipConfig = existing
+          ? await prisma.vipTableConfig.update({
               where: { id: existing.id },
               data: { price, stockLimit, capacityPerTable },
             })
-          );
-        } else {
-          upserts.push(
-            prisma.vipTableConfig.create({
+          : await prisma.vipTableConfig.create({
               data: {
                 eventId: event.id,
                 vipLocationId,
@@ -358,16 +361,34 @@ export async function PATCH(req: NextRequest) {
                 capacityPerTable,
                 soldCount: 0,
               },
-            })
-          );
+            });
+
+        const existingTables = await prisma.vipTable.count({
+          where: { eventId: event.id, vipLocationId },
+        });
+
+        if (existingTables === 0 && stockLimit > 0) {
+          const tables = Array.from({ length: stockLimit }, (_, i) => ({
+            eventId: event.id,
+            vipLocationId,
+            vipTableConfigId: vipConfig.id,
+            tableNumber: i + 1,
+            price,
+            capacityPerTable,
+            status: VipTableStatus.available,
+          }));
+          await prisma.vipTable.createMany({ data: tables });
         }
       }
     }
 
     await Promise.all(upserts);
-    return json({ ok: true });
+    return json({ ok: true, message: "Configuración guardada correctamente." });
   } catch (e) {
     console.error("[tickets/config][PATCH] error:", e);
-    return json({ ok: false, error: "Error interno al guardar configuración" }, 500);
+    return json(
+      { ok: false, error: "Error interno al guardar configuración" },
+      500
+    );
   }
 }

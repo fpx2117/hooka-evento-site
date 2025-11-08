@@ -1,5 +1,5 @@
 // ========================================================
-// Tickets Admin API — Versión Final 2025 ✅ (Total VIP corregido)
+// Tickets Admin API — Versión Final 2025 ✅ (Schema alineado)
 // ========================================================
 
 import { NextRequest, NextResponse } from "next/server";
@@ -34,6 +34,7 @@ async function verifyAuth(request: NextRequest) {
 
 const normStr = (v: any) =>
   typeof v === "string" ? v.trim() || undefined : undefined;
+
 const normNum = (v: any) =>
   v === undefined || v === null || v === "" ? undefined : Number(v);
 
@@ -72,16 +73,26 @@ export async function GET(request: NextRequest) {
     where,
     include: {
       event: { select: { id: true, name: true, date: true } },
-      vipLocation: { select: { id: true, name: true} },
-      vipTable: { select: { id: true, tableNumber: true, status: true, price: true, vipTableConfigId: true } },
-      vipTableConfig: { select: { id: true, capacityPerTable: true, price: true } },
+      vipLocationRef: { select: { id: true, name: true } },
+      vipTable: {
+        select: {
+          id: true,
+          tableNumber: true,
+          status: true,
+          price: true,
+          vipTableConfigId: true,
+        },
+      },
+      vipTableConfig: {
+        select: { id: true, capacityPerTable: true, price: true },
+      },
     },
     orderBy: { createdAt: "desc" },
   });
 
   const result = tickets.map((t) => ({
     ...t,
-    vipLocationName: t.vipLocation?.name ?? null,
+    vipLocationName: t.vipLocationRef?.name ?? null,
     vipTableNumber: t.vipTable?.tableNumber ?? null,
   }));
 
@@ -106,6 +117,7 @@ export async function POST(request: NextRequest) {
     const customerEmail = normStr(body.customerEmail);
     const customerPhone = normStr(body.customerPhone);
     const customerDni = normStr(body.customerDni);
+
     if (!customerName || !customerEmail || !customerPhone || !customerDni)
       return NextResponse.json(
         { error: "Faltan campos del cliente" },
@@ -119,23 +131,20 @@ export async function POST(request: NextRequest) {
 
     let vipTableId: string | undefined;
     let vipTableConfigId: string | undefined;
-
-    // ✅ Determinar precio correcto
     let totalPrice: Prisma.Decimal = new Prisma.Decimal(0);
 
     if (ticketType === TT.vip && vipLocationId) {
-      // 1) Si el cliente seleccionó una mesa, intentar usar su precio
       if (vipTableIdBody) {
         const mesa = await prisma.vipTable.findUnique({
           where: { id: vipTableIdBody },
           select: { id: true, price: true, vipTableConfigId: true },
         });
-        if (!mesa) {
+
+        if (!mesa)
           return NextResponse.json(
             { error: "La mesa seleccionada no existe" },
             { status: 400 }
           );
-        }
 
         if (mesa.price !== null) {
           totalPrice = new Prisma.Decimal(Number(mesa.price));
@@ -154,7 +163,6 @@ export async function POST(request: NextRequest) {
         vipTableConfigId = vipTableConfigId ?? mesa.vipTableConfigId ?? undefined;
       }
 
-      // 2) Si aún no hay precio (o no hay mesa elegida), usar config por ubicación
       if (totalPrice.equals(0)) {
         const config = await prisma.vipTableConfig.findFirst({
           where: { eventId: event.id, vipLocationId },
@@ -166,7 +174,6 @@ export async function POST(request: NextRequest) {
         }
       }
     } else {
-      // 🎟️ Entrada general (usa totalPrice del body)
       totalPrice =
         body.totalPrice !== undefined &&
         body.totalPrice !== null &&
@@ -175,8 +182,12 @@ export async function POST(request: NextRequest) {
           : new Prisma.Decimal(0);
     }
 
-    // 🪑 Si es VIP aprobado pero no vino mesa específica, asignar una libre
-    if (ticketType === TT.vip && vipLocationId && paymentStatus === PS.approved && !vipTableId) {
+    if (
+      ticketType === TT.vip &&
+      vipLocationId &&
+      paymentStatus === PS.approved &&
+      !vipTableId
+    ) {
       const mesa = await prisma.vipTable.findFirst({
         where: {
           eventId: event.id,
@@ -192,7 +203,6 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
 
-      // Recalcular precio con la mesa asignada (o su config)
       if (mesa.price != null) {
         totalPrice = new Prisma.Decimal(Number(mesa.price));
       } else if (mesa.vipTableConfigId) {
@@ -235,13 +245,15 @@ export async function POST(request: NextRequest) {
         customerDni,
         paymentMethod: PM.mercadopago,
         paymentStatus,
-        ...(vipLocationId && { vipLocation: { connect: { id: vipLocationId } } }),
+        ...(vipLocationId && {
+          vipLocationRef: { connect: { id: vipLocationId } },
+        }),
         ...(vipTableId && { vipTable: { connect: { id: vipTableId } } }),
         ...(vipTableConfigId && {
           vipTableConfig: { connect: { id: vipTableConfigId } },
         }),
       },
-      include: { vipLocation: true, vipTable: true, vipTableConfig: true },
+      include: { vipLocationRef: true, vipTable: true, vipTableConfig: true },
     });
 
     if (paymentStatus === PS.approved) {
@@ -251,10 +263,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, ticket });
   } catch (e) {
     console.error("[Ticket POST Error]", e);
-    return NextResponse.json(
-      { error: "Error al crear ticket" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Error al crear ticket" }, { status: 500 });
   }
 }
 
@@ -276,23 +285,21 @@ export async function PUT(request: NextRequest) {
       where: { id },
       include: { vipTable: true },
     });
+
     if (!current)
       return NextResponse.json({ error: "Ticket no encontrado" }, { status: 404 });
 
     const newStatus = normStr(body.paymentStatus) as PS | undefined;
     const data: Prisma.TicketUpdateInput = {};
 
-    // ====================================================
-    // Caso 1: Cambio a aprobado (VIP o general)
-    // ====================================================
+    // --- Cambio a aprobado ---
     if (newStatus === PS.approved && current.paymentStatus !== PS.approved) {
       let vipTableIdToSet: string | undefined;
-      let vipTableConfigIdToSet: string | null | undefined = undefined;
+      let vipTableConfigIdToSet: string | null | undefined;
       let newTotal: Prisma.Decimal | undefined;
 
       await prisma.$transaction(async (tx) => {
         if (current.ticketType === TT.vip && current.vipLocationId) {
-          // Asignar mesa disponible
           const mesa = await tx.vipTable.findFirst({
             where: {
               eventId: current.eventId,
@@ -318,7 +325,6 @@ export async function PUT(request: NextRequest) {
             vipTableIdToSet = mesa.id;
             vipTableConfigIdToSet = mesa.vipTableConfigId ?? null;
 
-            // Recalcular total con la mesa (o su config)
             if (mesa.price != null) {
               newTotal = new Prisma.Decimal(Number(mesa.price));
             } else if (mesa.vipTableConfigId) {
@@ -350,15 +356,13 @@ export async function PUT(request: NextRequest) {
 
       const updated = await prisma.ticket.findUnique({
         where: { id },
-        include: { vipLocation: true, vipTable: true, vipTableConfig: true },
+        include: { vipLocationRef: true, vipTable: true, vipTableConfig: true },
       });
 
       return NextResponse.json({ ok: true, ticket: updated });
     }
 
-    // ====================================================
-    // Caso 2: Actualización normal
-    // ====================================================
+    // --- Actualización normal ---
     if (body.customerName) data.customerName = normStr(body.customerName);
     if (body.customerEmail) data.customerEmail = normStr(body.customerEmail);
     if (body.customerPhone) data.customerPhone = normStr(body.customerPhone);
@@ -373,7 +377,7 @@ export async function PUT(request: NextRequest) {
     const updated = await prisma.ticket.update({
       where: { id },
       data,
-      include: { vipLocation: true, vipTable: true, vipTableConfig: true },
+      include: { vipLocationRef: true, vipTable: true, vipTableConfig: true },
     });
 
     if (updated.paymentStatus === PS.approved && !updated.validationCode) {
@@ -383,14 +387,10 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ ok: true, ticket: updated });
   } catch (e) {
     console.error("[Ticket PUT Error]", e);
-    return NextResponse.json(
-      { error: "Error al actualizar ticket" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Error al actualizar ticket" }, { status: 500 });
   }
 }
 
-// ✅ Alias PATCH → usa la misma lógica que PUT
 export const PATCH = PUT;
 
 /* ============================================================
@@ -445,6 +445,15 @@ export async function DELETE(request: NextRequest) {
           paymentStatus: ticket.paymentStatus,
           paymentMethod: ticket.paymentMethod,
           archiveReason: AR.admin_cancelled,
+          ...(ticket.vipLocationId && {
+            vipLocationRef: { connect: { id: ticket.vipLocationId } },
+          }),
+          ...(ticket.vipTableId && {
+            vipTable: { connect: { id: ticket.vipTableId } },
+          }),
+          ...(ticket.vipTableConfigId && {
+            vipTableConfig: { connect: { id: ticket.vipTableConfigId } },
+          }),
         },
       });
 
@@ -454,9 +463,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ ok: true, archived: true });
   } catch (e) {
     console.error("[Ticket DELETE Error]", e);
-    return NextResponse.json(
-      { error: "Error al eliminar ticket" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Error al eliminar ticket" }, { status: 500 });
   }
 }

@@ -344,38 +344,42 @@ export default function Page() {
   };
 
   const fetchVipAvailability = async (vipLocationId: string): Promise<void> => {
-    setLoadingAvail(true);
-    setAvailError(null);
-    try {
-      const r = await fetch(
-        `/api/vip-tables/availability?vipLocationId=${encodeURIComponent(vipLocationId)}`,
-        { cache: "no-store" }
-      );
-      const data: VipAvailability = await r.json();
-      if (!r.ok || !data?.ok)
-        throw new Error((data as any)?.error || "No se pudo obtener disponibilidad");
+  setLoadingAvail(true);
+  setAvailError(null);
+  try {
+    const r = await fetch(
+      `/api/vip-tables/availability?vipLocationId=${encodeURIComponent(vipLocationId)}`,
+      { cache: "no-store" }
+    );
+    const data = await r.json();
 
-      setAvailability(data);
-
-      const start = (data.startNumber ?? 1) as number;
-      const end = (data.endNumber ?? data.limit ?? 0) as number;
-      const allNumbers = range(start, end);
-      const takenSet = new Set<number>(
-        (Array.isArray(data.taken) ? data.taken : []).map(Number)
-      );
-      const libres = allNumbers.filter((n) => !takenSet.has(n));
-
-      setAvailableNumbers(libres);
-    } catch (e) {
-      const err = e as Error;
-      console.error("[VIP availability] error", err);
-      setAvailError(err?.message || "Error obteniendo disponibilidad");
-      setAvailability(null);
-      setAvailableNumbers([]);
-    } finally {
-      setLoadingAvail(false);
+    if (!r.ok || !data?.ok) {
+      throw new Error(data?.error || "No se pudo obtener disponibilidad");
     }
-  };
+
+    // ✅ Guardamos toda la data del endpoint
+    setAvailability(data);
+
+    // ✅ Extraemos las mesas reales
+    const allTables = Array.isArray(data.tables) ? data.tables : [];
+
+    // ✅ Filtramos las disponibles
+    const available = allTables.filter((t: any) => t.available);
+
+    // ✅ Creamos una lista de números disponibles
+    const libres = available.map((t: any) => t.tableNumber);
+
+    setAvailableNumbers(libres);
+  } catch (e) {
+    const err = e as Error;
+    console.error("[VIP availability] error", err);
+    setAvailError(err.message || "Error obteniendo disponibilidad");
+    setAvailability(null);
+    setAvailableNumbers([]);
+  } finally {
+    setLoadingAvail(false);
+  }
+};
 
   const fetchConfig = async (): Promise<void> => {
     try {
@@ -1037,18 +1041,12 @@ export default function Page() {
         isMobile={isMobile}
       />
 
-      <ConfigModal
-        open={showConfigModal}
-        onOpenChange={setShowConfigModal}
-        cfg={cfg}
-        // ✅ props obligatorias del modal
-        configForm={configForm}
-        setConfigForm={setConfigForm}
-        vipTablesForm={vipTablesForm}
-        setVipTablesForm={setVipTablesForm}
-        onSubmit={saveConfig}
-        isMobile={isMobile}
-      />
+     <ConfigModal
+  open={showConfigModal}
+  onOpenChange={setShowConfigModal}
+  cfg={cfg}
+  isMobile={isMobile}
+/>
 
       <DiscountsModal
         open={showDiscountsModal}

@@ -34,7 +34,7 @@ function toInt(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Campos seleccionados del Ticket (incluye VIP y relaciones necesarias) */
+/** Campos seleccionados del Ticket (alineado al schema actual) */
 const SELECT_FIELDS = {
   id: true,
   validationCode: true,
@@ -51,7 +51,7 @@ const SELECT_FIELDS = {
   eventDate: true,
 
   event: { select: { id: true, name: true, date: true } },
-  vipLocation: { select: { name: true } },
+  vipLocationRef: { select: { name: true } },
   vipTable: { select: { tableNumber: true, capacityPerTable: true } },
   vipTableConfig: { select: { capacityPerTable: true } },
 } as const;
@@ -76,7 +76,7 @@ function serialize(t: any) {
 
     eventName: t.event?.name ?? null,
 
-    vipLocation: t.vipLocation?.name ?? null,
+    vipLocation: t.vipLocationRef?.name ?? null,
     tableNumber: toInt(t.vipTable?.tableNumber),
     capacityPerTable:
       toInt(t.vipTable?.capacityPerTable) ??

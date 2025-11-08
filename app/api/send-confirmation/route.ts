@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       where: { id: recordId },
       include: {
         event: true,
-        vipLocation: true,
+        vipLocationRef: true,
         vipTable: true,
         vipTableConfig: true,
       },
@@ -76,30 +76,25 @@ export async function POST(req: NextRequest) {
         { status: 409 }
       );
 
-    // -------------------------------------------------------------
-    // Generar QR y datos base
-    // -------------------------------------------------------------
+    /* ---------------------------------------------------------------------- */
+    /*                      Generar QR y datos del ticket                      */
+    /* ---------------------------------------------------------------------- */
     const base = getPublicBaseUrl(req);
     const code = normalizeSixDigitCode(ticket.validationCode ?? "") ?? "";
     const validateUrl = buildValidateUrl(base, code);
     const qr = await makeQrDataUrl(validateUrl);
 
-    // -------------------------------------------------------------
-    // Cálculo seguro del total (soporte para Decimal)
-    // -------------------------------------------------------------
+    /* ---------------------------------------------------------------------- */
+    /*               Cálculo del total basado en configuraciones              */
+    /* ---------------------------------------------------------------------- */
     const totalPrice = parseDecimal(ticket.totalPrice);
-    const vipPrice = parseDecimal(ticket.vipTableConfig?.price);
+    const vipConfigPrice = parseDecimal(ticket.vipTableConfig?.price);
     const quantity = Number(ticket.quantity) || 1;
 
     let total = 0;
-
-    if (totalPrice > 0) {
-      total = totalPrice;
-    } else if (vipPrice > 0) {
-      total = vipPrice;
-    } else if (totalPrice === 0 && vipPrice === 0) {
-      total = 1 * quantity;
-    }
+    if (totalPrice > 0) total = totalPrice;
+    else if (vipConfigPrice > 0) total = vipConfigPrice;
+    else total = 1 * quantity;
 
     const totalFormatted = `$ ${formatARS(total)}`;
     const dateStr = ticket.event?.date
@@ -108,9 +103,9 @@ export async function POST(req: NextRequest) {
 
     const isVip = ticket.ticketType === "vip";
 
-    // -------------------------------------------------------------
-    // Generar HTML del correo
-    // -------------------------------------------------------------
+    /* ---------------------------------------------------------------------- */
+    /*                             Generar el HTML                            */
+    /* ---------------------------------------------------------------------- */
     const html = emailTemplateHooka({
       name: ticket.customerName,
       validationCode: code,
@@ -122,17 +117,17 @@ export async function POST(req: NextRequest) {
         : "-",
       quantity,
       date: dateStr,
-      vipLocation: ticket.vipLocation?.name ?? null,
+      vipLocation: ticket.vipLocationRef?.name ?? null,
       vipTableNumber: ticket.vipTable?.tableNumber ?? null,
       vipCapacity: ticket.vipTableConfig?.capacityPerTable ?? null,
     });
 
-    // -------------------------------------------------------------
-    // Envío del correo
-    // -------------------------------------------------------------
+    /* ---------------------------------------------------------------------- */
+    /*                            Envío del correo                            */
+    /* ---------------------------------------------------------------------- */
     const resend = new Resend(process.env.RESEND_API_KEY);
     const subject = isVip
-      ? `🎟️ Tu entrada VIP está confirmada - Hooka (${ticket.vipLocation?.name || "VIP"})`
+      ? `🎟️ Tu entrada VIP está confirmada - Hooka (${ticket.vipLocationRef?.name || "VIP"})`
       : `🎟️ Tu entrada está confirmada - Hooka`;
 
     await resend.emails.send({
@@ -142,9 +137,9 @@ export async function POST(req: NextRequest) {
       html,
     });
 
-    // -------------------------------------------------------------
-    // Actualizar estado de envío
-    // -------------------------------------------------------------
+    /* ---------------------------------------------------------------------- */
+    /*                       Actualizar estado de envío                       */
+    /* ---------------------------------------------------------------------- */
     await prisma.ticket.update({
       where: { id: ticket.id },
       data: { emailSentAt: new Date() },
