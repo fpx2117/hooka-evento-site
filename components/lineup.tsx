@@ -26,6 +26,13 @@ const INITIAL_DJS = [
     youtubeUrl: "https://www.youtube.com/@EIRONRMX",
   },
   {
+    name: "Cris DJ",
+    specialty: "",
+    image: "/cris_dj.jpeg",
+    spotifyUrl: "",
+    youtubeUrl: "https://www.youtube.com/channel/UCR5t8xZVE9YbTqbmfGbSe3A",
+  },
+  {
     name: "Braian Segovia DJ",
     specialty: "",
     image: "/braiansegoviadj.jpg",
