@@ -61,7 +61,7 @@ export function CTA() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-6 pt-4">
               <div className="flex items-center gap-3 text-white/90">
                 <Calendar className="w-5 h-5" />
-                <span className="font-medium">Domingo 16 de noviembre</span>
+                <span className="font-medium">Domingo 07 de diciembre</span>
               </div>
               <div className="flex items-center gap-3 text-white/90">
                 <MapPin className="w-5 h-5" />
