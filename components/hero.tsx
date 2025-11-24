@@ -15,7 +15,7 @@ import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 interface EventData {
   id: string;
   label: string;
-  iso: string; // ISO 8601 string, e.g., "2025-12-07T20:00:00-03:00"
+  iso: string;
   tag: string;
 }
 
@@ -38,19 +38,19 @@ const EVENTS: EventData[] = [
     id: "1",
     label: "07-12-2025",
     iso: "2025-12-07T20:00:00-03:00", 
-    tag: "Primera fecha",
+    tag: "PRIMERA FECHA",
   },
   {
     id: "2",
     label: "25-12-2025",
     iso: "2025-12-25T12:00:00-03:00",
-    tag: "Segunda fecha",
+    tag: "SEGUNDA FECHA",
   },
   {
     id: "3",
     label: "31-12-2025",
     iso: "2025-12-31T12:00:00-03:00",
-    tag: "Tercera fecha",
+    tag: "TERCERA FECHA",
   },
 ];
 
@@ -61,8 +61,6 @@ const EVENTS: EventData[] = [
 export function Hero() {
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [showVIPModal, setShowVIPModal] = useState(false);
-
-  // Estado para cada countdown, inicializado con el tipo correcto
   const [timers, setTimers] = useState<TimerState[]>(
     EVENTS.map(() => ({
       days: 0,
@@ -71,70 +69,120 @@ export function Hero() {
       seconds: 0,
     }))
   );
+  const [error, setError] = useState<string | null>(null);
 
-  // Timestamps de las fechas
   const targetMsList = useMemo(
     () => EVENTS.map((e) => new Date(e.iso).getTime()),
     []
   );
 
-  // Función para formatear el número con dos dígitos, envuelta en useCallback
   const pad = useCallback((n: number): string => n.toString().padStart(2, "0"), []);
 
   useEffect(() => {
-    // Función de cálculo de tick
     const tick = () => {
-      const now = Date.now();
-      const updated = targetMsList.map((target) => {
-        const diff = Math.max(target - now, 0); 
+      try {
+        const now = Date.now();
+        const updated = targetMsList.map((target) => {
+          const diff = Math.max(target - now, 0); 
+          const MS_PER_DAY = 86_400_000;
+          const MS_PER_HOUR = 3_600_000;
+          const MS_PER_MINUTE = 60_000;
+          const MS_PER_SECOND = 1000;
 
-        const MS_PER_DAY = 86_400_000;
-        const MS_PER_HOUR = 3_600_000;
-        const MS_PER_MINUTE = 60_000;
-        const MS_PER_SECOND = 1000;
-
-        return {
-          days: Math.floor(diff / MS_PER_DAY),
-          hours: Math.floor((diff % MS_PER_DAY) / MS_PER_HOUR),
-          minutes: Math.floor((diff % MS_PER_HOUR) / MS_PER_MINUTE),
-          seconds: Math.floor((diff % MS_PER_MINUTE) / MS_PER_SECOND),
-        };
-      });
-      setTimers(updated);
+          return {
+            days: Math.floor(diff / MS_PER_DAY),
+            hours: Math.floor((diff % MS_PER_DAY) / MS_PER_HOUR),
+            minutes: Math.floor((diff % MS_PER_HOUR) / MS_PER_MINUTE),
+            seconds: Math.floor((diff % MS_PER_MINUTE) / MS_PER_SECOND),
+          };
+        });
+        setTimers(updated);
+      } catch (err) {
+        console.error('Error in tick function:', err);
+        setError('Error updating countdown');
+      }
     };
 
-    tick(); // Ejecutar inmediatamente al montar
+    tick();
     const id = setInterval(tick, 1000);
-    return () => clearInterval(id); // Limpiar al desmontar
+    return () => clearInterval(id);
   }, [targetMsList]);
 
-  // Ordenar por fecha más cercana y asignar tamaños
   const sortedCountdowns: SortedCountdown[] = useMemo(() => {
-    return EVENTS.map((event, index) => ({
-      ...event,
-      time: timers[index],
-      targetMs: targetMsList[index],
-    }))
-      .sort((a, b) => a.targetMs - b.targetMs)
-      .map((item, index) => ({
-        ...item,
-        size: index === 0 ? "big" : index === 1 ? "medium" : "small",
-      }));
+    try {
+      return EVENTS.map((event, index) => ({
+        ...event,
+        time: timers[index],
+        targetMs: targetMsList[index],
+      }))
+        .sort((a, b) => a.targetMs - b.targetMs)
+        .map((item, index) => ({
+          ...item,
+          size: index === 0 ? "big" : index === 1 ? "medium" : "small",
+        }));
+    } catch (err) {
+      console.error('Error sorting countdowns:', err);
+      setError('Error processing events');
+      return [];
+    }
   }, [timers, targetMsList]);
 
+  const handleTicketModalOpen = useCallback((open: boolean) => {
+    try {
+      setShowTicketModal(open);
+      setError(null);
+    } catch (err) {
+      console.error('Error opening ticket modal:', err);
+      setError('Error opening ticket modal');
+    }
+  }, []);
+
+  const handleVIPModalOpen = useCallback((open: boolean) => {
+    try {
+      setShowVIPModal(open);
+      setError(null);
+    } catch (err) {
+      console.error('Error opening VIP modal:', err);
+      setError('Error opening VIP modal');
+    }
+  }, []);
+
+  // Si hay un error crítico, mostrar mensaje simple
+  if (error) {
+    return (
+      <section className="relative min-h-[100svh] bg-red-600 flex items-center justify-center text-white">
+        <div className="text-center p-8">
+          <h1 className="text-2xl font-bold mb-4">Error</h1>
+          <p className="mb-4">{error}</p>
+          <Button 
+            onClick={() => setError(null)}
+            className="bg-white text-red-600 hover:bg-gray-100"
+          >
+            Reintentar
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="relative min-h-[100svh] overflow-hidden text-white">
-      <HeroBackgroundEasy
-        mobile={{ rows: 4, cols: 1 }}
-        desktop={{ rows: 4, cols: 3 }}
-        fontMobile="clamp(2.6rem, 21vw, 9rem)"
-        opacity={0.65}
-        gap="clamp(0px, 1vh, 10px)"
-        navTopPx={72}
-      />
+      {/* Fondo rojo sólido como respaldo */}
+      <div className="absolute inset-0 bg-red-600 z-0" />
+      
+      {/* HeroBackgroundEasy envuelto en un contenedor con altura completa */}
+      <div className="absolute inset-0 z-0 min-h-[100svh]">
+        <HeroBackgroundEasy
+          mobile={{ rows: 4, cols: 1 }}
+          desktop={{ rows: 4, cols: 3 }}
+          fontMobile="clamp(2.6rem, 21vw, 9rem)"
+          opacity={0.75}
+          gap="clamp(0px, 1vh, 10px)"
+          navTopPx={72}
+        />
+      </div>
 
-      <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4">
+      <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_1fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4 pb-8">
         {/* Lips / logo */}
         <div className="row-start-2 translate-y-[clamp(18px,5.2vh,56px)] md:translate-y-[clamp(64px,10.5vh,170px)]">
           <div className="relative lip-wrap">
@@ -152,6 +200,10 @@ export function Hero() {
                 lip-float md:hover:lip-pop
                 translate-x-[2px] md:translate-x-0
               `}
+              onError={(e) => {
+                console.error('Error loading image');
+                setError('Error loading image');
+              }}
             />
           </div>
         </div>
@@ -160,7 +212,6 @@ export function Hero() {
         <div className="row-start-3 w-full text-center md:-translate-y-[56px]">
           <div className="mt-[clamp(14px,3.8vh,48px)] md:mt-3" />
 
-          {/* 🔥 BLOQUE CORREGIDO - ESPACIADO OPTIMIZADO */}
           <div
             className={`
               flex flex-col 
@@ -183,13 +234,12 @@ export function Hero() {
                   ? "scale-110 md:scale-125"
                   : "scale-70 md:scale-80";
 
-              // Márgenes optimizados - más espacio entre segunda y tercera fecha
               const verticalMargin =
                 index === 1 
-                  ? "mt-2 -mb-6 md:-mb-8"  // Separación adecuada después del primero
+                  ? "mt-2 -mb-6 md:-mb-8"
                   : index === 2 
-                  ? "mt-4 -mb-4 md:-mb-6"   // Más espacio antes del tercero
-                  : ""; // Primer bloque sin margen especial
+                  ? "mt-4 -mb-4 md:-mb-6"
+                  : "";
               
               const timePassed =
                 cd.time.days === 0 &&
@@ -228,14 +278,13 @@ export function Hero() {
                 >
                   <span 
                     className={`
-                      text-[10px] sm:text-xs md:text-sm uppercase tracking-[0.22em] text-white/80
+                      text-[10px] sm:text-xs md:text-sm uppercase tracking-[0.22em] text-white/80 font-bold
                       ${index > 0 ? "mt-1 md:mt-1.5" : ""}
                     `}
                   >
                     {cd.tag}
                   </span>
 
-                  {/* Contador */}
                   <div className="relative inline-flex items-end justify-center gap-2 sm:gap-3 md:gap-4 w-full">
                     <span
                       aria-hidden
@@ -256,7 +305,6 @@ export function Hero() {
                     <TimeBox value={pad(cd.time.seconds)} label="SEG" />
                   </div>
 
-                  {/* Línea divisoria - solo en el primer countdown */}
                   {index === 0 && (
                     <div className="mx-auto mt-2 h-[2px] w-[120px] sm:w-[150px] rounded-full bg-white/15" />
                   )}
@@ -265,7 +313,7 @@ export function Hero() {
             })}
           </div>
 
-          {/* Chips de fecha y ubicación - CON MÁRGEN AUMENTADO */}
+          {/* Chips de fecha y ubicación */}
           <div className="mt-8 md:mt-10 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <Calendar className="h-3.5 w-3.5 opacity-90" />
@@ -285,7 +333,7 @@ export function Hero() {
           <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-4 pt-6 md:pt-8 px-4 w-full">
             <Button
               size="lg"
-              onClick={() => setShowTicketModal(true)}
+              onClick={() => handleTicketModalOpen(true)}
               className={`
                 w-full md:w-auto
                 text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
@@ -301,7 +349,7 @@ export function Hero() {
 
             <Button
               size="lg"
-              onClick={() => setShowVIPModal(true)}
+              onClick={() => handleVIPModalOpen(true)}
               className={`
                 w-full md:w-auto
                 text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
@@ -315,6 +363,8 @@ export function Hero() {
               ¡Reservá tu MESA VIP!
             </Button>
           </div>
+
+          
         </div>
 
         <div className="row-start-1" />
@@ -323,13 +373,15 @@ export function Hero() {
 
       <TicketSalesModal
         open={showTicketModal}
-        onOpenChange={setShowTicketModal}
+        onOpenChange={handleTicketModalOpen}
       />
 
-      <VIPTableModal open={showVIPModal} onOpenChange={setShowVIPModal} />
+      <VIPTableModal 
+        open={showVIPModal} 
+        onOpenChange={handleVIPModalOpen}
+      />
 
       <style jsx>{`
-        /* ... Estilos Jsx sin cambios ... */
         @keyframes lipFloat {
           0% {
             transform: translateY(0) rotate(0deg);
