@@ -56,7 +56,7 @@ async function getOrCreateActiveEvent() {
         name: process.env.EVENT_NAME || "Evento Principal",
         date: new Date(process.env.EVENT_DATE || new Date()),
         isActive: true,
-        totalLimitPersons: capacity,
+        totalLimitPersons: capacity, // capacidad total del venue
         soldPersons: 0,
         remainingPersons: capacity,
       },
@@ -128,6 +128,7 @@ export async function GET(_req: NextRequest) {
 
     const soldGenH = nn0(soldH._sum.quantity);
     const soldGenM = nn0(soldM._sum.quantity);
+    const soldGeneralTotal = soldGenH + soldGenM;
 
     const cfgGenH = event.ticketConfigs.find(
       (t) => t.ticketType === "general" && t.gender === "hombre"
@@ -136,13 +137,20 @@ export async function GET(_req: NextRequest) {
       (t) => t.ticketType === "general" && t.gender === "mujer"
     );
 
-    /* ---------------------------- 🪑 MESAS VIP ---------------------------- */
+    /* ---------------------------- 🪑 MESAS VIP CONFIG ---------------------------- */
     const vipConfigs = await prisma.vipTableConfig.findMany({
       where: { eventId: event.id },
       include: { vipLocation: true },
       orderBy: { vipLocation: { order: "asc" } },
     });
 
+    // Capacidad total VIP reservada (mesas * capacidad)
+    const vipReservedCapacity = vipConfigs.reduce(
+      (acc, c) => acc + nn0(c.stockLimit) * nn0(c.capacityPerTable),
+      0
+    );
+
+    // Ranges para numeración secuencial (solo visual)
     const { ranges } = await getVipSequentialRanges({
       prisma,
       eventId: event.id,
@@ -158,7 +166,7 @@ export async function GET(_req: NextRequest) {
         vipLocationId: c.vipLocationId,
         locationName: c.vipLocation?.name || "Ubicación",
         price: Number(c.price),
-        limit: nn0(c.stockLimit),
+        limit: nn0(c.stockLimit), // cantidad de mesas
         sold: nn0(c.soldCount),
         remaining: Math.max(0, nn0(c.stockLimit) - nn0(c.soldCount)),
         capacityPerTable: nn0(c.capacityPerTable),
@@ -167,67 +175,81 @@ export async function GET(_req: NextRequest) {
       };
     });
 
-    /* ---------------------- ✅ CÁLCULO DE TOTALES ---------------------- */
-    const totalGeneralLimit =
+    /* ----------------------------- 🪑 MESAS VIP VENDIDAS ----------------------------- */
+    // Contamos mesas realmente vendidas desde vipTable (status = "sold")
+    const vipSoldTables = await prisma.vipTable.findMany({
+      where: { eventId: event.id, status: VipTableStatus.sold },
+      select: { capacityPerTable: true },
+    });
+
+    const soldVipPersons = vipSoldTables.reduce(
+      (acc, t) => acc + nn0(t.capacityPerTable),
+      0
+    );
+    const soldVipTablesCount = vipSoldTables.length;
+
+    /* ---------------------- ✅ CÁLCULO DE TOTALES (MODELO B) ---------------------- */
+
+    // Cupo general configurado (por stock de géneros)
+    const generalLimit =
       nn0(cfgGenH?.stockLimit) + nn0(cfgGenM?.stockLimit);
 
-    let totalLimitPersons = nn0(event.totalLimitPersons) || totalGeneralLimit;
+    // Capacidad total del venue
+    let totalLimitPersons = nn0(event.totalLimitPersons);
 
-    if (totalLimitPersons === 0 && totalGeneralLimit > 0) {
+    // Si no hay valor aún, inferimos desde configuración (general + VIP reservada)
+    if (totalLimitPersons === 0) {
+      const inferred = generalLimit + vipReservedCapacity;
+      totalLimitPersons = inferred;
       await prisma.event.update({
         where: { id: event.id },
-        data: { totalLimitPersons: totalGeneralLimit },
+        data: { totalLimitPersons: inferred },
       });
-      totalLimitPersons = totalGeneralLimit;
     }
 
-    // Capacidad total VIP configurada
+    // Capacidad máxima disponible para generales considerando VIP reservado
+    const maxGeneralCapacity = Math.max(
+      0,
+      totalLimitPersons - vipReservedCapacity
+    );
+
+    // Lo que el cupo general permite vender según stock (sin venue)
+    const generalRemainingByQuota = Math.max(
+      0,
+      generalLimit - soldGeneralTotal
+    );
+
+    // Lo que el venue permite vender para generales (descontando VIP reservado)
+    const generalRemainingByVenue = Math.max(
+      0,
+      maxGeneralCapacity - soldGeneralTotal
+    );
+
+    // Entradas generales realmente disponibles (lo más restrictivo)
+    const remainingGeneralPersons = Math.min(
+      generalRemainingByQuota,
+      generalRemainingByVenue
+    );
+
+    // Mesas VIP totales y restantes
     const totalVipTables = vipConfigs.reduce(
       (acc, c) => acc + nn0(c.stockLimit),
       0
     );
-
-    const vipReservedCapacity = vipConfigs.reduce(
-      (acc, c) => acc + nn0(c.stockLimit) * nn0(c.capacityPerTable),
-      0
-    );
-
-    // 🎟️ Mesas vendidas (tickets tipo VIP)
-    const soldVipAgg = await prisma.ticket.aggregate({
-      where: { eventId: event.id, ticketType: "vip", paymentStatus: "approved" },
-      _sum: { quantity: true },
-    });
-
-    const soldVipTables = nn0(soldVipAgg._sum.quantity);
-
-    // Capacidad promedio por mesa
-    const avgCapacityPerTable =
-      vipConfigs.length > 0
-        ? vipConfigs.reduce((acc, c) => acc + nn0(c.capacityPerTable), 0) /
-          vipConfigs.length
-        : VIP_UNIT_SIZE;
-
-    const soldVipTotalPersons = soldVipTables * avgCapacityPerTable;
-
-    // 🎫 Totales generales
-    const soldGeneralTotal = soldGenH + soldGenM;
-    const soldTotalPersons = soldGeneralTotal + soldVipTotalPersons;
-
-    // Mesas restantes (para frontend)
-    const remainingVipTables = Math.max(0, totalVipTables - soldVipTables);
-
-    // Personas restantes = capacidad total - (reservado + vendidos)
-    const remainingTotalPersons = Math.max(
+    const remainingVipTables = Math.max(
       0,
-      totalLimitPersons - (vipReservedCapacity + soldTotalPersons)
+      totalVipTables - soldVipTablesCount
     );
 
-    // Persistir métricas
+    // Personas vendidas totales (general + VIP)
+    const soldTotalPersons = soldGeneralTotal + soldVipPersons;
+
+    // Persistimos métricas en el evento
     await prisma.event.update({
       where: { id: event.id },
       data: {
         soldPersons: soldTotalPersons,
-        remainingPersons: remainingTotalPersons,
+        remainingPersons: remainingGeneralPersons, // usamos las "entradas generales disponibles" como referencia
       },
     });
 
@@ -240,12 +262,12 @@ export async function GET(_req: NextRequest) {
       eventDate: event.date.toISOString().slice(0, 10),
       totals: {
         unitVipSize: VIP_UNIT_SIZE,
-        limitPersons: totalLimitPersons,
-        soldPersons: soldTotalPersons,
-        remainingPersons: remainingTotalPersons,
+        limitPersons: totalLimitPersons, // capacidad total del lugar
+        soldPersons: soldTotalPersons, // personas esperadas (general + VIP)
+        remainingPersons: remainingGeneralPersons, // lo que mostrás como "Entradas generales disponibles"
         totalVipTables,
-        remainingVipTables, // 🟢 NUEVO: mesas VIP disponibles reales
-        totalVipCapacity: vipReservedCapacity,
+        remainingVipTables, // mesas VIP disponibles
+        totalVipCapacity: vipReservedCapacity, // lugares reservados para VIP
       },
       tickets: {
         general: {
@@ -281,7 +303,7 @@ export async function PATCH(req: NextRequest) {
   try {
     const event = await getOrCreateActiveEvent();
     const body = (await req.json()) as {
-      totalCapacity?: number;
+      totalCapacity?: number; // capacidad total del venue (MODELO B)
       general?: {
         hombre?: { price?: number | string; limit?: number };
         mujer?: { price?: number | string; limit?: number };
@@ -289,14 +311,14 @@ export async function PATCH(req: NextRequest) {
       vipConfigs?: Array<{
         vipLocationId: string;
         price?: number | string;
-        stockLimit?: number | string;
+        stockLimit?: number | string; // cantidad de mesas
         capacityPerTable?: number | string;
       }>;
     };
 
     const upserts: Promise<unknown>[] = [];
 
-    // ✅ Guardar cupo total sin sumar mesas
+    // ✅ Guardar capacidad total del venue (no suma mesas, es el límite global)
     if (body.totalCapacity != null) {
       upserts.push(
         prisma.event.update({
@@ -306,7 +328,7 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    // 🎟️ Entradas generales
+    // 🎟️ Entradas generales (hombre / mujer)
     for (const gender of ["hombre", "mujer"] as const) {
       const gen = body.general?.[gender];
       if (gen) {
@@ -341,7 +363,10 @@ export async function PATCH(req: NextRequest) {
         const vipLocationId = cfg.vipLocationId;
         const price = nn0(cfg.price);
         const stockLimit = nn0(cfg.stockLimit);
-        const capacityPerTable = clampPosInt(cfg.capacityPerTable, VIP_UNIT_SIZE);
+        const capacityPerTable = clampPosInt(
+          cfg.capacityPerTable,
+          VIP_UNIT_SIZE
+        );
 
         const existing = await prisma.vipTableConfig.findFirst({
           where: { eventId: event.id, vipLocationId },
@@ -363,6 +388,7 @@ export async function PATCH(req: NextRequest) {
               },
             });
 
+        // Asegurar que existan mesas físicas para esta config (solo si no hay ninguna)
         const existingTables = await prisma.vipTable.count({
           where: { eventId: event.id, vipLocationId },
         });

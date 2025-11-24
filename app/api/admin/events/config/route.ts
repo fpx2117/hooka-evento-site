@@ -1,3 +1,5 @@
+// app/api/admin/events/config/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Prisma, TicketType as TT, Gender as G } from "@prisma/client";
@@ -36,7 +38,7 @@ function toDecimal(n: unknown): Prisma.Decimal {
 /*                                ✅ GET CONFIG                               */
 /* -------------------------------------------------------------------------- */
 /**
- * ✅ GET /api/admin/events/config
+ * GET /api/admin/events/config
  * Devuelve toda la configuración del evento activo o más reciente.
  */
 export async function GET() {
@@ -93,7 +95,7 @@ export async function GET() {
     });
 
     // ===============================
-    // 🪑 Configuraciones de mesas VIP
+    // 🪑 Configuración de mesas VIP
     // ===============================
     const vipConfigs = await prisma.vipTableConfig.findMany({
       where: { eventId: event.id },
@@ -109,7 +111,7 @@ export async function GET() {
     });
 
     // ===============================
-    // 🎟️ Configuraciones de tickets generales
+    // 🎟️ Configuración de tickets generales
     // ===============================
     const generalTickets = await prisma.ticketConfig.findMany({
       where: {
@@ -130,39 +132,49 @@ export async function GET() {
     const female = generalTickets.find((t) => t.gender === G.mujer);
 
     // ===============================
-    // 📊 Calcular totales actualizados
+    // 📊 CALCULOS CORREGIDOS DE TOTALES
     // ===============================
-    const totalLimit =
-      (male?.stockLimit ?? 0) +
-      (female?.stockLimit ?? 0) +
-      vipConfigs.reduce((acc, c) => acc + (c.stockLimit ?? 0), 0);
 
-    const totalSold =
-      (male?.soldCount ?? 0) +
-      (female?.soldCount ?? 0) +
-      vipConfigs.reduce((acc, c) => acc + (c.soldCount ?? 0), 0);
+    // 🎟️ Entradas generales
+    const generalLimit =
+      (male?.stockLimit ?? 0) + (female?.stockLimit ?? 0);
 
-    const remaining = Math.max(0, totalLimit - totalSold);
+    const generalSold =
+      (male?.soldCount ?? 0) + (female?.soldCount ?? 0);
 
-    // ✅ Guardar los totales actualizados en el evento
+    const generalRemaining = Math.max(0, generalLimit - generalSold);
+
+    // 🪑 Mesas VIP (solo mesas, no personas)
+    const vipTablesLimit = vipConfigs.length;
+    const vipTablesSold = vipConfigs.reduce(
+      (acc, c) => acc + (c.soldCount ?? 0),
+      0
+    );
+    const vipTablesRemaining = Math.max(0, vipTablesLimit - vipTablesSold);
+
+    // ===============================
+    // 💾 Actualizar totales en EVENT (solo generales)
+    // ===============================
     await prisma.event.update({
       where: { id: event.id },
       data: {
-        totalLimitPersons: totalLimit,
-        soldPersons: totalSold,
-        remainingPersons: remaining,
+        totalLimitPersons: generalLimit, // SOLO cupo general
+        soldPersons: generalSold,
+        remainingPersons: generalRemaining,
       },
     });
 
     const totals = {
-      vipTablesTotal: vipConfigs.length,
-      limitPersons: totalLimit,
-      soldPersons: totalSold,
-      remainingPersons: remaining,
+      generalLimit,
+      generalSold,
+      generalRemaining,
+      vipTablesLimit,
+      vipTablesSold,
+      vipTablesRemaining,
     };
 
     // ===============================
-    // ✅ Respuesta final
+    // 📤 Respuesta final
     // ===============================
     return NextResponse.json(
       {
@@ -180,7 +192,7 @@ export async function GET() {
       },
       { status: 200 }
     );
-  } catch (error: any) {
+  } catch (error) {
     console.error("[admin/events/config][GET][ERROR]", error);
     return NextResponse.json(
       { ok: false, error: "Error al obtener la configuración del evento." },
@@ -193,9 +205,8 @@ export async function GET() {
 /*                                🧩 PATCH CONFIG                             */
 /* -------------------------------------------------------------------------- */
 /**
- * ✅ PATCH /api/admin/events/config
- * Actualiza precios y cupos generales (TicketConfig general hombre/mujer)
- * - eventId, genHPrice, genMPrice, totalLimitPersons
+ * PATCH /api/admin/events/config
+ * Actualiza precios y cupos generales (hombre/mujer)
  */
 export async function PATCH(req: NextRequest) {
   const auth = await verifyAuth(req);
@@ -214,7 +225,6 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    // ✅ Verificar evento existente
     const event = await prisma.event.findUnique({
       where: { id: eventId },
       select: { id: true },
@@ -231,13 +241,10 @@ export async function PATCH(req: NextRequest) {
     const malePrice = toDecimal(genHPrice);
     const femalePrice = toDecimal(genMPrice);
 
-    // Dividir cupo total entre géneros
+    // dividir cupo general entre géneros
     const stockMale = Math.ceil(total / 2);
     const stockFemale = Math.floor(total / 2);
 
-    // ===============================
-    // 🧾 Upsert Configuración General
-    // ===============================
     const upsertMale = prisma.ticketConfig.upsert({
       where: {
         eventId_ticketType_gender: {
@@ -287,37 +294,19 @@ export async function PATCH(req: NextRequest) {
       upsertFemale,
     ]);
 
-    // ===============================
-    // 🧮 Recalcular totales del evento
-    // ===============================
-    const vipConfigs = await prisma.vipTableConfig.findMany({
-      where: { eventId },
-      select: { stockLimit: true, soldCount: true },
-    });
+    // recalcular totales generales (no VIP)
+    const generalLimit = maleCfg.stockLimit + femaleCfg.stockLimit;
+    const generalSold = maleCfg.soldCount + femaleCfg.soldCount;
+    const generalRemaining = Math.max(0, generalLimit - generalSold);
 
-    const totalLimit =
-      (maleCfg.stockLimit ?? 0) +
-      (femaleCfg.stockLimit ?? 0) +
-      vipConfigs.reduce((acc, c) => acc + (c.stockLimit ?? 0), 0);
-
-    const totalSold =
-      (maleCfg.soldCount ?? 0) +
-      (femaleCfg.soldCount ?? 0) +
-      vipConfigs.reduce((acc, c) => acc + (c.soldCount ?? 0), 0);
-
-    const remaining = Math.max(0, totalLimit - totalSold);
-
-    // ===============================
-    // 💾 Actualizar evento
-    // ===============================
     const updatedEvent = await prisma.event.update({
       where: { id: eventId },
       data: {
         name: name || undefined,
         date: date ? new Date(date) : undefined,
-        totalLimitPersons: totalLimit,
-        soldPersons: totalSold,
-        remainingPersons: remaining,
+        totalLimitPersons: generalLimit,
+        soldPersons: generalSold,
+        remainingPersons: generalRemaining,
       },
       select: {
         id: true,
@@ -336,9 +325,9 @@ export async function PATCH(req: NextRequest) {
         event: updatedEvent,
         tickets: { general: { hombre: maleCfg, mujer: femaleCfg } },
         totals: {
-          limitPersons: totalLimit,
-          soldPersons: totalSold,
-          remainingPersons: remaining,
+          generalLimit,
+          generalSold,
+          generalRemaining,
         },
       },
     });
