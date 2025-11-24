@@ -3,40 +3,125 @@
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Ticket, Calendar, MapPin } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { TicketSalesModal } from "./ticket-sales-modal";
 import { VIPTableModal } from "./vip-table-modal";
 import HeroBackgroundEasy from "@/components/HeroBackgroundEasy";
 
-const TARGET_ISO = "2025-11-16T12:00:00-03:00"; // Dom 16/11/2025 12:00 AR
+// ----------------------------------------------------
+// Tipos para mayor claridad y seguridad
+// ----------------------------------------------------
+
+interface EventData {
+  id: string;
+  label: string;
+  iso: string; // ISO 8601 string, e.g., "2025-12-07T20:00:00-03:00"
+  tag: string;
+}
+
+interface TimerState {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+}
+
+interface SortedCountdown extends EventData {
+  time: TimerState;
+  targetMs: number;
+  size: "big" | "medium" | "small";
+}
+
+// 🔥 Tres fechas del countdown
+const EVENTS: EventData[] = [
+  {
+    id: "1",
+    label: "07-12-2025",
+    iso: "2025-12-07T20:00:00-03:00", 
+    tag: "Primera fecha",
+  },
+  {
+    id: "2",
+    label: "25-12-2025",
+    iso: "2025-12-25T12:00:00-03:00",
+    tag: "Segunda fecha",
+  },
+  {
+    id: "3",
+    label: "31-12-2025",
+    iso: "2025-12-31T12:00:00-03:00",
+    tag: "Tercera fecha",
+  },
+];
+
+// ----------------------------------------------------
+// Componente Hero Principal
+// ----------------------------------------------------
 
 export function Hero() {
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [showVIPModal, setShowVIPModal] = useState(false);
-  const [timeLeft, setTimeLeft] = useState({
-    days: 0,
-    hours: 0,
-    minutes: 0,
-    seconds: 0,
-  });
-  const targetMs = useMemo(() => new Date(TARGET_ISO).getTime(), []);
+
+  // Estado para cada countdown, inicializado con el tipo correcto
+  const [timers, setTimers] = useState<TimerState[]>(
+    EVENTS.map(() => ({
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+    }))
+  );
+
+  // Timestamps de las fechas
+  const targetMsList = useMemo(
+    () => EVENTS.map((e) => new Date(e.iso).getTime()),
+    []
+  );
+
+  // Función para formatear el número con dos dígitos, envuelta en useCallback
+  const pad = useCallback((n: number): string => n.toString().padStart(2, "0"), []);
 
   useEffect(() => {
+    // Función de cálculo de tick
     const tick = () => {
-      const diff = Math.max(targetMs - Date.now(), 0);
-      setTimeLeft({
-        days: Math.floor(diff / 86_400_000),
-        hours: Math.floor((diff % 86_400_000) / 3_600_000),
-        minutes: Math.floor((diff % 3_600_000) / 60_000),
-        seconds: Math.floor((diff % 60_000) / 1000),
-      });
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [targetMs]);
+      const now = Date.now();
+      const updated = targetMsList.map((target) => {
+        const diff = Math.max(target - now, 0); 
 
-  const pad = (n: number) => n.toString().padStart(2, "0");
+        const MS_PER_DAY = 86_400_000;
+        const MS_PER_HOUR = 3_600_000;
+        const MS_PER_MINUTE = 60_000;
+        const MS_PER_SECOND = 1000;
+
+        return {
+          days: Math.floor(diff / MS_PER_DAY),
+          hours: Math.floor((diff % MS_PER_DAY) / MS_PER_HOUR),
+          minutes: Math.floor((diff % MS_PER_HOUR) / MS_PER_MINUTE),
+          seconds: Math.floor((diff % MS_PER_MINUTE) / MS_PER_SECOND),
+        };
+      });
+      setTimers(updated);
+    };
+
+    tick(); // Ejecutar inmediatamente al montar
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id); // Limpiar al desmontar
+  }, [targetMsList]);
+
+  // Ordenar por fecha más cercana y asignar tamaños
+  const sortedCountdowns: SortedCountdown[] = useMemo(() => {
+    return EVENTS.map((event, index) => ({
+      ...event,
+      time: timers[index],
+      targetMs: targetMsList[index],
+    }))
+      .sort((a, b) => a.targetMs - b.targetMs)
+      .map((item, index) => ({
+        ...item,
+        size: index === 0 ? "big" : index === 1 ? "medium" : "small",
+      }));
+  }, [timers, targetMsList]);
+
 
   return (
     <section className="relative min-h-[100svh] overflow-hidden text-white">
@@ -50,6 +135,7 @@ export function Hero() {
       />
 
       <div className="relative z-10 grid min-h-[100svh] grid-cols-1 grid-rows-[1.1fr_auto_auto_0.9fr] md:grid-rows-[1.25fr_auto_auto_0.75fr] place-items-center px-4">
+        {/* Lips / logo */}
         <div className="row-start-2 translate-y-[clamp(18px,5.2vh,56px)] md:translate-y-[clamp(64px,10.5vh,170px)]">
           <div className="relative lip-wrap">
             <span aria-hidden className="lip-shine" />
@@ -59,45 +145,131 @@ export function Hero() {
               width={860}
               height={860}
               priority
-              className="
+              className={`
                 pointer-events-none select-none
                 w-[70vw] max-w-[780px] min-w-[240px]
                 drop-shadow-[0_10px_45px_rgba(0,0,0,0.55)]
                 lip-float md:hover:lip-pop
                 translate-x-[2px] md:translate-x-0
-              "
+              `}
             />
           </div>
         </div>
 
+        {/* Countdown + info */}
         <div className="row-start-3 w-full text-center md:-translate-y-[56px]">
           <div className="mt-[clamp(14px,3.8vh,48px)] md:mt-3" />
 
-          <div className="relative inline-flex items-end justify-center gap-3 sm:gap-4 md:gap-6">
-            <span
-              aria-hidden
-              className="absolute -inset-x-[12%] -inset-y-[18%] -z-10 rounded-[999px] pointer-events-none"
-              style={{
-                background:
-                  "radial-gradient(ellipse at center, rgba(0,0,0,.36) 0%, rgba(0,0,0,.22) 45%, rgba(0,0,0,0) 68%)",
-                filter: "blur(6px)",
-              }}
-            />
-            <TimeBox value={pad(timeLeft.days)} label="DÍAS" />
-            <Sep />
-            <TimeBox value={pad(timeLeft.hours)} label="HORAS" />
-            <Sep />
-            <TimeBox value={pad(timeLeft.minutes)} label="MIN" />
-            <Sep />
-            <TimeBox value={pad(timeLeft.seconds)} label="SEG" />
+          {/* 🔥 BLOQUE CORREGIDO - ESPACIADO OPTIMIZADO */}
+          <div
+            className={`
+              flex flex-col 
+              items-center 
+              justify-center
+              w-full 
+              gap-1
+              pt-2 
+              md:pt-3
+              relative 
+              z-[12]
+            `}
+            style={{
+              marginTop: "clamp(10px, 3vh, 40px)",
+            }}
+          >
+           {sortedCountdowns.map((cd, index) => {
+              const scaleClass =
+                index === 0
+                  ? "scale-110 md:scale-125"
+                  : "scale-70 md:scale-80";
+
+              // Márgenes optimizados - más espacio entre segunda y tercera fecha
+              const verticalMargin =
+                index === 1 
+                  ? "mt-2 -mb-6 md:-mb-8"  // Separación adecuada después del primero
+                  : index === 2 
+                  ? "mt-4 -mb-4 md:-mb-6"   // Más espacio antes del tercero
+                  : ""; // Primer bloque sin margen especial
+              
+              const timePassed =
+                cd.time.days === 0 &&
+                cd.time.hours === 0 &&
+                cd.time.minutes === 0 &&
+                cd.time.seconds === 0 &&
+                Date.now() > cd.targetMs;
+
+              if (timePassed && index > 0) return null; 
+              if (timePassed && index === 0) {
+                return (
+                  <div key={cd.id} className="text-xl font-bold text-red-500 my-4">
+                    ¡Evento principal finalizado!
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={cd.id}
+                  className={`
+                    relative
+                    inline-flex 
+                    flex-col 
+                    items-center 
+                    justify-center 
+                    gap-1 
+                    sm:gap-1 
+                    md:gap-1.5 
+                    transition-transform 
+                    duration-300 
+                    w-full
+                    ${scaleClass}
+                    ${verticalMargin} 
+                  `}
+                >
+                  <span 
+                    className={`
+                      text-[10px] sm:text-xs md:text-sm uppercase tracking-[0.22em] text-white/80
+                      ${index > 0 ? "mt-1 md:mt-1.5" : ""}
+                    `}
+                  >
+                    {cd.tag}
+                  </span>
+
+                  {/* Contador */}
+                  <div className="relative inline-flex items-end justify-center gap-2 sm:gap-3 md:gap-4 w-full">
+                    <span
+                      aria-hidden
+                      className="absolute -inset-x-[20%] -inset-y-[28%] -z-10 rounded-[999px] pointer-events-none"
+                      style={{
+                        background:
+                          "radial-gradient(ellipse at center, rgba(0,0,0,.36) 0%, rgba(0,0,0,.22) 45%, rgba(0,0,0,0) 68%)",
+                        filter: "blur(6px)",
+                      }}
+                    />
+
+                    <TimeBox value={pad(cd.time.days)} label="DÍAS" />
+                    <Sep />
+                    <TimeBox value={pad(cd.time.hours)} label="HORAS" />
+                    <Sep />
+                    <TimeBox value={pad(cd.time.minutes)} label="MIN" />
+                    <Sep />
+                    <TimeBox value={pad(cd.time.seconds)} label="SEG" />
+                  </div>
+
+                  {/* Línea divisoria - solo en el primer countdown */}
+                  {index === 0 && (
+                    <div className="mx-auto mt-2 h-[2px] w-[120px] sm:w-[150px] rounded-full bg-white/15" />
+                  )}
+                </div>
+              );
+            })}
           </div>
 
-          <div className="mx-auto mt-3 h-[2px] w-[140px] sm:w-[180px] rounded-full bg-white/15" />
-
-          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+          {/* Chips de fecha y ubicación - CON MÁRGEN AUMENTADO */}
+          <div className="mt-8 md:mt-10 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <Calendar className="h-3.5 w-3.5 opacity-90" />
-              <span className="opacity-95">Dom 16/11 · 12:00</span>
+              <span className="opacity-95">Dom 07/12 · 20:00</span>
             </span>
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <MapPin className="h-3.5 w-3.5 opacity-90" />
@@ -105,43 +277,43 @@ export function Hero() {
             </span>
           </div>
 
-          <p className="text-sm md:text-base opacity-90 mt-2">
+          <p className="text-sm md:text-base opacity-90 mt-4">
             Recibí el calor con nosotros
           </p>
 
-          <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-4 pt-4 md:pt-5 px-4 w-full">
+          {/* Botones */}
+          <div className="flex flex-col md:flex-row items-center justify-center gap-3 md:gap-4 pt-6 md:pt-8 px-4 w-full">
             <Button
               size="lg"
               onClick={() => setShowTicketModal(true)}
-              className="
-      w-full md:w-auto
-      text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
-      bg-white text-[#5b0d0d] font-bold tracking-wide
-      transition-transform duration-200 hover:scale-105 shadow-2xl
-      hover:bg-[#5b0d0d] hover:text-white
-      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
-    "
+              className={`
+                w-full md:w-auto
+                text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+                bg-white text-[#5b0d0d] font-bold tracking-wide
+                transition-transform duration-200 hover:scale-105 shadow-2xl
+                hover:bg-[#5b0d0d] hover:text-white
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+              `}
             >
               <Ticket className="w-5 h-5 mr-2" />
               ¡Reservá Entradas!
             </Button>
 
-           <Button
-  size="lg"
-  onClick={() => setShowVIPModal(true)}
-  className="
-    w-full md:w-auto
-    text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
-    bg-white text-[#5b0d0d] font-bold tracking-wide
-    transition-transform duration-200 hover:scale-105 shadow-2xl
-    hover:bg-[#5b0d0d] hover:text-white
-    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
-  "
->
-  <Ticket className="w-5 h-5 mr-2" />
-  ¡Reservá tu MESA VIP!
-</Button>
-
+            <Button
+              size="lg"
+              onClick={() => setShowVIPModal(true)}
+              className={`
+                w-full md:w-auto
+                text-base sm:text-lg px-6 sm:px-8 py-5 sm:py-6 rounded-full
+                bg-white text-[#5b0d0d] font-bold tracking-wide
+                transition-transform duration-200 hover:scale-105 shadow-2xl
+                hover:bg-[#5b0d0d] hover:text-white
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#5b0d0d]
+              `}
+            >
+              <Ticket className="w-5 h-5 mr-2" />
+              ¡Reservá tu MESA VIP!
+            </Button>
           </div>
         </div>
 
@@ -157,6 +329,7 @@ export function Hero() {
       <VIPTableModal open={showVIPModal} onOpenChange={setShowVIPModal} />
 
       <style jsx>{`
+        /* ... Estilos Jsx sin cambios ... */
         @keyframes lipFloat {
           0% {
             transform: translateY(0) rotate(0deg);
@@ -236,7 +409,16 @@ export function Hero() {
   );
 }
 
-function TimeBox({ value, label }: { value: string; label: string }) {
+// ----------------------------------------------------
+// Componentes Auxiliares
+// ----------------------------------------------------
+
+interface TimeBoxProps {
+  value: string;
+  label: string;
+}
+
+function TimeBox({ value, label }: TimeBoxProps) {
   return (
     <div className="text-center">
       <div
