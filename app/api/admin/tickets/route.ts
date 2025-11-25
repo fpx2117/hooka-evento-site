@@ -10,6 +10,7 @@ import {
   TicketType as TT,
   ArchiveReason as AR,
   Prisma,
+  Gender as G,
 } from "@prisma/client";
 import { jwtVerify } from "jose";
 import { ensureSixDigitCode } from "@/lib/validation-code";
@@ -125,6 +126,7 @@ export async function POST(request: NextRequest) {
     const customerEmail = normStr(body.customerEmail);
     const customerPhone = normStr(body.customerPhone);
     const customerDni = normStr(body.customerDni);
+    const gender = normStr(body.gender) as G | undefined;
 
     if (!customerName || !customerEmail || !customerPhone || !customerDni)
       return NextResponse.json(
@@ -285,6 +287,7 @@ export async function POST(request: NextRequest) {
         customerDni,
         paymentMethod: PM.mercadopago,
         paymentStatus,
+        ...(gender && { gender }),
         ...(vipLocationId && {
           vipLocationRef: { connect: { id: vipLocationId } },
         }),
@@ -296,8 +299,27 @@ export async function POST(request: NextRequest) {
       include: { vipLocationRef: true, vipTable: true, vipTableConfig: true },
     });
 
+    // Código de validación si está aprobado
     if (paymentStatus === PS.approved) {
       await ensureSixDigitCode(prisma, { id: ticket.id });
+    }
+
+    // 🔥 Si es ticket general aprobado -> actualizar soldCount de ticketConfig
+    if (
+      ticket.ticketType === TT.general &&
+      ticket.paymentStatus === PS.approved &&
+      ticket.gender
+    ) {
+      await prisma.ticketConfig.updateMany({
+        where: {
+          eventId: ticket.eventId,
+          ticketType: TT.general,
+          gender: ticket.gender,
+        },
+        data: {
+          soldCount: { increment: ticket.quantity ?? 1 },
+        },
+      });
     }
 
     return NextResponse.json({ ok: true, ticket });
@@ -339,7 +361,7 @@ export async function PUT(request: NextRequest) {
     const data: Prisma.TicketUpdateInput = {};
 
     // ===================================================
-    // Cambio a "approved" (caso crítico VIP)
+    // Cambio a "approved" (caso crítico VIP + stock general)
     // ===================================================
     if (newStatus === PS.approved && current.paymentStatus !== PS.approved) {
       try {
@@ -399,6 +421,7 @@ export async function PUT(request: NextRequest) {
             }
           }
 
+          // Actualizamos el ticket a aprobado
           await tx.ticket.update({
             where: { id },
             data: {
@@ -411,7 +434,22 @@ export async function PUT(request: NextRequest) {
             },
           });
 
+          // Código de validación
           await ensureSixDigitCode(tx, { id });
+
+          // 🔥 Si es general -> subir soldCount de ticketConfig
+          if (current.ticketType === TT.general && current.gender) {
+            await tx.ticketConfig.updateMany({
+              where: {
+                eventId: current.eventId,
+                ticketType: TT.general,
+                gender: current.gender,
+              },
+              data: {
+                soldCount: { increment: current.quantity ?? 1 },
+              },
+            });
+          }
         });
 
         const updated = await prisma.ticket.findUnique({
@@ -538,6 +576,31 @@ export async function DELETE(request: NextRequest) {
               data: { soldCount: { decrement: 1 } },
             });
           }
+        }
+      }
+
+      // 🔥 Si es ticket general aprobado → devolver cupo al stock (soldCount--)
+      if (
+        ticket.ticketType === TT.general &&
+        ticket.paymentStatus === PS.approved &&
+        ticket.gender
+      ) {
+        const cfg = await tx.ticketConfig.findFirst({
+          where: {
+            eventId: ticket.eventId,
+            ticketType: TT.general,
+            gender: ticket.gender,
+          },
+          select: { id: true, soldCount: true },
+        });
+
+        if (cfg && cfg.soldCount > 0) {
+          await tx.ticketConfig.update({
+            where: { id: cfg.id },
+            data: {
+              soldCount: { decrement: ticket.quantity ?? 1 },
+            },
+          });
         }
       }
 
