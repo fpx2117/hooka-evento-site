@@ -44,7 +44,7 @@ const EVENTS: EventData[] = [
     id: "2",
     label: "31-12-2025",
     iso: "2025-12-31T12:00:00-03:00",
-    tag: "TERCERA FECHA",
+    tag: "SEGUNDA FECHA",
   },
 ];
 
