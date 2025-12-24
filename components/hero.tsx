@@ -311,7 +311,7 @@ export function Hero() {
           <div className="mt-8 md:mt-10 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <Calendar className="h-3.5 w-3.5 opacity-90" />
-              <span className="opacity-95">Jue 25/12 · 12:00</span>
+              <span className="opacity-95">Miér 24/12 · 00:00</span>
             </span>
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <MapPin className="h-3.5 w-3.5 opacity-90" />
