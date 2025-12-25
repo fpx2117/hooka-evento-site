@@ -80,7 +80,6 @@ export function emailTemplateHooka({
       <td align="center">
         <div role="article" aria-roledescription="email" style="max-width:680px; margin:0 auto; padding:20px;">
           
-          <!-- HERO -->
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:24px; overflow:hidden;">
             <tr>
               <td style="background:#5b0d0d; background-image: linear-gradient(135deg, #5b0d0d 0%, #3f0a0a 100%);
@@ -97,16 +96,14 @@ export function emailTemplateHooka({
                     <p style="margin:0; font-size:14px; font-weight:700; color:#E3CFBF;">Tu entrada está confirmada</p>
                   </div>
                 </div>
-                <div aria-hidden="true" style="position:absolute; inset:0; background:
-                  radial-gradient(800px 420px at 40% 50%, rgba(0,0,0,0.25), rgba(0,0,0,0) 55%); opacity:.45;"></div>
               </td>
             </tr>
           </table>
 
-          <!-- CARD PRINCIPAL -->
           <div style="position:relative; background:#120202; border-radius:24px; overflow:hidden; margin-top:16px;
             box-shadow:0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
             border:2px solid rgba(255,255,255,0.12);">
+            
             <div style="position:relative; padding:32px 24px;">
               
               <div style="background:linear-gradient(135deg, rgba(91,13,13,0.30) 0%, rgba(63,10,10,0.26) 100%);
@@ -119,9 +116,19 @@ export function emailTemplateHooka({
 
               ${ticketDetails}
 
+              <div style="background:rgba(255,255,255,0.05); border-radius:14px; padding:20px; border:1px solid rgba(227,207,191,0.2); margin-bottom:22px;">
+                <p style="margin:0 0 4px 0; font-size:14px; color:#E3CFBF; font-weight:700;">📍 Ubicación del evento:</p>
+                <p style="margin:0 0 12px 0; font-size:13px; color:#FFFFFF; font-weight:500;">Martín García 2860, B1617 Gral. Pacheco, Provincia de Buenos Aires</p>
+
+                <p style="margin:0 0 4px 0; font-size:14px; color:#E3CFBF; font-weight:700;">🗺 Google Maps:</p>
+                <p style="margin:0 0 0 0; font-size:13px; word-break: break-all;">
+                  <a href="https://maps.app.goo.gl/gJ7siosTsN5nauJy5" style="color:#4A90E2; text-decoration: underline;">Abrir en el mapa</a>
+                </p>
+              </div>
+
               <div style="background:linear-gradient(135deg, #5b0d0d 0%, #3f0a0a 100%);
                 padding:24px 22px; text-align:center; border-radius:18px; margin:22px 0;
-                box-shadow:0 12px 40px rgba(91,13,13,0.45), 0 0 60px rgba(63,10,10,0.28);
+                box-shadow:0 12px 40px rgba(91,13,13,0.45);
                 border:3px solid rgba(255,255,255,0.18);">
                 <div style="display:inline-block; background:rgba(227,207,191,0.22); border-radius:12px;
                   padding:6px 16px; margin-bottom:10px; border:2px solid #E3CFBF;">
@@ -134,21 +141,21 @@ export function emailTemplateHooka({
                 <p style="margin:10px 0 0 0; font-size:13px; font-weight:700; color:rgba(255,255,255,0.96);">✨ Mostrá este código o tu QR al personal ✨</p>
               </div>
 
-              <!-- QR -->
-              <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
-                background:#FFFFFF; border:4px solid transparent; position:relative;
-                padding:22px; border-radius:18px; margin:22px auto;
-                box-shadow:0 12px 40px rgba(0,0,0,0.3); max-width:520px; text-align:center;">
-                <div style="position:absolute; inset:-4px; background:linear-gradient(135deg, #5b0d0d 0%, #E3CFBF 50%, #3f0a0a 100%);
-                  border-radius:18px; z-index:-1;"></div>
+              <div style="background:#FFFFFF; padding:22px; border-radius:18px; margin:22px auto; max-width:280px; text-align:center;">
                 <h3 style="margin:0 0 12px; font-size:18px; font-weight:800; color:#5b0d0d;">🫦 Tu Código QR 🫦</h3>
-                <img src="${qrCodeImage}" alt="QR" width="240" style="max-width:240px; height:auto; border-radius:8px;" />
-                <p style="font-size:12px; color:#555; margin:14px 0 0 0; font-weight:700;">📱 Mostrá este código o tu QR al personal 📱</p>
+                <img src="${qrCodeImage}" alt="QR" width="240" style="margin: 0 auto; max-width:240px; height:auto; border-radius:8px;" />
               </div>
 
-              <!-- Instrucciones -->
-              <div style="background:linear-gradient(135deg, rgba(227,207,191,0.10) 0%, rgba(131,56,236,0.10) 100%);
-                border:2px solid #E3CFBF; border-radius:14px; padding:18px 20px;">
+              <div style="background:rgba(255,77,77,0.1); border:2px solid #FF4D4D; border-radius:14px; padding:18px 20px; margin-bottom:22px;">
+                <h3 style="margin:0 0 10px 0; font-size:16px; font-weight:900; color:#FF4D4D;">⚠️ Importante</h3>
+                <ul style="margin:0; padding-left:20px; color:#FFFFFF; line-height:1.6; font-size:14px; list-style-type: none; padding-left: 0;">
+                  <li style="margin-bottom:8px;">🚫 No se puede ingresar con alcohol 🍾</li>
+                  <li style="margin-bottom:8px;">🍹 Dentro del evento vas a poder comprar lo que quieras</li>
+                  <li>🧊 Se puede ingresar con conservadoras y hielo si lo necesitás.</li>
+                </ul>
+              </div>
+
+              <div style="background:rgba(227,207,191,0.1); border:2px solid #E3CFBF; border-radius:14px; padding:18px 20px;">
                 <h3 style="margin:0 0 10px 0; font-size:16px; font-weight:900; color:#E3CFBF;">📋 Instrucciones</h3>
                 <ol style="margin:0; padding-left:20px; color:#FFFFFF; line-height:1.75; font-size:14px;">
                   <li><strong>Mostrá este email</strong> al personal de seguridad</li>
@@ -157,43 +164,15 @@ export function emailTemplateHooka({
                 </ol>
               </div>
 
-              <!-- Footer -->
-              <div style="text-align:center; margin:26px 0 0 0; padding:20px;
-                background:linear-gradient(135deg, #5b0d0d 0%, #3f0a0a 100%); border-radius:14px;">
-                <p style="margin:0; font-size:20px; font-weight:900; color:#FFFFFF;">¡Nos vemos en la fiesta! 🎉🔥</p>
-                <p style="margin:8px 0 0 0; font-size:13px; color:rgba(255,255,255,0.92); font-weight:700;">Prepárate para una noche inolvidable 🫦</p>
+              <div style="text-align:center; margin:26px 0 0 0; padding:20px; background:linear-gradient(135deg, #5b0d0d 0%, #3f0a0a 100%); border-radius:14px;">
+                <p style="margin:0; font-size:18px; font-weight:900; color:#FFFFFF;">¡Nos vemos en la fiesta! 🎉🔥</p>
+                <p style="margin:8px 0 12px 0; font-size:12px; color:rgba(255,255,255,0.8); font-style: italic;">
+                  Cualquier duda comunicate por WhatsApp o al Instagram <b>@hooka.official</b>
+                </p>
               </div>
+
             </div>
           </div>
-
-         <div style="text-align:center; padding:20px 14px; margin-top:14px;">
-  <div style="display:inline-block; background:rgba(255,255,255,0.06); border-radius:14px; padding:20px 24px; border:1px solid rgba(255,255,255,0.10); max-width: 400px; text-align: left;">
-    
-    <p style="margin:0 0 12px 0; font-size:20px; font-weight:900; color:#FFFFFF; text-align: center;">Hooka</p>
-
-    <p style="margin:0 0 4px 0; font-size:13px; color:#FFFFFF; font-weight:700;">📍 Ubicación del evento:</p>
-    <p style="margin:0 0 12px 0; font-size:12px; color:#A7AABB; font-weight:500;">Martín García 2860, B1617 Gral. Pacheco, Provincia de Buenos Aires</p>
-
-    <p style="margin:0 0 4px 0; font-size:13px; color:#FFFFFF; font-weight:700;">🗺 Google Maps:</p>
-    <p style="margin:0 0 16px 0; font-size:12px; color:#4A90E2; font-weight:500; word-break: break-all;">
-      <a href="https://maps.app.goo.gl/gJ7siosTsN5nauJy5" style="color:#4A90E2; text-decoration: none;">https://maps.app.goo.gl/gJ7siosTsN5nauJy5</a>
-    </p>
-
-    <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin-bottom: 16px;">
-
-    <p style="margin:0 0 8px 0; font-size:13px; color:#FF4D4D; font-weight:900;">⚠ Importante:</p>
-    <ul style="margin:0 0 16px 0; padding-left: 0; list-style: none; font-size: 12px; color:#A7AABB; line-height: 1.6;">
-      <li>🚫 No se puede ingresar con alcohol 🍾</li>
-      <li>🍹 Dentro del evento vas a poder comprar lo que quieras</li>
-      <li>🧊 Se puede ingresar con conservadoras y hielo si lo necesitás.</li>
-    </ul>
-
-    <p style="margin:0; font-size:11px; color:#A7AABB; font-weight:400; text-align: center; font-style: italic;">
-      Cualquier duda o consulta comunicarse por WhatsApp de la pagina o al Instagram <b>@hooka.official</b>
-    </p>
-    
-  </div>
-</div>
 
         </div>
       </td>
