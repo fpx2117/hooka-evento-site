@@ -166,13 +166,34 @@ export function emailTemplateHooka({
             </div>
           </div>
 
-          <div style="text-align:center; padding:20px 14px; margin-top:14px;">
-            <div style="display:inline-block; background:rgba(255,255,255,0.06); border-radius:14px;
-              padding:14px 24px; border:1px solid rgba(255,255,255,0.10);">
-              <p style="margin:0 0 6px 0; font-size:16px; font-weight:900; color:#FFFFFF;">Hooka</p>
-              <p style="margin:0; font-size:12px; color:#A7AABB; font-weight:700;">📍 La ubicación se confirmará 24hs antes del evento</p>
-            </div>
-          </div>
+         <div style="text-align:center; padding:20px 14px; margin-top:14px;">
+  <div style="display:inline-block; background:rgba(255,255,255,0.06); border-radius:14px; padding:20px 24px; border:1px solid rgba(255,255,255,0.10); max-width: 400px; text-align: left;">
+    
+    <p style="margin:0 0 12px 0; font-size:20px; font-weight:900; color:#FFFFFF; text-align: center;">Hooka</p>
+
+    <p style="margin:0 0 4px 0; font-size:13px; color:#FFFFFF; font-weight:700;">📍 Ubicación del evento:</p>
+    <p style="margin:0 0 12px 0; font-size:12px; color:#A7AABB; font-weight:500;">Martín García 2860, B1617 Gral. Pacheco, Provincia de Buenos Aires</p>
+
+    <p style="margin:0 0 4px 0; font-size:13px; color:#FFFFFF; font-weight:700;">🗺 Google Maps:</p>
+    <p style="margin:0 0 16px 0; font-size:12px; color:#4A90E2; font-weight:500; word-break: break-all;">
+      <a href="https://maps.app.goo.gl/gJ7siosTsN5nauJy5" style="color:#4A90E2; text-decoration: none;">https://maps.app.goo.gl/gJ7siosTsN5nauJy5</a>
+    </p>
+
+    <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin-bottom: 16px;">
+
+    <p style="margin:0 0 8px 0; font-size:13px; color:#FF4D4D; font-weight:900;">⚠ Importante:</p>
+    <ul style="margin:0 0 16px 0; padding-left: 0; list-style: none; font-size: 12px; color:#A7AABB; line-height: 1.6;">
+      <li>🚫 No se puede ingresar con alcohol 🍾</li>
+      <li>🍹 Dentro del evento vas a poder comprar lo que quieras</li>
+      <li>🧊 Se puede ingresar con conservadoras y hielo si lo necesitás.</li>
+    </ul>
+
+    <p style="margin:0; font-size:11px; color:#A7AABB; font-weight:400; text-align: center; font-style: italic;">
+      Cualquier duda o consulta comunicarse por WhatsApp de la pagina o al Instagram <b>@hooka.official</b>
+    </p>
+    
+  </div>
+</div>
 
         </div>
       </td>
