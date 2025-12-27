@@ -36,15 +36,9 @@ interface SortedCountdown extends EventData {
 const EVENTS: EventData[] = [
   {
     id: "1",
-    label: "25-12-2025",
-    iso: "2025-12-25T12:00:00-03:00",
-    tag: "NAVIDAD",
-  },
-  {
-    id: "2",
     label: "31-12-2025",
     iso: "2025-12-31T12:00:00-03:00",
-    tag: "SEGUNDA FECHA",
+    tag: "Año Nuevo",
   },
 ];
 
@@ -311,7 +305,7 @@ export function Hero() {
           <div className="mt-8 md:mt-10 flex flex-wrap items-center justify-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <Calendar className="h-3.5 w-3.5 opacity-90" />
-              <span className="opacity-95">Miér 24/12 · 00:00</span>
+              <span className="opacity-95">Miér 31/12 · 00:00</span>
             </span>
             <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-3 py-1 text-xs sm:text-sm backdrop-blur-[2px]">
               <MapPin className="h-3.5 w-3.5 opacity-90" />
@@ -360,7 +354,30 @@ export function Hero() {
 
           
         </div>
-
+{/* Mensaje final */}
+<div className="mt-6 md:mt-8 px-4 w-full flex justify-center">
+  <div
+    className={`
+      inline-flex items-center justify-center
+      rounded-full
+      border border-white/20
+      bg-black/30
+      backdrop-blur-[3px]
+      px-5 py-3
+      text-center
+      font-extrabold
+      uppercase
+      tracking-[0.22em]
+      text-white
+      shadow-2xl
+    `}
+    style={{
+      textShadow: "0 2px 10px rgba(0,0,0,.65)",
+    }}
+  >
+   🔥 VENÍ A PASAR AÑO NUEVO EN HOOKA 🔥
+  </div>
+</div>
         <div className="row-start-1" />
         <div className="row-start-4" />
       </div>
@@ -476,7 +493,7 @@ function TimeBox({ value, label }: TimeBoxProps) {
         {value}
       </div>
       <div
-        className="text-[10px] md:text-xs mt-1 tracking-wide"
+        className="text-[px] md:text-xs mt-1 tracking-wide"
         style={{
           color: "rgba(255,255,255,.92)",
           textShadow: "0 1px 4px rgba(0,0,0,.45)",

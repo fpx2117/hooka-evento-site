@@ -27,9 +27,9 @@ export default function HeroBackgroundEasy({
   mobile = { rows: 3, cols: 3 },
   desktop = { rows: 3, cols: 4 },
   showFallbackPalms = true,
-  fontMobile = "min(19vw, 9.4rem)",
-  fontDesktop = "min(14.5vw, 9rem)",
-  opacity = 0.6,
+  fontMobile = "min(17vw, 8.3rem)", // 👈 AÑO NUEVO un toque más chico
+  fontDesktop = "min(12.5vw, 7.7rem)", // 👈 AÑO NUEVO un toque más chico
+  opacity = 0.45,
   gap = "clamp(2px,0.8vw,12px)",
   cellPadX = "clamp(2px,0.6vw,10px)",
   cellPadY = "clamp(0px,0.4vh,6px)",
@@ -37,7 +37,6 @@ export default function HeroBackgroundEasy({
   gridPadY = "0px",
   navTopPx = 0,
 }: Props) {
-  // Si alguna vez volvés a Lottie, esto queda listo.
   const [hasPalms, setHasPalms] = useState(showFallbackPalms);
   useEffect(() => setHasPalms(showFallbackPalms), [showFallbackPalms]);
 
@@ -46,7 +45,7 @@ export default function HeroBackgroundEasy({
       className="absolute inset-0 pointer-events-none overflow-hidden"
       style={{ backgroundColor: BG_BORDO }}
     >
-      {/* Capa 1: Grilla HOOKA (z-10) */}
+      {/* Capa 1: Grilla AÑO NUEVO + HOOKA */}
       <div className="absolute inset-0 z-10 hooka-anim">
         {/* Mobile */}
         <div className="sm:hidden h-full w-full">
@@ -63,6 +62,7 @@ export default function HeroBackgroundEasy({
             gridPadY={gridPadY}
           />
         </div>
+
         {/* Desktop */}
         <div className="hidden sm:block h-full w-full">
           <HookaGrid
@@ -80,7 +80,7 @@ export default function HeroBackgroundEasy({
         </div>
       </div>
 
-      {/* Capa 2: Overlay suave (no tapa HOOKA) (z-15) */}
+      {/* Overlay suave */}
       <div
         className="absolute inset-0 z-15"
         style={{
@@ -89,7 +89,7 @@ export default function HeroBackgroundEasy({
         }}
       />
 
-      {/* Capa 3: Palmeras por encima de la grilla (z-20) */}
+      {/* Palmeras */}
       {hasPalms && <FallbackPalms navTopPx={navTopPx} />}
 
       <style jsx>{`
@@ -153,26 +153,63 @@ function HookaGrid({
           style={{ paddingInline: cellPadX, paddingBlock: cellPadY }}
         >
           {/* Mobile */}
-          <span
-            className="sm:hidden font-black leading-none tracking-[-0.02em] select-none"
-            style={{ color: TEXT_BEIGE, fontSize: fontMobile, opacity }}
-          >
-            HOOKA
-          </span>
+          <div className="sm:hidden flex flex-col items-center justify-center leading-none select-none">
+            <span
+              className="font-black tracking-[-0.02em] text-center"
+              style={{
+                color: TEXT_BEIGE,
+                fontSize: `calc(${fontMobile} * 0.78)`, // 👈 AÑO NUEVO más chico
+                opacity,
+              }}
+            >
+              AÑO NUEVO
+            </span>
+
+            <span
+              className="font-black tracking-[-0.02em] text-center"
+              style={{
+                color: TEXT_BEIGE,
+                fontSize: `calc(${fontMobile} * 0.48)`, // 👈 HOOKA más chico
+                opacity: opacity * 0.95,
+                marginTop: "0.14em",
+              }}
+            >
+              HOOKA
+            </span>
+          </div>
+
           {/* Desktop */}
-          <span
-            className="hidden sm:inline font-black leading-none tracking-[-0.02em] select-none"
-            style={{ color: TEXT_BEIGE, fontSize: fontDesktop, opacity }}
-          >
-            HOOKA
-          </span>
+          <div className="hidden sm:flex flex-col items-center justify-center leading-none select-none">
+            <span
+              className="font-black tracking-[-0.02em] text-center"
+              style={{
+                color: TEXT_BEIGE,
+                fontSize: `calc(${fontDesktop} * 0.78)`, // 👈 AÑO NUEVO más chico
+                opacity,
+              }}
+            >
+              AÑO NUEVO
+            </span>
+
+            <span
+              className="font-black tracking-[-0.02em] text-center"
+              style={{
+                color: TEXT_BEIGE,
+                fontSize: `calc(${fontDesktop} * 0.48)`, // 👈 HOOKA más chico
+                opacity: opacity * 0.95,
+                marginTop: "0.14em",
+              }}
+            >
+              HOOKA
+            </span>
+          </div>
         </div>
       ))}
     </div>
   );
 }
 
-/** Palmeras — ahora **dentro** del viewport, sin offsets negativos (evita franjas) */
+/** Palmeras */
 function FallbackPalms({ navTopPx = 0 }: { navTopPx?: number }) {
   return (
     <>
@@ -182,7 +219,7 @@ function FallbackPalms({ navTopPx = 0 }: { navTopPx?: number }) {
         alt=""
         className="pointer-events-none select-none absolute z-20"
         style={{
-          top: navTopPx, // alineada con el top visible
+          top: navTopPx,
           right: 0,
           width: "38vw",
           maxWidth: 520,
