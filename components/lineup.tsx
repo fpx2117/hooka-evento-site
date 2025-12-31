@@ -18,26 +18,11 @@ const RED = "#5b0d0d";
 // Ajusta estas rutas/links a tus assets reales
 const INITIAL_DJS = [
   {
-    name: "EIRON.RMX",
-    specialty: "",
-    image: "/eironrmx.jpg",
-    spotifyUrl:
-      "https://open.spotify.com/intl-es/artist/5YTcIjhh7GFjC8tEkeLnwQ?si=Sv-9VfDzTg2Q6vbyGdQL4w",
-    youtubeUrl: "https://www.youtube.com/@EIRONRMX",
-  },
-  {
     name: "Cris DJ",
     specialty: "",
     image: "/cris_dj.jpeg",
     spotifyUrl: "",
     youtubeUrl: "https://www.youtube.com/channel/UCR5t8xZVE9YbTqbmfGbSe3A",
-  },
-  {
-    name: "Braian Segovia DJ",
-    specialty: "",
-    image: "/braiansegoviadj.jpg",
-    spotifyUrl: "",
-    youtubeUrl: "https://www.youtube.com/@braiansegoviadj",
   },
   {
     name: "Juanc RMX",

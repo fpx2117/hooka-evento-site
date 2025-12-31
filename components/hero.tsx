@@ -36,8 +36,8 @@ interface SortedCountdown extends EventData {
 const EVENTS: EventData[] = [
   {
     id: "1",
-    label: "31-12-2025",
-    iso: "2025-12-31T12:00:00-03:00",
+    label: "01-01-2026",
+    iso: "2026-01-01T03:00:00-03:00",
     tag: "Año Nuevo",
   },
 ];
@@ -236,14 +236,19 @@ export function Hero() {
                 cd.time.seconds === 0 &&
                 Date.now() > cd.targetMs;
 
-              if (timePassed && index > 0) return null; 
               if (timePassed && index === 0) {
-                return (
-                  <div key={cd.id} className="text-xl font-bold text-red-500 my-4">
-                    ¡Evento principal finalizado!
-                  </div>
-                );
-              }
+  return (
+    <div
+      key={cd.id}
+      className="text-3xl sm:text-4xl md:text-5xl font-extrabold my-6 text-white text-center"
+      style={{
+        textShadow: "0 2px 18px rgba(0,0,0,.75)",
+      }}
+    >
+      🎆 FELIZ AÑO NUEVO 🎆
+    </div>
+  );
+}
 
               return (
                 <div
